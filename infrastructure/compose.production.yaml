@@ -1,0 +1,111 @@
+name: internship-transcript-v2
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  CONTAINERIZED: 'true'
+  MONGODB_URI: ${MONGODB_URI:?Production MongoDB secret is required}
+  REDIS_URL: ${REDIS_URL:?Production Redis secret is required}
+  PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:?Production web URL is required}
+  NUXT_PUBLIC_API_BASE_URL: ${NUXT_PUBLIC_API_BASE_URL:?Production API URL is required}
+  CORS_ORIGINS: ${CORS_ORIGINS:?Production CORS origins are required}
+  AUTH_MODE: oidc
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?JWT secret is required}
+  INVITATION_TOKEN_PEPPER: ${INVITATION_TOKEN_PEPPER:?Token pepper is required}
+  ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
+  REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-28800}
+  OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?OIDC issuer is required}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?OIDC client ID is required}
+  OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?OIDC client secret is required}
+  OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:?OIDC callback is required}
+  COOKIE_SECURE: 'true'
+  MAIL_DELIVERY_MODE: smtp
+  SMTP_HOST: ${SMTP_HOST:?SMTP host is required}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_SECURE: ${SMTP_SECURE:-false}
+  SMTP_USER: ${SMTP_USER:?SMTP user is required}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:?SMTP password is required}
+  SMTP_FROM: ${SMTP_FROM:?SMTP sender is required}
+  SMTP_SETTINGS_ENCRYPTION_KEY: ${SMTP_SETTINGS_ENCRYPTION_KEY:?SMTP settings encryption key is required}
+  S3_ENDPOINT: ${S3_ENDPOINT:?S3 endpoint is required}
+  S3_REGION: ${S3_REGION:-ap-southeast-1}
+  S3_BUCKET: ${S3_BUCKET:?Private S3 bucket is required}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3 access key is required}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3 secret is required}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+services:
+  api:
+    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-api:${IMAGE_TAG:?Image tag is required}
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.api
+    environment:
+      <<: *app-environment
+      PORT: 8081
+    ports:
+      - '${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8081}:8081'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8081/api/v2/health/ready').then(r=>{if(!r.ok)process.exit(1)})
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-worker:${IMAGE_TAG:?Image tag is required}
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.worker
+    environment: *app-environment
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-web:${IMAGE_TAG:?Image tag is required}
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.web
+    environment:
+      NODE_ENV: production
+      NUXT_PUBLIC_API_BASE_URL: ${NUXT_PUBLIC_API_BASE_URL}
+      NUXT_PUBLIC_APP_ENVIRONMENT: production
+      PORT: 8080
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:8080'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8080').then(r=>{if(!r.ok)process.exit(1)})
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

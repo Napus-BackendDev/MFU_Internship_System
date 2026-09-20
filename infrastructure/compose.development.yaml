@@ -1,0 +1,162 @@
+name: internship-transcript-v2-dev
+
+services:
+  mongodb:
+    image: mongo:8.0.29-noble
+    command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '127.0.0.1:27018:27017'
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test:
+        ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  mongodb-init:
+    image: mongo:8.0.29-noble
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - >-
+        mongosh --host mongodb:27017 --quiet --eval
+        "try { rs.status().ok } catch (error) {
+        rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }"
+    restart: 'no'
+
+  redis:
+    image: redis:8.2.8-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - '127.0.0.1:6380:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '127.0.0.1:9000:9000'
+      - '127.0.0.1:9001:9001'
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 2; done;
+        mc mb --ignore-existing local/internship-transcript-dev;
+        mc anonymous set none local/internship-transcript-dev
+    restart: 'no'
+
+  mailpit:
+    image: axllent/mailpit:v1.30.0
+    ports:
+      - '127.0.0.1:1025:1025'
+      - '127.0.0.1:8025:8025'
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_SMTP_AUTH_ACCEPT_ANY: 'true'
+      MP_SMTP_AUTH_ALLOW_INSECURE: 'true'
+    restart: unless-stopped
+
+  api:
+    profiles: ['full']
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.api
+    environment: &app-environment
+      NODE_ENV: development
+      CONTAINERIZED: 'true'
+      PORT: 8081
+      MONGODB_URI: mongodb://mongodb:27017/internship_transcript_v2_dev?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
+      PUBLIC_WEB_URL: http://localhost:8080
+      NUXT_PUBLIC_API_BASE_URL: http://localhost:8081/api/v2
+      CORS_ORIGINS: http://localhost:8080
+      AUTH_MODE: development
+      AUTH_JWT_SECRET: development-only-jwt-secret-never-use-in-production
+      INVITATION_TOKEN_PEPPER: development-only-token-pepper-never-use-in-production
+      ACCESS_TOKEN_TTL_SECONDS: 900
+      REFRESH_TOKEN_TTL_SECONDS: 28800
+      COOKIE_SECURE: 'false'
+      MAIL_DELIVERY_MODE: capture
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: 'false'
+      SMTP_FROM: Internship Transcript Dev <no-reply@localhost>
+      SMTP_SETTINGS_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ap-southeast-1
+      S3_BUCKET: internship-transcript-dev
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      S3_FORCE_PATH_STYLE: 'true'
+      LOG_LEVEL: debug
+    depends_on:
+      mongodb-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - '127.0.0.1:8081:8081'
+
+  worker:
+    profiles: ['full']
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.worker
+    environment: *app-environment
+    depends_on:
+      api:
+        condition: service_started
+
+  web:
+    profiles: ['full']
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.web
+    environment:
+      NODE_ENV: production
+      NUXT_PUBLIC_API_BASE_URL: http://localhost:8081/api/v2
+      NUXT_PUBLIC_APP_ENVIRONMENT: development
+    depends_on:
+      - api
+    ports:
+      - '127.0.0.1:8080:8080'
+
+volumes:
+  mongodb-data:
+  redis-data:
+  minio-data:

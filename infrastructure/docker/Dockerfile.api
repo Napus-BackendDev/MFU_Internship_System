@@ -1,0 +1,23 @@
+FROM node:24.14.0-bookworm-slim AS builder
+WORKDIR /workspace
+RUN corepack enable && corepack prepare pnpm@11.0.7 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.base.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/shared-types/package.json packages/shared-types/package.json
+COPY packages/validation/package.json packages/validation/package.json
+RUN pnpm install --frozen-lockfile --filter @internship/api...
+COPY apps/api apps/api
+COPY packages/config packages/config
+COPY packages/shared-types packages/shared-types
+COPY packages/validation packages/validation
+RUN pnpm --filter @internship/api... build
+RUN pnpm --filter @internship/api deploy --prod --legacy /prod/api
+
+FROM node:24.14.0-bookworm-slim AS runner
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=builder --chown=node:node /prod/api ./
+USER node
+EXPOSE 8081
+CMD ["node", "dist/main.js"]

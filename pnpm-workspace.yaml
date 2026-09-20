@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
+  unrs-resolver: true
+  vue-demi: true
+
+catalog:
+  typescript: 6.0.3
+  vitest: 4.1.11
+  zod: 4.4.3

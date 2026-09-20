@@ -1,0 +1,33 @@
+{
+  "name": "@internship/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/main.ts",
+    "lint": "eslint --config ../../eslint.config.mjs src test",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@internship/config": "workspace:*",
+    "@internship/shared-types": "workspace:*",
+    "@aws-sdk/client-s3": "3.1116.0",
+    "@pdf-lib/fontkit": "1.1.1",
+    "bullmq": "6.2.0",
+    "ioredis": "6.0.0",
+    "jose": "6.2.10",
+    "mongoose": "9.9.3",
+    "nodemailer": "9.0.5",
+    "pdf-lib": "1.17.1",
+    "pino": "10.3.1"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "8.0.1",
+    "tsx": "4.23.12",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

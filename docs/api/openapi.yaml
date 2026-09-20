@@ -1,0 +1,3253 @@
+openapi: 3.1.0
+info:
+  title: Internship Transcript System V2 API
+  version: 0.2.0
+  summary: Target contract for internship evaluation, correspondence, and transcript generation
+  description: |
+    Canonical target contract for V2. This specification is derived from observed legacy workflows
+    but intentionally replaces legacy /api/v1 shapes, unauthenticated CRUD, mutable templates,
+    and synchronous email/PDF behavior.
+
+    Unresolved organization policies remain marked TBD in descriptions and acceptance criteria.
+    No Production credential belongs in this file.
+  contact:
+    name: Internship Transcript System Owner
+  license:
+    name: Proprietary / TBD
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://{apiHost}/api/v2
+    description: Production placeholder
+    variables:
+      apiHost:
+        default: api.example.invalid
+        description: Inject the approved Production API hostname
+tags:
+  - name: Health
+    description: Process liveness and dependency readiness
+  - name: Auth
+    description: Internal identity, session, and external invitation exchange
+  - name: Academic
+    description: School, Program, Course, and academic term master data
+  - name: Students
+    description: Student records and bulk import
+  - name: Internship
+    description: Organizations, evaluators, and placements
+  - name: Competencies
+    description: Versioned competency sets and scoring rules
+  - name: Evaluations
+    description: Cycles, assignments, Drafts, submit, and reopen workflow
+  - name: Correspondence
+    description: Versioned email templates, campaigns, and delivery tracking
+  - name: System Settings
+    description: System-admin-only runtime integration settings
+  - name: Documents
+    description: Versioned document templates, PDF jobs, and private downloads
+  - name: Reports
+    description: Scoped dashboards and asynchronous exports
+  - name: Audit
+    description: Immutable scoped audit-event access
+security:
+  - cookieAuth: []
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      operationId: getLiveness
+      summary: Check process liveness
+      security: []
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '429':
+          description: Health checks are rate limited
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Check required dependency readiness
+      security: []
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+        '429':
+          description: Health checks are rate limited
+  /auth/login:
+    get:
+      tags: [Auth]
+      operationId: startInternalLogin
+      summary: Start approved internal OIDC login
+      description: Provider details remain TBD until MFU OIDC configuration is approved.
+      security: []
+      responses:
+        '302':
+          description: Redirect to approved OIDC provider
+        '429':
+          description: Login attempts are rate limited
+        '503':
+          description: OIDC provider is unavailable or not configured
+  /auth/callback:
+    get:
+      tags: [Auth]
+      operationId: finishInternalLogin
+      summary: Validate the OIDC callback and establish a scoped session
+      security: []
+      responses:
+        '302':
+          description: Session established and redirected to the web application
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentSession
+      summary: Return current user and active scoped roles
+      responses:
+        '200':
+          description: Current authenticated identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentSession'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshSession
+      summary: Rotate or refresh current session
+      responses:
+        '204':
+          description: Session refreshed
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logoutCurrentSession
+      summary: Revoke current session and clear authentication cookie
+      responses:
+        '204':
+          description: Session revoked
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /public/invitations/exchange:
+    post:
+      tags: [Auth]
+      operationId: exchangeInvitation
+      summary: Exchange a signed invitation token for a scoped evaluator session
+      description: Invitation lifetime and additional verification method are TBD.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationExchangeRequest'
+      responses:
+        '200':
+          description: Evaluator session established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationSession'
+        '401':
+          $ref: '#/components/responses/InvitationInvalid'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /public/evaluations/verify-pin:
+    post:
+      tags: [Auth]
+      operationId: verifyEvaluationPin
+      summary: Exchange a random 16-character PIN for a scoped evaluator session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [pin]
+              properties:
+                pin:
+                  type: string
+                  minLength: 16
+                  maxLength: 19
+      responses:
+        '200':
+          description: Evaluator session established in HttpOnly cookies
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actor, assignmentId]
+                properties:
+                  actor:
+                    $ref: '#/components/schemas/Actor'
+                  assignmentId:
+                    $ref: '#/components/schemas/ObjectId'
+        '401':
+          $ref: '#/components/responses/InvitationInvalid'
+        '429':
+          description: Too many verification attempts
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /academic/schools:
+    get:
+      tags: [Academic]
+      operationId: listSchools
+      summary: List Schools within caller scope
+      x-permissions: [academic.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/Archived'
+      responses:
+        '200':
+          description: Paginated Schools
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Academic]
+      operationId: createSchool
+      summary: Create a School
+      x-permissions: [academic.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SchoolInput'
+      responses:
+        '201':
+          description: School created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/School'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /academic/schools/{schoolId}:
+    parameters:
+      - $ref: '#/components/parameters/SchoolId'
+    patch:
+      tags: [Academic]
+      operationId: updateSchool
+      summary: Update an active School
+      x-permissions: [academic.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SchoolPatch'
+      responses:
+        '200':
+          description: School updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/School'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /academic/programs:
+    get:
+      tags: [Academic]
+      operationId: listPrograms
+      summary: List Programs within caller scope
+      x-permissions: [academic.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - name: schoolId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+      responses:
+        '200':
+          description: Paginated Programs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgramList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Academic]
+      operationId: createProgram
+      summary: Create a Program
+      x-permissions: [academic.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgramInput'
+      responses:
+        '201':
+          description: Program created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Program'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /academic/courses:
+    get:
+      tags: [Academic]
+      operationId: listCourses
+      summary: List Courses within caller scope
+      x-permissions: [academic.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - name: programId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+      responses:
+        '200':
+          description: Paginated Courses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Academic]
+      operationId: createCourse
+      summary: Create a Course
+      x-permissions: [academic.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseInput'
+      responses:
+        '201':
+          description: Course created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Course'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /academic/terms:
+    get:
+      tags: [Academic]
+      operationId: listAcademicTerms
+      summary: List academic terms
+      x-permissions: [academic.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: academicYear
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated terms
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcademicTermList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Academic]
+      operationId: createAcademicTerm
+      summary: Create an academic term
+      x-permissions: [academic.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcademicTermInput'
+      responses:
+        '201':
+          description: Academic term created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcademicTerm'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /academic/programs/{programId}:
+    parameters:
+      - { name: programId, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [Academic]
+      operationId: updateProgram
+      summary: Update a Program
+      x-permissions: [academic.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Program updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /academic/courses/{courseId}:
+    parameters:
+      - { name: courseId, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [Academic]
+      operationId: updateCourse
+      summary: Update a Course
+      x-permissions: [academic.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Course updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /academic/terms/{termId}:
+    parameters:
+      - { name: termId, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [Academic]
+      operationId: updateAcademicTerm
+      summary: Update an academic term
+      x-permissions: [academic.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Academic term updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /students:
+    get:
+      tags: [Students]
+      operationId: listStudents
+      summary: List Students within effective scope
+      x-permissions: [students.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - name: schoolId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: programId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: termId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - $ref: '#/components/parameters/Archived'
+      responses:
+        '200':
+          description: Paginated Students
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentList'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Students]
+      operationId: createStudent
+      summary: Create a Student
+      x-permissions: [students.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentInput'
+      responses:
+        '201':
+          description: Student created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /students/{studentId}:
+    parameters:
+      - $ref: '#/components/parameters/StudentId'
+    get:
+      tags: [Students]
+      operationId: getStudent
+      summary: Get a Student within effective scope
+      x-permissions: [students.read]
+      responses:
+        '200':
+          description: Student
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Students]
+      operationId: updateStudent
+      summary: Update a Student within effective scope
+      x-permissions: [students.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentPatch'
+      responses:
+        '200':
+          description: Student updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Students]
+      operationId: archiveStudent
+      summary: Archive a Student without deleting history
+      x-permissions: [students.manage]
+      responses:
+        '204':
+          description: Student archived
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /organizations:
+    get:
+      tags: [Internship]
+      operationId: listOrganizations
+      summary: List internship organizations
+      x-permissions: [organizations.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/Archived'
+      responses:
+        '200':
+          description: Paginated Organizations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Internship]
+      operationId: createOrganization
+      summary: Create an internship Organization
+      x-permissions: [organizations.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrganizationInput'
+      responses:
+        '201':
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /evaluators:
+    get:
+      tags: [Internship]
+      operationId: listEvaluators
+      summary: List external evaluators/advisers
+      x-permissions: [organizations.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - name: organizationId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+      responses:
+        '200':
+          description: Paginated Evaluators
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluatorList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Internship]
+      operationId: createEvaluator
+      summary: Create an external Evaluator
+      x-permissions: [organizations.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluatorInput'
+      responses:
+        '201':
+          description: Evaluator created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evaluator'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /placements:
+    get:
+      tags: [Internship]
+      operationId: listPlacements
+      summary: List Placements within effective scope
+      x-permissions: [placements.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: studentId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: termId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/PlacementStatus'
+      responses:
+        '200':
+          description: Paginated Placements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlacementList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Internship]
+      operationId: createPlacement
+      summary: Create a Placement
+      x-permissions: [placements.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlacementInput'
+      responses:
+        '201':
+          description: Placement created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Placement'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /competency-sets:
+    get:
+      tags: [Competencies]
+      operationId: listCompetencySets
+      summary: List competency sets and current version summaries
+      x-permissions: [competencies.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: programId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TemplateStatus'
+      responses:
+        '200':
+          description: Paginated competency sets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetencySetList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Competencies]
+      operationId: createCompetencySet
+      summary: Create a competency set with Draft version 1
+      x-permissions: [competencies.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompetencySetInput'
+      responses:
+        '201':
+          description: Competency set created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetencySet'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /competency-sets/{competencySetId}/versions:
+    parameters:
+      - $ref: '#/components/parameters/CompetencySetId'
+    post:
+      tags: [Competencies]
+      operationId: createCompetencySetVersion
+      summary: Create the next Draft version
+      x-permissions: [competencies.manage]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewVersionRequest'
+      responses:
+        '201':
+          description: Draft version created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetencySetVersion'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /competency-set-versions/{versionId}:
+    parameters:
+      - $ref: '#/components/parameters/VersionId'
+    get:
+      tags: [Competencies]
+      operationId: getCompetencySetVersion
+      summary: Get a competency version
+      x-permissions: [competencies.read]
+      responses:
+        '200':
+          description: Competency version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetencySetVersion'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Competencies]
+      operationId: updateCompetencySetVersion
+      summary: Update a Draft competency version
+      x-permissions: [competencies.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompetencySetVersionPatch'
+      responses:
+        '200':
+          description: Draft version updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetencySetVersion'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /competency-set-versions/{versionId}/publish:
+    parameters:
+      - $ref: '#/components/parameters/VersionId'
+    post:
+      tags: [Competencies]
+      operationId: publishCompetencySetVersion
+      summary: Validate and publish an immutable competency version
+      x-permissions: [competencies.publish]
+      responses:
+        '200':
+          description: Published version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetencySetVersion'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /evaluation-cycles:
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluationCycles
+      summary: List evaluation cycles within scope
+      x-permissions: [cycles.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: termId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/CycleStatus'
+      responses:
+        '200':
+          description: Paginated cycles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationCycleList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Evaluations]
+      operationId: createEvaluationCycle
+      summary: Create a Draft evaluation cycle
+      x-permissions: [cycles.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationCycleInput'
+      responses:
+        '201':
+          description: Cycle created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationCycle'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /evaluation-cycles/{cycleId}/preview:
+    parameters:
+      - $ref: '#/components/parameters/CycleId'
+    post:
+      tags: [Evaluations]
+      operationId: previewEvaluationCycle
+      summary: Validate cycle activation without mutation
+      x-permissions: [cycles.manage]
+      responses:
+        '200':
+          description: Activation preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CyclePreview'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /evaluation-cycles/{cycleId}/activate:
+    parameters:
+      - $ref: '#/components/parameters/CycleId'
+    post:
+      tags: [Evaluations]
+      operationId: activateEvaluationCycle
+      summary: Activate a valid cycle and create immutable assignment snapshots
+      x-permissions: [cycles.manage]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Activation accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /evaluation-assignments:
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluationAssignments
+      summary: List assignment states within effective scope
+      x-permissions: [placements.read, cycles.read]
+      x-permission-mode: any
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: cycleId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: studentId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/AssignmentStatus'
+      responses:
+        '200':
+          description: Paginated assignments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationAssignmentList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Evaluations]
+      operationId: createEvaluationAssignment
+      summary: Create a scoped evaluator assignment
+      x-permissions: [cycles.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationAssignmentInput'
+      responses:
+        '201':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationAssignment'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /evaluations/{evaluationId}:
+    parameters:
+      - $ref: '#/components/parameters/EvaluationId'
+    get:
+      tags: [Evaluations]
+      operationId: getEvaluation
+      summary: Get an evaluation form/result under visibility policy
+      security:
+        - cookieAuth: []
+        - evaluatorBearer: []
+      x-permissions: [evaluations.read, evaluations.draft]
+      x-permission-mode: any
+      responses:
+        '200':
+          description: Evaluation form/result allowed for caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evaluation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /evaluations/{evaluationId}/draft:
+    parameters:
+      - $ref: '#/components/parameters/EvaluationId'
+    put:
+      tags: [Evaluations]
+      operationId: saveEvaluationDraft
+      summary: Save evaluator-owned Draft with optimistic version
+      security:
+        - evaluatorBearer: []
+        - cookieAuth: []
+      x-permissions: [evaluations.draft]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationDraftInput'
+      responses:
+        '200':
+          description: Draft saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evaluation'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /evaluations/{evaluationId}/submit:
+    parameters:
+      - $ref: '#/components/parameters/EvaluationId'
+    post:
+      tags: [Evaluations]
+      operationId: submitEvaluation
+      summary: Validate and atomically submit one final evaluation
+      security:
+        - evaluatorBearer: []
+        - cookieAuth: []
+      x-permissions: [evaluations.submit]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationSubmitInput'
+      responses:
+        '200':
+          description: Existing final result returned for idempotent retry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evaluation'
+        '201':
+          description: Final evaluation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evaluation'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /evaluations/{evaluationId}/reopen:
+    parameters:
+      - $ref: '#/components/parameters/EvaluationId'
+    post:
+      tags: [Evaluations]
+      operationId: reopenEvaluation
+      summary: Reopen a submitted evaluation under approved policy
+      description: Authorized role and reopen window remain TBD.
+      x-permissions: [evaluations.reopen]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReopenEvaluationRequest'
+      responses:
+        '200':
+          description: Controlled editable version created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evaluation'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /email-templates:
+    get:
+      tags: [Correspondence]
+      operationId: listEmailTemplates
+      summary: List email templates and version summaries
+      x-permissions: [emailTemplates.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: audience
+          in: query
+          schema:
+            $ref: '#/components/schemas/EmailAudience'
+      responses:
+        '200':
+          description: Paginated email templates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailTemplateList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Correspondence]
+      operationId: createEmailTemplate
+      summary: Create email template and Draft version 1
+      x-permissions: [emailTemplates.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailTemplateInput'
+      responses:
+        '201':
+          description: Email template created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailTemplate'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /email-template-versions/{versionId}/publish:
+    parameters:
+      - $ref: '#/components/parameters/VersionId'
+    post:
+      tags: [Correspondence]
+      operationId: publishEmailTemplateVersion
+      summary: Validate placeholders and publish immutable email version
+      x-permissions: [emailTemplates.publish]
+      responses:
+        '200':
+          description: Published email template version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailTemplateVersion'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /campaigns/preview:
+    post:
+      tags: [Correspondence]
+      operationId: previewCampaign
+      summary: Validate recipients/template without creating deliveries
+      x-permissions: [campaigns.send]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CampaignInput'
+      responses:
+        '200':
+          description: Campaign preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignPreview'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /campaigns/send-student-invitation:
+    post:
+      tags: [Correspondence]
+      operationId: sendStudentInvitation
+      summary: Create an evaluator assignment and queue its invitation email
+      x-permissions: [campaigns.send]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [studentId, competencySetId, recipientEmail]
+              properties:
+                studentId: { type: string }
+                competencySetId: { type: string }
+                recipientEmail: { type: string, format: email }
+                evaluatorName: { type: string }
+                deadlineDays: { type: integer, minimum: 1, maximum: 365 }
+                subject: { type: string }
+                notes: { type: string }
+      responses:
+        '202':
+          description: Invitation queued
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /campaigns:
+    post:
+      tags: [Correspondence]
+      operationId: createCampaign
+      summary: Create idempotent invitation/reminder campaign
+      x-permissions: [campaigns.send]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CampaignInput'
+      responses:
+        '202':
+          description: Campaign queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /campaigns/{campaignId}:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [Correspondence]
+      operationId: getCampaign
+      summary: Get campaign progress and summary
+      x-permissions: [campaigns.read]
+      responses:
+        '200':
+          description: Campaign
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /deliveries:
+    get:
+      tags: [Correspondence]
+      operationId: listDeliveries
+      summary: List delivery states within effective scope
+      x-permissions: [campaigns.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: campaignId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/DeliveryStatus'
+      responses:
+        '200':
+          description: Paginated delivery records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /deliveries/{deliveryId}/retry:
+    parameters:
+      - $ref: '#/components/parameters/DeliveryId'
+    post:
+      tags: [Correspondence]
+      operationId: retryDelivery
+      summary: Retry an eligible failed logical delivery
+      x-permissions: [deliveries.retry]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Retry accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Delivery'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /system-settings/provinces:
+    get:
+      tags: [System Settings]
+      operationId: listProvinces
+      summary: List configured provinces
+      parameters:
+        - { name: search, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: region, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [active, inactive, all] } }
+      responses:
+        '200': { description: Province list and statistics }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [System Settings]
+      operationId: createProvince
+      summary: Create a Province
+      x-permissions: [academic.manage, system.config.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '201': { description: Province created }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /system-settings/provinces/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [System Settings]
+      operationId: updateProvince
+      summary: Update a Province
+      x-permissions: [academic.manage, system.config.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Province updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [System Settings]
+      operationId: deleteProvince
+      summary: Delete a Province
+      x-permissions: [academic.manage, system.config.manage]
+      responses:
+        '200': { description: Province deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /system-settings/provinces/reset:
+    post:
+      tags: [System Settings]
+      operationId: resetProvinces
+      summary: Restore the default Province catalog
+      x-permissions: [academic.manage, system.config.manage]
+      responses:
+        '200': { description: Default provinces restored }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /system-settings/general:
+    get:
+      tags: [System Settings]
+      operationId: getGeneralSettings
+      summary: Get general system settings
+      responses:
+        '200': { description: General settings }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    put:
+      tags: [System Settings]
+      operationId: updateGeneralSettings
+      summary: Update general system settings
+      x-permissions: [academic.manage, system.config.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: General settings updated }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /system-settings/smtp:
+    get:
+      tags: [System Settings]
+      operationId: getSmtpSettings
+      summary: Get effective SMTP settings without returning any password
+      x-permissions: [system.config.manage]
+      responses:
+        '200':
+          description: SMTP settings and effective source
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpSettings'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      tags: [System Settings]
+      operationId: updateSmtpSettings
+      summary: Replace the database SMTP override using optimistic versioning
+      description: |
+        The password is write-only. Omitting password preserves the stored password;
+        clearPassword removes it. Development accepts only localhost or container Mailpit.
+      x-permissions: [system.config.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmtpSettingsUpdate'
+      responses:
+        '200':
+          description: SMTP settings saved; no password is returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpSettings'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /system-settings/smtp/test:
+    post:
+      tags: [System Settings]
+      operationId: enqueueSmtpTest
+      summary: Queue a test message using the effective SMTP settings
+      x-permissions: [system.config.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmtpTestRequest'
+      responses:
+        '202':
+          description: SMTP test queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpTestDelivery'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /system-settings/smtp/tests/{testId}:
+    parameters:
+      - name: testId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ObjectId'
+    get:
+      tags: [System Settings]
+      operationId: getSmtpTest
+      summary: Get one SMTP test status without returning recipient or credentials
+      x-permissions: [system.config.manage]
+      responses:
+        '200':
+          description: SMTP test status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpTestDelivery'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /document-templates:
+    get:
+      tags: [Documents]
+      operationId: listDocumentTemplates
+      summary: List document templates and version summaries
+      x-permissions: [documentTemplates.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TemplateStatus'
+      responses:
+        '200':
+          description: Paginated document templates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentTemplateList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Documents]
+      operationId: createDocumentTemplate
+      summary: Create document template and Draft version 1
+      x-permissions: [documentTemplates.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentTemplateInput'
+      responses:
+        '201':
+          description: Document template created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentTemplate'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /document-template-versions/{versionId}:
+    parameters:
+      - $ref: '#/components/parameters/VersionId'
+    get:
+      tags: [Documents]
+      operationId: getDocumentTemplateVersion
+      summary: Get document template version
+      x-permissions: [documentTemplates.read]
+      responses:
+        '200':
+          description: Document template version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentTemplateVersion'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Documents]
+      operationId: updateDocumentTemplateVersion
+      summary: Update a Draft document template version
+      x-permissions: [documentTemplates.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentTemplateVersionPatch'
+      responses:
+        '200':
+          description: Draft version updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentTemplateVersion'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /document-template-versions/{versionId}/publish:
+    parameters:
+      - $ref: '#/components/parameters/VersionId'
+    post:
+      tags: [Documents]
+      operationId: publishDocumentTemplateVersion
+      summary: Validate and publish immutable document template version
+      x-permissions: [documentTemplates.publish]
+      responses:
+        '200':
+          description: Published version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentTemplateVersion'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /generated-documents:
+    get:
+      tags: [Documents]
+      operationId: listGeneratedDocuments
+      summary: List own or scoped generated documents
+      x-permissions: [documents.readOwn, documents.readScoped]
+      x-permission-mode: any
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: studentId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/JobStatus'
+      responses:
+        '200':
+          description: Paginated generated documents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeneratedDocumentList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Documents]
+      operationId: requestGeneratedDocument
+      summary: Request idempotent PDF generation for own or scoped Student
+      x-permissions: [documents.generateOwn, documents.generateScoped]
+      x-permission-mode: any
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateDocumentRequest'
+      responses:
+        '202':
+          description: Generation queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeneratedDocument'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /generated-documents/{documentId}:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Documents]
+      operationId: getGeneratedDocument
+      summary: Get own or scoped document generation status
+      x-permissions: [documents.readOwn, documents.readScoped]
+      x-permission-mode: any
+      responses:
+        '200':
+          description: Generated document metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeneratedDocument'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /generated-documents/{documentId}/download-url:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    post:
+      tags: [Documents]
+      operationId: createGeneratedDocumentDownloadUrl
+      summary: Authorize and create a short-lived private download URL
+      x-permissions: [documents.readOwn, documents.readScoped]
+      x-permission-mode: any
+      responses:
+        '200':
+          description: Short-lived download URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedDownload'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /reports/overview:
+    get:
+      tags: [Reports]
+      operationId: getOverviewReport
+      summary: Get scoped evaluation completion overview
+      x-permissions: [reports.read]
+      parameters:
+        - name: termId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: schoolId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: programId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+      responses:
+        '200':
+          description: Scoped overview metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverviewReport'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /reports/programs:
+    get:
+      tags: [Reports]
+      operationId: getProgramReport
+      summary: Get scoped metrics grouped by Program
+      x-permissions: [reports.read]
+      parameters:
+        - name: termId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: schoolId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+      responses:
+        '200':
+          description: Program metrics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProgramMetric'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /audit-logs:
+    get:
+      tags: [Audit]
+      operationId: listAuditLogs
+      summary: List immutable audit events in approved scope
+      x-permissions: [audit.read]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: actorId
+          in: query
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: targetType
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Paginated audit events with redacted metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogList'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: its_session
+      description: Secure httpOnly same-site internal session cookie
+    evaluatorBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: scoped-invitation-session
+      description: Short-lived evaluator session bound to one assignment
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+    Search:
+      name: search
+      in: query
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+    Archived:
+      name: archived
+      in: query
+      schema:
+        type: boolean
+        default: false
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    SchoolId:
+      name: schoolId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    StudentId:
+      name: studentId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    CompetencySetId:
+      name: competencySetId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    CycleId:
+      name: cycleId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    EvaluationId:
+      name: evaluationId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    CampaignId:
+      name: campaignId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    DeliveryId:
+      name: deliveryId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+  responses:
+    Unauthenticated:
+      description: Authentication is missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: AUTHENTICATION_REQUIRED
+            message: Authentication is required.
+            requestId: req_example
+    InvitationInvalid:
+      description: Invitation is invalid, expired, or revoked
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: INVITATION_INVALID
+            message: This invitation cannot be used.
+            requestId: req_example
+    Forbidden:
+      description: Authenticated caller lacks action or scope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: PERMISSION_DENIED
+            message: You do not have permission to perform this action.
+            requestId: req_example
+    NotFound:
+      description: Resource does not exist or is concealed from caller
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: Resource not found.
+            requestId: req_example
+    Conflict:
+      description: Duplicate, stale version, idempotency conflict, or invalid state transition
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ValidationError:
+      description: Request or publish validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: VALIDATION_ERROR
+            message: One or more fields are invalid.
+            details:
+              - field: email
+                reason: invalid_format
+            requestId: req_example
+  schemas:
+    ObjectId:
+      type: string
+      pattern: '^[a-fA-F0-9]{24}$'
+      example: 507f1f77bcf86cd799439011
+    HealthStatus:
+      type: object
+      required: [service, status, timestamp, version]
+      properties:
+        service:
+          type: string
+          enum: [api, web, worker]
+        status:
+          type: string
+          enum: [ok]
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+    ReadinessStatus:
+      type: object
+      required: [ready, dependencies, timestamp]
+      properties:
+        ready:
+          type: boolean
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, unavailable]
+        timestamp:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+        requestId:
+          type: string
+    ErrorDetail:
+      type: object
+      required: [reason]
+      properties:
+        field:
+          type: string
+        reason:
+          type: string
+        message:
+          type: string
+    PageMeta:
+      type: object
+      required: [page, limit, total, totalPages]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+        total:
+          type: integer
+          minimum: 0
+        totalPages:
+          type: integer
+          minimum: 0
+    LocalizedText:
+      type: object
+      required: [th, en]
+      properties:
+        th:
+          type: string
+          maxLength: 500
+        en:
+          type: string
+          maxLength: 500
+    CurrentSession:
+      type: object
+      required: [actor]
+      properties:
+        actor:
+          $ref: '#/components/schemas/Actor'
+    Actor:
+      type: object
+      required: [id, email, displayName, roles, scope]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [systemAdmin, internshipStaff, coordinator, student, evaluator, auditor]
+        scope:
+          type: object
+          required: [tenant, schoolIds, programIds]
+          properties:
+            tenant: { type: boolean }
+            schoolIds:
+              type: array
+              items: { type: string }
+            programIds:
+              type: array
+              items: { type: string }
+            studentId: { type: string }
+            assignmentId: { type: string }
+    InvitationExchangeRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 32
+          maxLength: 2048
+        verificationCode:
+          type: string
+          minLength: 4
+          maxLength: 12
+          description: Optional until evaluator verification policy is approved
+    InvitationSession:
+      type: object
+      required: [actor]
+      properties:
+        actor:
+          $ref: '#/components/schemas/Actor'
+
+    SchoolInput:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+        name:
+          $ref: '#/components/schemas/LocalizedText'
+        description:
+          $ref: '#/components/schemas/LocalizedText'
+    SchoolPatch:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+        name:
+          $ref: '#/components/schemas/LocalizedText'
+        description:
+          $ref: '#/components/schemas/LocalizedText'
+    School:
+      allOf:
+        - $ref: '#/components/schemas/SchoolInput'
+        - type: object
+          required: [id, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+            version:
+              type: integer
+            archivedAt:
+              type: [string, 'null']
+              format: date-time
+    SchoolList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/School'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    ProgramInput:
+      type: object
+      required: [schoolId, code, name]
+      properties:
+        schoolId:
+          $ref: '#/components/schemas/ObjectId'
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+        name:
+          $ref: '#/components/schemas/LocalizedText'
+    Program:
+      allOf:
+        - $ref: '#/components/schemas/ProgramInput'
+        - type: object
+          required: [id, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+            version:
+              type: integer
+            archivedAt:
+              type: [string, 'null']
+              format: date-time
+    ProgramList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Program'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CourseInput:
+      type: object
+      required: [programId, code, name]
+      properties:
+        programId:
+          $ref: '#/components/schemas/ObjectId'
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+        name:
+          $ref: '#/components/schemas/LocalizedText'
+    Course:
+      allOf:
+        - $ref: '#/components/schemas/CourseInput'
+        - type: object
+          required: [id, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+            version:
+              type: integer
+    CourseList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Course'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    AcademicTermInput:
+      type: object
+      required: [code, academicYear, semester, startsAt, endsAt]
+      properties:
+        code:
+          type: string
+          maxLength: 50
+        academicYear:
+          type: string
+          maxLength: 20
+        semester:
+          type: string
+          maxLength: 30
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+    AcademicTerm:
+      allOf:
+        - $ref: '#/components/schemas/AcademicTermInput'
+        - type: object
+          required: [id, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+            version:
+              type: integer
+    AcademicTermList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcademicTerm'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    StudentInput:
+      type: object
+      required: [studentNumber, name, email, schoolId, programId]
+      properties:
+        studentNumber:
+          type: string
+          minLength: 1
+          maxLength: 50
+        name:
+          $ref: '#/components/schemas/LocalizedText'
+        email:
+          type: string
+          format: email
+        schoolId:
+          $ref: '#/components/schemas/ObjectId'
+        programId:
+          $ref: '#/components/schemas/ObjectId'
+        courseId:
+          oneOf:
+            - $ref: '#/components/schemas/ObjectId'
+            - type: 'null'
+    StudentPatch:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        studentNumber:
+          type: string
+          minLength: 1
+          maxLength: 50
+        name:
+          $ref: '#/components/schemas/LocalizedText'
+        email:
+          type: string
+          format: email
+        schoolId:
+          $ref: '#/components/schemas/ObjectId'
+        programId:
+          $ref: '#/components/schemas/ObjectId'
+        courseId:
+          oneOf:
+            - $ref: '#/components/schemas/ObjectId'
+            - type: 'null'
+    Student:
+      allOf:
+        - $ref: '#/components/schemas/StudentInput'
+        - type: object
+          required: [id, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+            version:
+              type: integer
+            archivedAt:
+              type: [string, 'null']
+              format: date-time
+    StudentList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Student'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    JobAccepted:
+      type: object
+      required: [jobId, status]
+      properties:
+        jobId:
+          $ref: '#/components/schemas/ObjectId'
+        status:
+          $ref: '#/components/schemas/JobStatus'
+
+    OrganizationInput:
+      type: object
+      required: [name, address, province]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 300
+        address:
+          type: string
+          maxLength: 1000
+        province:
+          type: string
+          maxLength: 100
+    Organization:
+      allOf:
+        - $ref: '#/components/schemas/OrganizationInput'
+        - type: object
+          required: [id, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+            version: { type: integer, minimum: 1 }
+            archivedAt: { type: [string, 'null'], format: date-time }
+    OrganizationList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Organization'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    EvaluatorInput:
+      type: object
+      required: [organizationId, name, email]
+      properties:
+        organizationId:
+          $ref: '#/components/schemas/ObjectId'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 300
+        email:
+          type: string
+          format: email
+        position:
+          type: string
+          maxLength: 200
+    Evaluator:
+      allOf:
+        - $ref: '#/components/schemas/EvaluatorInput'
+        - type: object
+          required: [id, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+            version: { type: integer, minimum: 1 }
+            archivedAt: { type: [string, 'null'], format: date-time }
+    EvaluatorList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Evaluator'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    PlacementStatus:
+      type: string
+      enum: [draft, active, completed, cancelled, archived]
+    PlacementInput:
+      type: object
+      required: [studentId, organizationId, termId, startsAt, endsAt]
+      properties:
+        studentId:
+          $ref: '#/components/schemas/ObjectId'
+        organizationId:
+          $ref: '#/components/schemas/ObjectId'
+        termId:
+          $ref: '#/components/schemas/ObjectId'
+        startsAt:
+          type: string
+          format: date
+        endsAt:
+          type: string
+          format: date
+    Placement:
+      allOf:
+        - $ref: '#/components/schemas/PlacementInput'
+        - type: object
+          required: [id, status, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            status:
+              $ref: '#/components/schemas/PlacementStatus'
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+            version: { type: integer, minimum: 1 }
+    PlacementList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Placement'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    TemplateStatus:
+      type: string
+      enum: [draft, published, retired]
+    CompetencySetInput:
+      type: object
+      required: [code, name, programIds]
+      properties:
+        code:
+          type: string
+          maxLength: 100
+        name:
+          $ref: '#/components/schemas/LocalizedText'
+        programIds:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ObjectId'
+    CompetencySet:
+      allOf:
+        - $ref: '#/components/schemas/CompetencySetInput'
+        - type: object
+          required: [id, latestVersion, createdAt]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            latestVersion:
+              type: integer
+              minimum: 1
+            currentStatus:
+              $ref: '#/components/schemas/TemplateStatus'
+            createdAt:
+              type: string
+              format: date-time
+    CompetencySetList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompetencySet'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CriterionType:
+      type: string
+      enum: [general, specific, suggestion]
+    Criterion:
+      type: object
+      required: [key, type, label, required, order]
+      properties:
+        key:
+          type: string
+          pattern: '^[a-zA-Z0-9._-]+$'
+        type:
+          $ref: '#/components/schemas/CriterionType'
+        label:
+          $ref: '#/components/schemas/LocalizedText'
+        description:
+          $ref: '#/components/schemas/LocalizedText'
+        required:
+          type: boolean
+        order:
+          type: integer
+          minimum: 0
+    ScoringRule:
+      type: object
+      required: [minimum, maximum, step]
+      properties:
+        minimum: { type: number }
+        maximum: { type: number }
+        step: { type: number, exclusiveMinimum: 0 }
+        aggregation:
+          type: string
+          enum: [none, average, weightedAverage]
+          description: Final aggregation policy remains TBD
+    CompetencySetVersion:
+      type: object
+      required: [id, competencySetId, versionNumber, status, criteria, scoringRule, createdAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        competencySetId:
+          $ref: '#/components/schemas/ObjectId'
+        versionNumber:
+          type: integer
+          minimum: 1
+        status:
+          $ref: '#/components/schemas/TemplateStatus'
+        criteria:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Criterion'
+        scoringRule:
+          $ref: '#/components/schemas/ScoringRule'
+        createdAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: [string, 'null']
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+    CompetencySetVersionPatch:
+      type: object
+      required: [version, criteria, scoringRule]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        criteria:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Criterion'
+        scoringRule:
+          $ref: '#/components/schemas/ScoringRule'
+    NewVersionRequest:
+      type: object
+      properties:
+        copyFromVersionId:
+          $ref: '#/components/schemas/ObjectId'
+
+    CycleStatus:
+      type: string
+      enum: [draft, scheduled, open, closed, archived]
+    EvaluationCycleInput:
+      type: object
+      required: [name, termId, programIds, competencySetVersionId, opensAt, closesAt]
+      properties:
+        name:
+          type: string
+          maxLength: 300
+        termId:
+          $ref: '#/components/schemas/ObjectId'
+        programIds:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ObjectId'
+        competencySetVersionId:
+          $ref: '#/components/schemas/ObjectId'
+        opensAt:
+          type: string
+          format: date-time
+        closesAt:
+          type: string
+          format: date-time
+    EvaluationCycle:
+      allOf:
+        - $ref: '#/components/schemas/EvaluationCycleInput'
+        - type: object
+          required: [id, status, createdAt, updatedAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            status:
+              $ref: '#/components/schemas/CycleStatus'
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+            version: { type: integer, minimum: 1 }
+    EvaluationCycleList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationCycle'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CyclePreview:
+      type: object
+      required: [canActivate, totals, errors]
+      properties:
+        canActivate:
+          type: boolean
+        totals:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    AssignmentStatus:
+      type: string
+      enum: [draft, scheduled, open, inProgress, submitted, reopened, expired, revoked, closed]
+    EvaluationAssignmentInput:
+      type: object
+      required: [cycleId, placementId, evaluatorId]
+      properties:
+        cycleId:
+          $ref: '#/components/schemas/ObjectId'
+        placementId:
+          $ref: '#/components/schemas/ObjectId'
+        evaluatorId:
+          $ref: '#/components/schemas/ObjectId'
+    EvaluationAssignment:
+      allOf:
+        - $ref: '#/components/schemas/EvaluationAssignmentInput'
+        - type: object
+          required: [id, studentId, status, evaluationId, createdAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            studentId:
+              $ref: '#/components/schemas/ObjectId'
+            status:
+              $ref: '#/components/schemas/AssignmentStatus'
+            evaluationId:
+              $ref: '#/components/schemas/ObjectId'
+            createdAt:
+              type: string
+              format: date-time
+            version:
+              type: integer
+              minimum: 1
+    EvaluationAssignmentList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationAssignment'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    EvaluationAnswer:
+      type: object
+      required: [criterionKey]
+      properties:
+        criterionKey:
+          type: string
+        score:
+          type: number
+        text:
+          type: string
+          maxLength: 5000
+    Evaluation:
+      type: object
+      required: [id, assignmentId, studentId, status, questionSnapshot, answers, version, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        assignmentId:
+          $ref: '#/components/schemas/ObjectId'
+        studentId:
+          $ref: '#/components/schemas/ObjectId'
+        status:
+          type: string
+          enum: [draft, submitted, reopened]
+        questionSnapshot:
+          type: array
+          items:
+            $ref: '#/components/schemas/Criterion'
+        scoringRuleSnapshot:
+          $ref: '#/components/schemas/ScoringRule'
+        answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationAnswer'
+        submittedAt:
+          type: [string, 'null']
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+    EvaluationDraftInput:
+      type: object
+      required: [version, answers]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationAnswer'
+    EvaluationSubmitInput:
+      allOf:
+        - $ref: '#/components/schemas/EvaluationDraftInput'
+        - type: object
+          required: [consent]
+          properties:
+            consent:
+              type: boolean
+              const: true
+    ReopenEvaluationRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 1000
+        closesAt:
+          type: string
+          format: date-time
+
+    EmailAudience:
+      type: string
+      enum: [student, evaluator, staff]
+    EmailTemplateInput:
+      type: object
+      required: [code, name, audience, subject, textBody]
+      properties:
+        code:
+          type: string
+          maxLength: 100
+        name:
+          type: string
+          maxLength: 300
+        audience:
+          $ref: '#/components/schemas/EmailAudience'
+        subject:
+          type: string
+          maxLength: 300
+        textBody:
+          type: string
+          maxLength: 50000
+        htmlBody:
+          type: string
+          maxLength: 100000
+    EmailTemplateVersion:
+      allOf:
+        - $ref: '#/components/schemas/EmailTemplateInput'
+        - type: object
+          required: [id, templateId, versionNumber, status, createdAt, version]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            templateId:
+              $ref: '#/components/schemas/ObjectId'
+            versionNumber: { type: integer, minimum: 1 }
+            status:
+              $ref: '#/components/schemas/TemplateStatus'
+            allowedPlaceholders:
+              type: array
+              items: { type: string }
+            createdAt: { type: string, format: date-time }
+            version: { type: integer, minimum: 1 }
+    EmailTemplate:
+      type: object
+      required: [id, code, name, audience, latestVersion, currentStatus]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        code: { type: string }
+        name: { type: string }
+        audience:
+          $ref: '#/components/schemas/EmailAudience'
+        latestVersion: { type: integer, minimum: 1 }
+        currentStatus:
+          $ref: '#/components/schemas/TemplateStatus'
+    EmailTemplateList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailTemplate'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CampaignType:
+      type: string
+      enum: [invitation, reminder, notification]
+    CampaignInput:
+      type: object
+      required: [type, cycleId, emailTemplateVersionId, audience]
+      properties:
+        type:
+          $ref: '#/components/schemas/CampaignType'
+        cycleId:
+          $ref: '#/components/schemas/ObjectId'
+        emailTemplateVersionId:
+          $ref: '#/components/schemas/ObjectId'
+        audience:
+          $ref: '#/components/schemas/EmailAudience'
+        filters:
+          type: object
+          additionalProperties: true
+    CampaignPreview:
+      type: object
+      required: [eligible, excluded, invalid, sample]
+      properties:
+        eligible: { type: integer, minimum: 0 }
+        excluded: { type: integer, minimum: 0 }
+        invalid: { type: integer, minimum: 0 }
+        sample:
+          type: object
+          properties:
+            subject: { type: string }
+            textBody: { type: string }
+    Campaign:
+      type: object
+      required: [id, type, status, total]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        type:
+          $ref: '#/components/schemas/CampaignType'
+        status:
+          type: string
+          enum: [queued, processing, completed, partial]
+        total:
+          type: integer
+          minimum: 0
+    DeliveryStatus:
+      type: string
+      enum: [queued, sending, sent, failed, uncertain]
+    Delivery:
+      type: object
+      required: [id, campaignId, status, attempts, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        campaignId:
+          $ref: '#/components/schemas/ObjectId'
+        recipientMasked:
+          type: string
+        status:
+          $ref: '#/components/schemas/DeliveryStatus'
+        attempts:
+          type: integer
+          minimum: 0
+        providerMessageId:
+          type: [string, 'null']
+        lastErrorCode:
+          type: [string, 'null']
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    DeliveryList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Delivery'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    SmtpSettingsSource:
+      type: string
+      enum: [database, environment]
+    SmtpSettings:
+      type: object
+      required:
+        - enabled
+        - source
+        - host
+        - port
+        - secure
+        - username
+        - from
+        - passwordConfigured
+        - effectivePasswordConfigured
+        - version
+        - updatedAt
+        - updatedBy
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the encrypted database override is active
+        source:
+          $ref: '#/components/schemas/SmtpSettingsSource'
+        host:
+          type: string
+          maxLength: 253
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        secure:
+          type: boolean
+          description: Use TLS from connection start, commonly port 465
+        username:
+          type: string
+          maxLength: 320
+        from:
+          type: string
+          maxLength: 320
+        passwordConfigured:
+          type: boolean
+          description: Whether the database override contains an encrypted password
+        effectivePasswordConfigured:
+          type: boolean
+          description: Whether the active source has a password without revealing it
+        version:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: [string, 'null']
+          format: date-time
+        updatedBy:
+          oneOf:
+            - $ref: '#/components/schemas/ObjectId'
+            - type: 'null'
+    SmtpSettingsUpdate:
+      type: object
+      additionalProperties: false
+      required: [enabled, host, port, secure, username, from, version]
+      properties:
+        enabled:
+          type: boolean
+        host:
+          type: string
+          minLength: 1
+          maxLength: 253
+          pattern: '^[a-zA-Z0-9.-]+$'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        secure:
+          type: boolean
+        username:
+          type: string
+          maxLength: 320
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          writeOnly: true
+          description: Omit to preserve the existing encrypted password
+        clearPassword:
+          type: boolean
+          default: false
+          description: Remove the stored password; cannot be combined with password
+        from:
+          type: string
+          minLength: 3
+          maxLength: 320
+        version:
+          type: integer
+          minimum: 0
+    SmtpTestRequest:
+      type: object
+      additionalProperties: false
+      required: [recipientEmail]
+      properties:
+        recipientEmail:
+          type: string
+          format: email
+          maxLength: 320
+    SmtpTestDelivery:
+      type: object
+      required:
+        - id
+        - status
+        - configurationSource
+        - configurationVersion
+        - failureCode
+        - createdAt
+        - completedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        status:
+          type: string
+          enum: [queued, sending, sent, failed]
+        configurationSource:
+          $ref: '#/components/schemas/SmtpSettingsSource'
+        configurationVersion:
+          type: integer
+          minimum: 0
+        failureCode:
+          type: [string, 'null']
+        createdAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+
+    DocumentTemplateInput:
+      type: object
+      required: [code, name, documentType, programIds]
+      properties:
+        code:
+          type: string
+          maxLength: 100
+        name:
+          type: string
+          maxLength: 300
+        documentType:
+          type: string
+          enum: [transcript, certificate, report]
+        programIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/ObjectId'
+    DocumentTemplate:
+      allOf:
+        - $ref: '#/components/schemas/DocumentTemplateInput'
+        - type: object
+          required: [id, latestVersion, currentStatus, createdAt]
+          properties:
+            id:
+              $ref: '#/components/schemas/ObjectId'
+            latestVersion: { type: integer, minimum: 1 }
+            currentStatus:
+              $ref: '#/components/schemas/TemplateStatus'
+            createdAt: { type: string, format: date-time }
+    DocumentTemplateList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentTemplate'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    DocumentTemplateVersion:
+      type: object
+      required: [id, templateId, versionNumber, status, schemaVersion, content, version, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        templateId:
+          $ref: '#/components/schemas/ObjectId'
+        versionNumber: { type: integer, minimum: 1 }
+        status:
+          $ref: '#/components/schemas/TemplateStatus'
+        schemaVersion:
+          type: integer
+          minimum: 1
+        content:
+          type: object
+          additionalProperties: true
+          description: Canonical validated Konva document JSON
+        thumbnailKey:
+          type: [string, 'null']
+        placeholders:
+          type: array
+          items: { type: string }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        publishedAt: { type: [string, 'null'], format: date-time }
+    DocumentTemplateVersionPatch:
+      type: object
+      required: [version, schemaVersion, content]
+      properties:
+        version: { type: integer, minimum: 1 }
+        schemaVersion: { type: integer, minimum: 1 }
+        content:
+          type: object
+          additionalProperties: true
+        thumbnailKey:
+          type: [string, 'null']
+    JobStatus:
+      type: string
+      enum: [queued, processing, completed, failed, cancelled]
+    GenerateDocumentRequest:
+      type: object
+      required: [studentId, documentTemplateVersionId]
+      properties:
+        studentId:
+          $ref: '#/components/schemas/ObjectId'
+        documentTemplateVersionId:
+          $ref: '#/components/schemas/ObjectId'
+        evaluationId:
+          $ref: '#/components/schemas/ObjectId'
+    GeneratedDocument:
+      type: object
+      required: [id, studentId, documentTemplateVersionId, status, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        studentId:
+          $ref: '#/components/schemas/ObjectId'
+        evaluationId:
+          $ref: '#/components/schemas/ObjectId'
+        documentTemplateVersionId:
+          $ref: '#/components/schemas/ObjectId'
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        checksum:
+          type: [string, 'null']
+        rendererVersion:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        failureCode:
+          type: [string, 'null']
+    GeneratedDocumentList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/GeneratedDocument'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    SignedDownload:
+      type: object
+      required: [url, expiresAt]
+      properties:
+        url:
+          type: string
+          format: uri
+        expiresAt:
+          type: string
+          format: date-time
+
+    OverviewReport:
+      type: object
+      required: [asOf, effectiveFilters, totals]
+      properties:
+        asOf:
+          type: string
+          format: date-time
+        effectiveFilters:
+          type: object
+          additionalProperties: true
+        totals:
+          type: object
+          required: [assignments, submitted, pending, expired]
+          properties:
+            assignments: { type: integer, minimum: 0 }
+            submitted: { type: integer, minimum: 0 }
+            pending: { type: integer, minimum: 0 }
+            expired: { type: integer, minimum: 0 }
+            completionPercent: { type: number, minimum: 0, maximum: 100 }
+    ProgramMetric:
+      type: object
+      required: [programId, programName, totals]
+      properties:
+        programId:
+          $ref: '#/components/schemas/ObjectId'
+        programName:
+          $ref: '#/components/schemas/LocalizedText'
+        totals:
+          type: object
+          additionalProperties:
+            type: number
+    AuditLog:
+      type: object
+      required: [id, occurredAt, actorId, action, targetType, targetId, requestId]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        occurredAt: { type: string, format: date-time }
+        actorId:
+          $ref: '#/components/schemas/ObjectId'
+        action: { type: string }
+        targetType: { type: string }
+        targetId:
+          $ref: '#/components/schemas/ObjectId'
+        requestId: { type: string }
+        scope:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Redacted safe metadata only
+    AuditLogList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+        meta:
+          $ref: '#/components/schemas/PageMeta'

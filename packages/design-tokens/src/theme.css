@@ -1,0 +1,307 @@
+/*
+ * Internship Transcript V2 — MFU Internship design tokens
+ * Brand source: legacy MFU CoEd internship system assets
+ */
+
+@import 'tailwindcss';
+@import '@nuxt/ui';
+@import '@fontsource-variable/plus-jakarta-sans';
+@import '@fontsource-variable/dm-sans';
+@import '@fontsource-variable/fira-code';
+@import '@fontsource-variable/noto-sans-thai';
+
+@theme static {
+  --font-heading:
+    'Plus Jakarta Sans Variable', 'Noto Sans Thai Variable', system-ui,
+    sans-serif;
+  --font-sans:
+    'DM Sans Variable', 'Noto Sans Thai Variable', system-ui, sans-serif;
+  --font-mono:
+    'Fira Code Variable', ui-monospace, SFMono-Regular, Consolas, monospace;
+
+  /* Primitive color layer */
+  --color-page: #fffaf8;
+
+  --color-mfu-red-50: #fff1f2;
+  --color-mfu-red-100: #ffe4e6;
+  --color-mfu-red-200: #fecdd3;
+  --color-mfu-red-300: #fda4af;
+  --color-mfu-red-400: #fb7185;
+  --color-mfu-red-500: #e63a42;
+  --color-mfu-red-600: #d2232a;
+  --color-mfu-red-700: #ac1515;
+  --color-mfu-red-800: #8c1515;
+  --color-mfu-red-900: #731317;
+  --color-mfu-red-950: #450a0a;
+
+  --color-mfu-gold-50: #fffaf0;
+  --color-mfu-gold-100: #fff2d6;
+  --color-mfu-gold-200: #ffe2a3;
+  --color-mfu-gold-300: #fecf73;
+  --color-mfu-gold-400: #fec260;
+  --color-mfu-gold-500: #e9a82f;
+  --color-mfu-gold-600: #c98412;
+  --color-mfu-gold-700: #9f650f;
+  --color-mfu-gold-800: #805014;
+  --color-mfu-gold-900: #684215;
+  --color-mfu-gold-950: #3c2309;
+
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+  --color-slate-950: #020617;
+
+  --color-neutral-0: #ffffff;
+  --color-neutral-50: #f8fafc;
+  --color-neutral-100: #f1f5f9;
+  --color-neutral-200: #e2e8f0;
+  --color-neutral-300: #cbd5e1;
+  --color-neutral-400: #94a3b8;
+  --color-neutral-500: #64748b;
+  --color-neutral-600: #475569;
+  --color-neutral-700: #334155;
+  --color-neutral-800: #1e293b;
+  --color-neutral-900: #0f172a;
+  --color-neutral-950: #020617;
+
+  --color-success-50: #f0fdf4;
+  --color-success-100: #dcfce7;
+  --color-success-200: #bbf7d0;
+  --color-success-300: #86efac;
+  --color-success-400: #4ade80;
+  --color-success-500: #22c55e;
+  --color-success-600: #16a34a;
+  --color-success-700: #15803d;
+  --color-success-800: #166534;
+  --color-success-900: #14532d;
+  --color-success-950: #052e16;
+
+  --color-info-50: #f0f9ff;
+  --color-info-100: #e0f2fe;
+  --color-info-200: #bae6fd;
+  --color-info-300: #7dd3fc;
+  --color-info-400: #38bdf8;
+  --color-info-500: #0ea5e9;
+  --color-info-600: #0284c7;
+  --color-info-700: #0369a1;
+  --color-info-800: #075985;
+  --color-info-900: #0c4a6e;
+  --color-info-950: #082f49;
+
+  --color-warning-50: #fefce8;
+  --color-warning-100: #fef9c3;
+  --color-warning-200: #fef08a;
+  --color-warning-300: #fde047;
+  --color-warning-400: #facc15;
+  --color-warning-500: #eab308;
+  --color-warning-600: #ca8a04;
+  --color-warning-700: #a16207;
+  --color-warning-800: #854d0e;
+  --color-warning-900: #713f12;
+  --color-warning-950: #422006;
+
+  --color-error-50: #fef2f2;
+  --color-error-100: #fee2e2;
+  --color-error-200: #fecaca;
+  --color-error-300: #fca5a5;
+  --color-error-400: #f87171;
+  --color-error-500: #ef4444;
+  --color-error-600: #dc2626;
+  --color-error-700: #b91c1c;
+  --color-error-800: #991b1b;
+  --color-error-900: #7f1d1d;
+  --color-error-950: #450a0a;
+}
+
+:root {
+  color-scheme: light;
+
+  /* Primitive geometry */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --radius-sm: 0.25rem;
+  --radius-default: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 3px rgb(15 23 42 / 3%);
+  --shadow-default: 0 2px 6px rgb(15 23 42 / 5%);
+  --shadow-md: 0 4px 16px rgb(15 23 42 / 7%);
+  --shadow-lg: 0 8px 32px rgb(15 23 42 / 10%);
+  --shadow-raised: var(--shadow-md);
+  --shadow-overlay: var(--shadow-lg);
+  --motion-fast: 100ms;
+  --motion-normal: 150ms;
+  --motion-slow: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Semantic layer: light */
+  --semantic-bg-canvas: var(--color-page);
+  --semantic-bg-surface: var(--color-neutral-0);
+  --semantic-bg-muted: var(--color-slate-100);
+  --semantic-bg-elevated: var(--color-neutral-0);
+  --semantic-bg-accented: var(--color-mfu-gold-50);
+  --semantic-bg-inverted: var(--color-mfu-red-950);
+  --semantic-text-default: var(--color-slate-900);
+  --semantic-text-muted: var(--color-slate-600);
+  --semantic-text-dimmed: var(--color-slate-500);
+  --semantic-text-highlighted: var(--color-slate-950);
+  --semantic-text-inverted: var(--color-neutral-0);
+  --semantic-text-link: var(--color-mfu-red-700);
+  --semantic-border-subtle: var(--color-slate-100);
+  --semantic-border-default: var(--color-slate-200);
+  --semantic-border-control: var(--color-slate-300);
+  --semantic-border-strong: var(--color-slate-500);
+  --semantic-action-primary: var(--color-mfu-red-700);
+  --semantic-action-primary-hover: var(--color-mfu-red-800);
+  --semantic-action-primary-pressed: var(--color-mfu-red-900);
+  --semantic-action-on-primary: var(--color-neutral-0);
+  --semantic-action-secondary: var(--color-mfu-gold-700);
+  --semantic-action-secondary-hover: var(--color-mfu-gold-800);
+  --semantic-action-on-secondary: var(--color-neutral-0);
+  --semantic-action-disabled: var(--color-slate-200);
+  --semantic-action-on-disabled: var(--color-slate-500);
+  --semantic-focus-ring: var(--color-mfu-red-700);
+  --semantic-focus-offset: var(--color-neutral-0);
+
+  /* Semantic status */
+  --semantic-success: var(--color-success-700);
+  --semantic-success-bg: var(--color-success-50);
+  --semantic-success-border: var(--color-success-200);
+  --semantic-info: var(--color-info-700);
+  --semantic-info-bg: var(--color-info-50);
+  --semantic-info-border: var(--color-info-200);
+  --semantic-warning: var(--color-warning-700);
+  --semantic-warning-bg: var(--color-warning-50);
+  --semantic-warning-border: var(--color-warning-200);
+  --semantic-error: var(--color-error-700);
+  --semantic-error-bg: var(--color-error-50);
+  --semantic-error-border: var(--color-error-200);
+
+  /* Nuxt UI bridge */
+  --ui-primary: var(--semantic-action-primary);
+  --ui-secondary: var(--semantic-action-secondary);
+  --ui-success: var(--semantic-success);
+  --ui-info: var(--semantic-info);
+  --ui-warning: var(--semantic-warning);
+  --ui-error: var(--semantic-error);
+  --ui-text-dimmed: var(--semantic-text-dimmed);
+  --ui-text-muted: var(--semantic-text-muted);
+  --ui-text-toned: var(--semantic-text-muted);
+  --ui-text: var(--semantic-text-default);
+  --ui-text-highlighted: var(--semantic-text-highlighted);
+  --ui-text-inverted: var(--semantic-text-inverted);
+  --ui-bg: var(--semantic-bg-surface);
+  --ui-bg-muted: var(--semantic-bg-muted);
+  --ui-bg-elevated: var(--semantic-bg-elevated);
+  --ui-bg-accented: var(--semantic-bg-accented);
+  --ui-bg-inverted: var(--semantic-bg-inverted);
+  --ui-border: var(--semantic-border-default);
+  --ui-border-muted: var(--semantic-border-subtle);
+  --ui-border-accented: var(--semantic-border-control);
+  --ui-border-inverted: var(--semantic-border-strong);
+  --ui-radius: var(--radius-default);
+  --ui-container: 90rem;
+  --ui-header-height: 4rem;
+
+  /* Component layer */
+  --component-focus-width: 0.125rem;
+  --component-focus-offset: 0.125rem;
+  --component-button-min-height: 2.75rem;
+  --component-button-padding-inline: 1.375rem;
+  --component-button-gap: var(--space-2);
+  --component-button-radius: var(--radius-default);
+  --component-input-min-height: 2.75rem;
+  --component-input-padding-inline: 0.875rem;
+  --component-input-radius: var(--radius-default);
+  --component-card-padding: var(--space-6);
+  --component-card-radius: var(--radius-default);
+  --component-badge-min-height: 1.5rem;
+  --component-badge-padding-inline: 0.75rem;
+  --component-badge-radius: var(--radius-sm);
+  --component-table-row-height: 3rem;
+  --component-table-cell-padding-inline: var(--space-4);
+  --component-sidebar-width: 16rem;
+  --component-sidebar-collapsed-width: 4.5rem;
+  --component-header-height: 4rem;
+  --component-form-max-width: 60rem;
+  --component-dialog-max-width: 36rem;
+  --component-drawer-max-width: 42rem;
+}
+
+.dark {
+  color-scheme: dark;
+  --semantic-bg-canvas: var(--color-slate-950);
+  --semantic-bg-surface: var(--color-slate-900);
+  --semantic-bg-muted: var(--color-slate-800);
+  --semantic-bg-elevated: var(--color-slate-800);
+  --semantic-bg-accented: var(--color-mfu-red-950);
+  --semantic-bg-inverted: var(--color-slate-50);
+  --semantic-text-default: var(--color-slate-100);
+  --semantic-text-muted: var(--color-slate-300);
+  --semantic-text-dimmed: var(--color-slate-400);
+  --semantic-text-highlighted: var(--color-neutral-0);
+  --semantic-text-inverted: var(--color-slate-950);
+  --semantic-text-link: var(--color-mfu-red-300);
+  --semantic-border-subtle: var(--color-slate-800);
+  --semantic-border-default: var(--color-slate-700);
+  --semantic-border-control: var(--color-slate-500);
+  --semantic-border-strong: var(--color-slate-300);
+  --semantic-action-primary: var(--color-mfu-red-600);
+  --semantic-action-primary-hover: var(--color-mfu-red-500);
+  --semantic-action-primary-pressed: var(--color-mfu-red-700);
+  --semantic-action-on-primary: var(--color-neutral-0);
+  --semantic-action-secondary: var(--color-mfu-gold-700);
+  --semantic-action-secondary-hover: var(--color-mfu-gold-600);
+  --semantic-action-on-secondary: var(--color-neutral-0);
+  --semantic-action-disabled: var(--color-slate-700);
+  --semantic-action-on-disabled: var(--color-slate-400);
+  --semantic-focus-ring: var(--color-mfu-gold-300);
+  --semantic-focus-offset: var(--color-slate-950);
+}
+
+[data-density='compact'] {
+  --component-table-row-height: 3rem;
+}
+
+[data-density='comfortable'] {
+  --component-table-row-height: 3.5rem;
+}
+
+html {
+  background: var(--semantic-bg-canvas);
+  color: var(--semantic-text-default);
+  font-family: var(--font-sans);
+  font-size: 100%;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+}
+
+:focus-visible {
+  outline: var(--component-focus-width) solid var(--semantic-focus-ring);
+  outline-offset: var(--component-focus-offset);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

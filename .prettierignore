@@ -1,0 +1,10 @@
+.nuxt
+.output
+.playwright-cli
+coverage
+packages/api-client/src/generated
+dist
+node_modules
+node_modules.x64-backup
+pnpm-lock.yaml
+docs/api/openapi.yaml

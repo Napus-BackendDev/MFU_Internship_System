@@ -1,0 +1,5 @@
+/*
+ * Verdana Health token reference for documentation and design handoff.
+ * Runtime source stays single-sourced in the design-token package.
+ */
+@import '../../packages/design-tokens/src/theme.css';

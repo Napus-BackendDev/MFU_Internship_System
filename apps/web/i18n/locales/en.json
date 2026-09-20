@@ -1,0 +1,18 @@
+{
+  "accessibility": {
+    "changeColorMode": "Change color mode",
+    "skipToContent": "Skip to main content"
+  },
+  "home": {
+    "api": "API",
+    "apiDescription": "The NestJS REST API owns business rules, authorization, and data.",
+    "description": "Internship competency evaluation, correspondence, and transcript records.",
+    "environment": "Environment: {environment}",
+    "foundationStatus": "Building the system from the approved V2 contracts",
+    "title": "Internship Transcript System V2",
+    "web": "Web",
+    "webDescription": "Nuxt 4, Vue 3, and Nuxt UI with Thai and English support.",
+    "worker": "Worker",
+    "workerDescription": "Idempotent queue workers handle email, PDF, import, and export jobs."
+  }
+}

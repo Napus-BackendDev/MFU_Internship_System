@@ -1,0 +1,47 @@
+{
+  "name": "internship-transcript-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Secure internship evaluation, competency reporting, correspondence, and transcript generation.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.0.7",
+  "engines": {
+    "node": ">=24.11.0 <25",
+    "pnpm": ">=11.0.0 <12"
+  },
+  "scripts": {
+    "predev": "pnpm --filter @internship/config --filter @internship/shared-types --filter @internship/validation --filter @internship/api-client --filter @internship/design-tokens build",
+    "dev": "pnpm --parallel --filter @internship/web --filter @internship/api --filter @internship/worker dev",
+    "build": "pnpm -r --if-present build",
+    "start": "pnpm --parallel --filter @internship/web --filter @internship/api --filter @internship/worker start",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "test:e2e": "vitest run tests/e2e",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "infra:up": "docker compose -f infrastructure/compose.development.yaml up -d mongodb mongodb-init redis minio minio-init mailpit",
+    "infra:full": "docker compose -f infrastructure/compose.development.yaml --profile full up -d --build",
+    "infra:logs": "docker compose -f infrastructure/compose.development.yaml logs -f --tail=200",
+    "infra:down": "docker compose -f infrastructure/compose.development.yaml down",
+    "seed:development": "pnpm predev && pnpm --filter @internship/api seed:development",
+    "openapi:lint": "redocly lint docs/api/openapi.yaml",
+    "openapi:generate": "openapi-typescript docs/api/openapi.yaml -o packages/api-client/src/generated/openapi.ts",
+    "openapi:check": "openapi-typescript docs/api/openapi.yaml -o packages/api-client/src/generated/openapi.ts --check",
+    "verify": "pnpm format:check && pnpm openapi:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e && pnpm openapi:lint && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@redocly/cli": "2.47.0",
+    "@types/node": "24.13.3",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "10.9.0",
+    "globals": "17.11.0",
+    "openapi-typescript": "7.13.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0",
+    "vitest": "4.1.11"
+  }
+}

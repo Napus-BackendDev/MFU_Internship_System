@@ -1,0 +1,18 @@
+{
+  "accessibility": {
+    "changeColorMode": "เปลี่ยนโหมดสี",
+    "skipToContent": "ข้ามไปยังเนื้อหาหลัก"
+  },
+  "home": {
+    "api": "API",
+    "apiDescription": "NestJS REST API เป็นเจ้าของกฎธุรกิจ สิทธิ์ และข้อมูล",
+    "description": "ระบบประเมินสมรรถนะ การสื่อสาร และเอกสารผลการฝึกงาน",
+    "environment": "สภาพแวดล้อม: {environment}",
+    "foundationStatus": "กำลังสร้างระบบตามสัญญา V2",
+    "title": "Internship Transcript System V2",
+    "web": "Web",
+    "webDescription": "Nuxt 4, Vue 3 และ Nuxt UI รองรับภาษาไทยและอังกฤษ",
+    "worker": "Worker",
+    "workerDescription": "งานอีเมล PDF import และ export ทำงานผ่านคิวแบบ idempotent"
+  }
+}
