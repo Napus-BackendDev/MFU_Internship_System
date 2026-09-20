@@ -755,7 +755,7 @@ async function confirmSendEmail(): Promise<void> {
                     icon="i-lucide-mail"
                     size="xs"
                     variant="subtle"
-                    class="rounded-full mr-1 cursor-pointer"
+                    class="!rounded-full size-8 p-0 flex items-center justify-center mr-1.5 cursor-pointer"
                     :title="
                       item.status === 'inProgress'
                         ? 'ส่งอีเมลแจ้งเตือน (Reminder)'
@@ -801,6 +801,7 @@ async function confirmSendEmail(): Promise<void> {
                       icon="i-lucide-ellipsis-vertical"
                       size="sm"
                       variant="ghost"
+                      class="!rounded-full size-8 p-0 flex items-center justify-center cursor-pointer hover:bg-muted/60"
                     />
                   </UDropdownMenu>
                 </div>

@@ -645,6 +645,7 @@ async function handleSaveCompanyTypes() {
                       size="xs"
                       variant="ghost"
                       title="แก้ไขจังหวัด"
+                      class="!rounded-full size-7 p-0 flex items-center justify-center cursor-pointer hover:bg-muted/60"
                       @click="openEditProvinceModal(province)"
                     />
                     <UButton
@@ -654,6 +655,7 @@ async function handleSaveCompanyTypes() {
                       size="xs"
                       variant="ghost"
                       title="ลบจังหวัด"
+                      class="!rounded-full size-7 p-0 flex items-center justify-center cursor-pointer hover:bg-red-500/10"
                       @click="handleDeleteProvince(province)"
                     />
                   </div>
@@ -758,6 +760,7 @@ async function handleSaveCompanyTypes() {
                   size="xs"
                   variant="ghost"
                   title="ลบประเภทนี้"
+                  class="!rounded-full size-7 p-0 flex items-center justify-center cursor-pointer hover:bg-red-500/10"
                   @click="removeCompanyType(idx)"
                 />
               </div>

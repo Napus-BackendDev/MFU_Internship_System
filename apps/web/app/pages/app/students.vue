@@ -1960,6 +1960,7 @@ function copyInvitationLink() {
                       icon="i-lucide-ellipsis-vertical"
                       size="sm"
                       variant="ghost"
+                      class="!rounded-full size-8 p-0 flex items-center justify-center cursor-pointer hover:bg-muted/60"
                     />
                   </UDropdownMenu>
                 </div>
