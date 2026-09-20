@@ -57,7 +57,7 @@ const allLinks = [
   {
     label: 'ตั้งค่าอีเมล',
     to: '/app/settings/email',
-    icon: 'i-lucide-mail-cog',
+    icon: 'i-lucide-mails',
     academicManageOnly: true
   },
   {
