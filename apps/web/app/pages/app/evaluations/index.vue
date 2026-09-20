@@ -471,7 +471,7 @@ async function confirmSendEmail(): Promise<void> {
         <UButton
           color="neutral"
           icon="i-lucide-mails"
-          label="ตั้งค่าแม่แบบอีเมล"
+          label="ตั้งค่าแม่แบบจดหมาย"
           to="/app/settings/email"
           variant="outline"
         />

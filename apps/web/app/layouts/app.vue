@@ -55,7 +55,7 @@ const allLinks = [
     academicManageOnly: true
   },
   {
-    label: 'ตั้งค่าอีเมล',
+    label: 'ตั้งค่าจดหมาย',
     to: '/app/settings/email',
     icon: 'i-lucide-mails',
     academicManageOnly: true
@@ -170,6 +170,10 @@ const pageMetadataMap: Readonly<Record<string, PageHeaderMeta>> = {
     title: 'ตั้งค่าระบบและข้อมูลพื้นฐาน',
     description:
       'จัดการข้อมูลจังหวัด (Provinces) และประเภทสถานประกอบการ (Company Types)'
+  },
+  '/app/settings/email': {
+    title: 'ตั้งค่าจดหมาย',
+    description: 'จัดการแม่แบบและการตกแต่งจดหมายแจ้งสถานประกอบการและผู้ประเมิน'
   },
   '/app/settings/smtp': {
     title: 'ตั้งค่าระบบส่งอีเมล (SMTP)',

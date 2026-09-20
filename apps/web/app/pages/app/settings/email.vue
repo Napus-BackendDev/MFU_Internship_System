@@ -615,8 +615,8 @@ watch(editorMode, (newMode) => {
     <!-- Header -->
     <header class="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <p class="mfu-eyebrow">ระบบแม่แบบและการตกแต่งอีเมล (Email Design Studio)</p>
-        <h1 class="mt-2 text-3xl font-bold text-highlighted">ตั้งค่าและตกแต่งอีเมล</h1>
+        <p class="mfu-eyebrow">ระบบแม่แบบและการตกแต่งจดหมาย (Letter Design Studio)</p>
+        <h1 class="mt-2 text-3xl font-bold text-highlighted">ตั้งค่าจดหมาย</h1>
         <p class="mt-1 text-sm text-muted">
           ปรับแต่งข้อความ สีสัน และความสวยงามของจดหมายได้ตามต้องการ โดยไม่ต้องมีความรู้เรื่องโค้ด
         </p>
