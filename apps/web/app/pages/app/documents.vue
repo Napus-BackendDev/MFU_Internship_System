@@ -100,6 +100,17 @@ export interface DocumentTemplateItem {
 
 const api = useApi()
 const toast = useToast()
+const runtimeConfig = useRuntimeConfig()
+const isProduction = runtimeConfig.public.appEnvironment !== 'development'
+
+function showDocumentFeatureUnavailable(): void {
+  toast.add({
+    title: 'ยังไม่พร้อมใช้งานใน Production',
+    description:
+      'หน้านี้ยังไม่เชื่อมต่อการบันทึกแม่แบบและการออก PDF ผ่าน API จึงไม่สามารถบันทึกหรือออกเอกสารจริงได้',
+    color: 'warning'
+  })
+}
 
 // Load dynamic data from system API
 const { data: studentsData } = await useAsyncData('docs-students', () =>
@@ -664,50 +675,54 @@ const defaultCertificateElements: CanvasElement[] = [
 ]
 
 // Table data: Document templates with Canva canvas elements
-const documents = ref<DocumentTemplateItem[]>([
-  {
-    id: 'doc-001',
-    code: 'DOC-TR-001',
-    nameTh: 'ใบบันทึกผลการประเมินการฝึกงาน (Internship Transcript)',
-    nameEn: 'Internship Transcript & Competency Report',
-    docType: 'pdf',
-    description:
-      'เอกสารรายงานผลคะแนนสมรรถนะรายหมวด บันทึกเวลาฝึกงาน และลายมือชื่อรับรอง (A4 แนวตั้ง)',
-    createdAt: '2026-09-02T10:00:00Z',
-    status: 'active',
-    backgroundType: 'watermark',
-    bgOpacity: 12,
-    elements: JSON.parse(JSON.stringify(defaultTranscriptElements))
-  },
-  {
-    id: 'doc-002',
-    code: 'DOC-CR-001',
-    nameTh: 'ใบประกาศนียบัตรรับรองการฝึกงาน (Certificate of Completion)',
-    nameEn: 'Certificate of Professional Internship Completion',
-    docType: 'certificate',
-    description:
-      'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ กรอบทองหรูหราพร้อมตรามหาวิทยาลัย (A4 แนวนอน)',
-    createdAt: '2026-09-02T10:30:00Z',
-    status: 'active',
-    backgroundType: 'certificate_pattern',
-    bgOpacity: 15,
-    elements: JSON.parse(JSON.stringify(defaultCertificateElements))
-  },
-  {
-    id: 'doc-003',
-    code: 'DOC-RF-001',
-    nameTh: 'หนังสือส่งตัวนักศึกษาฝึกงาน (Internship Referral Letter)',
-    nameEn: 'Official Student Internship Referral Letter',
-    docType: 'pdf',
-    description:
-      'หนังสือราชการจากมหาวิทยาลัยส่งตัวนักศึกษาเข้าฝึกงาน ณ สถานประกอบการ',
-    createdAt: '2026-09-01T08:00:00Z',
-    status: 'inactive',
-    backgroundType: 'none',
-    bgOpacity: 10,
-    elements: []
-  }
-])
+const documents = ref<DocumentTemplateItem[]>(
+  isProduction
+    ? []
+    : [
+        {
+          id: 'doc-001',
+          code: 'DOC-TR-001',
+          nameTh: 'ใบบันทึกผลการประเมินการฝึกงาน (Internship Transcript)',
+          nameEn: 'Internship Transcript & Competency Report',
+          docType: 'pdf',
+          description:
+            'เอกสารรายงานผลคะแนนสมรรถนะรายหมวด บันทึกเวลาฝึกงาน และลายมือชื่อรับรอง (A4 แนวตั้ง)',
+          createdAt: '2026-09-02T10:00:00Z',
+          status: 'active',
+          backgroundType: 'watermark',
+          bgOpacity: 12,
+          elements: JSON.parse(JSON.stringify(defaultTranscriptElements))
+        },
+        {
+          id: 'doc-002',
+          code: 'DOC-CR-001',
+          nameTh: 'ใบประกาศนียบัตรรับรองการฝึกงาน (Certificate of Completion)',
+          nameEn: 'Certificate of Professional Internship Completion',
+          docType: 'certificate',
+          description:
+            'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ กรอบทองหรูหราพร้อมตรามหาวิทยาลัย (A4 แนวนอน)',
+          createdAt: '2026-09-02T10:30:00Z',
+          status: 'active',
+          backgroundType: 'certificate_pattern',
+          bgOpacity: 15,
+          elements: JSON.parse(JSON.stringify(defaultCertificateElements))
+        },
+        {
+          id: 'doc-003',
+          code: 'DOC-RF-001',
+          nameTh: 'หนังสือส่งตัวนักศึกษาฝึกงาน (Internship Referral Letter)',
+          nameEn: 'Official Student Internship Referral Letter',
+          docType: 'pdf',
+          description:
+            'หนังสือราชการจากมหาวิทยาลัยส่งตัวนักศึกษาเข้าฝึกงาน ณ สถานประกอบการ',
+          createdAt: '2026-09-01T08:00:00Z',
+          status: 'inactive',
+          backgroundType: 'none',
+          bgOpacity: 10,
+          elements: []
+        }
+      ]
+)
 
 // Search & Filter state
 const searchQuery = ref('')
@@ -772,7 +787,7 @@ const canvaSidebarTab = ref<
 const livePreviewMode = ref<'variables' | 'real_data'>('real_data')
 
 // Active dynamic student selection
-const activeStudentId = ref<string>('DEV0001')
+const activeStudentId = ref<string>('')
 
 const dynamicStudentValues = computed(() => {
   const std = studentsData.value?.items?.find(
@@ -789,7 +804,7 @@ const dynamicStudentValues = computed(() => {
     (o) => o.id === placement?.organizationId
   )
 
-  let period = '1 มิถุนายน 2569 - 31 ตุลาคม 2569'
+  let period = '[ยังไม่มีช่วงเวลาฝึกงาน]'
   if (placement?.startsAt && placement?.endsAt) {
     const sDate = new Date(placement.startsAt).toLocaleDateString('th-TH', {
       year: 'numeric',
@@ -805,28 +820,24 @@ const dynamicStudentValues = computed(() => {
   }
 
   return {
-    student_id: std?.studentId || 'DEV0001',
-    student_name_th: std?.name?.th || 'นายธีรพัฒน์ สุขสวัสดิ์',
-    student_name_en: std?.name?.en || 'Mr. Teerapat Suksawat',
+    student_id: std?.studentId || '[ไม่พบรหัสนักศึกษา]',
+    student_name_th: std?.name?.th || '[ไม่พบชื่อนักศึกษา]',
+    student_name_en: std?.name?.en || '[ไม่พบชื่อภาษาอังกฤษ]',
     school_name: school
       ? `${school.name.th} (${school.name.en})`
-      : 'สำนักวิชาเทคโนโลยีดิจิทัลประยุกต์',
+      : '[ไม่พบสำนักวิชา]',
     program_name: program
       ? `${program.name.th} (${program.name.en})`
-      : 'วิศวกรรมซอฟต์แวร์ (Software Engineering)',
+      : '[ไม่พบหลักสูตร]',
     organization_name: org
       ? `${org.name.th} (${org.name.en})`
-      : 'บริษัท อินโนเวชั่น เทคโนโลยี จำกัด',
-    position_title: placement?.positionTitle?.th || 'Software Engineer Intern',
+      : '[ไม่พบสถานประกอบการ]',
+    position_title: placement?.positionTitle?.th || '[ไม่พบตำแหน่งฝึกงาน]',
     training_period: period,
-    total_hours: '450',
-    evaluation_grade: 'A (ผ่านเกณฑ์ระดับดีเยี่ยม / Excellent)',
-    issue_date: new Date().toLocaleDateString('th-TH', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    }),
-    doc_number: `MFU-INT-2569/${std?.studentId || 'DEV0001'}`
+    total_hours: '[ยังไม่มีข้อมูลชั่วโมงจากระบบ]',
+    evaluation_grade: '[ยังไม่มีผลประเมินจากระบบ]',
+    issue_date: '[กำหนดเมื่อออกเอกสารจริง]',
+    doc_number: '[กำหนดเลขที่โดยระบบเมื่อออกเอกสารจริง]'
   }
 })
 
@@ -889,10 +900,18 @@ const availableVariables = [
 const isFormatSelectModalOpen = ref(false)
 
 function openCreateChooser() {
+  if (isProduction) {
+    showDocumentFeatureUnavailable()
+    return
+  }
   isFormatSelectModalOpen.value = true
 }
 
 function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
+  if (isProduction) {
+    showDocumentFeatureUnavailable()
+    return
+  }
   isFormatSelectModalOpen.value = false
   if (type === 'certificate') {
     const newDoc: DocumentTemplateItem = {
@@ -934,6 +953,10 @@ function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
 
 // Open Canva Studio
 function openCanvaStudio(doc?: DocumentTemplateItem) {
+  if (isProduction) {
+    showDocumentFeatureUnavailable()
+    return
+  }
   if (doc) {
     activeEditingDoc.value = JSON.parse(JSON.stringify(doc))
     selectedElementId.value = activeEditingDoc.value?.elements?.[0]?.id || null
@@ -945,6 +968,10 @@ function openCanvaStudio(doc?: DocumentTemplateItem) {
 
 // Save Changes from Studio back to documents list
 function saveStudioChanges() {
+  if (isProduction) {
+    showDocumentFeatureUnavailable()
+    return
+  }
   if (!activeEditingDoc.value) return
 
   // Enforce single active document PER TYPE rule (PDF มีได้ 1 อัน, Certificate มีได้ 1 อัน)
@@ -965,16 +992,18 @@ function saveStudioChanges() {
   if (idx !== -1) {
     documents.value[idx] = JSON.parse(JSON.stringify(activeEditingDoc.value))
     toast.add({
-      title: 'บันทึกการจัดวางสำเร็จ',
-      description: `อัปเดตเทมเพลต ${activeEditingDoc.value.nameTh} เรียบร้อยแล้ว`,
-      color: 'success'
+      title: 'บันทึกฉบับทดลองในหน้าปัจจุบันแล้ว',
+      description:
+        'การเปลี่ยนแปลงนี้ยังไม่ถูกบันทึกลงฐานข้อมูล และจะหายเมื่อออกจากหน้านี้',
+      color: 'warning'
     })
   } else {
     documents.value.unshift(JSON.parse(JSON.stringify(activeEditingDoc.value)))
     toast.add({
-      title: 'สร้างเทมเพลตใหม่สำเร็จ',
-      description: `เพิ่มเอกสาร ${activeEditingDoc.value.nameTh} ลงในตารางเรียบร้อยแล้ว`,
-      color: 'success'
+      title: 'เพิ่มฉบับทดลองในหน้าปัจจุบันแล้ว',
+      description:
+        'แม่แบบนี้ยังไม่ถูกบันทึกลงฐานข้อมูล และใช้สร้างเอกสารจริงไม่ได้',
+      color: 'warning'
     })
   }
 
@@ -1409,13 +1438,12 @@ function handleStudioBgUpload(event: Event) {
   reader.readAsDataURL(file)
 }
 
-// Print trigger
-function handleStudioPrint() {
-  window.print()
-}
-
 // Quick Actions in Table: Enforce single active document PER TYPE rule
 function handleToggleStatus(doc: DocumentTemplateItem) {
+  if (isProduction) {
+    showDocumentFeatureUnavailable()
+    return
+  }
   if (doc.status === 'active') {
     doc.status = 'inactive'
     toast.add({
@@ -1438,24 +1466,44 @@ function handleToggleStatus(doc: DocumentTemplateItem) {
       ? 'PDF (ใบบันทึกผล)'
       : 'Certification (ใบประกาศนียบัตร)'
   toast.add({
-    title: 'เปิดใช้งานแม่แบบสำเร็จ',
-    description: `ตั้งค่า "${doc.nameTh}" เป็นแม่แบบประเภท ${typeLabel} ที่เปิดใช้งานแล้ว (ปิดฉบับอื่นในประเภทเดียวกัน)`,
-    color: 'success'
+    title: 'เปลี่ยนสถานะฉบับทดลองแล้ว',
+    description: `การเปลี่ยนสถานะ "${doc.nameTh}" มีผลเฉพาะในหน้านี้ และยังไม่ใช่สถานะใช้งานจริง (${typeLabel})`,
+    color: 'warning'
   })
 }
 
 function handleDeleteDocument(doc: DocumentTemplateItem) {
+  if (isProduction) {
+    showDocumentFeatureUnavailable()
+    return
+  }
   documents.value = documents.value.filter((d) => d.id !== doc.id)
   toast.add({
-    title: 'ลบเอกสารสำเร็จ',
-    description: `ลบเอกสาร ${doc.nameTh} เรียบร้อยแล้ว`,
-    color: 'success'
+    title: 'นำออกจากรายการฉบับทดลองแล้ว',
+    description: `การนำ ${doc.nameTh} ออกจากรายการมีผลเฉพาะในหน้านี้ ไม่ได้ลบข้อมูลในระบบ`,
+    color: 'warning'
   })
 }
 </script>
 
 <template>
   <div class="space-y-6">
+    <UAlert
+      :color="isProduction ? 'error' : 'warning'"
+      :icon="isProduction ? 'i-lucide-circle-alert' : 'i-lucide-flask-conical'"
+      :title="
+        isProduction
+          ? 'ระบบจัดการแม่แบบและออกเอกสารยังไม่พร้อมใช้งานใน Production'
+          : 'โหมดตัวอย่าง Development — ข้อมูลและการแก้ไขไม่ถูกบันทึกลงระบบ'
+      "
+      :description="
+        isProduction
+          ? 'หน้า Designer นี้ยังไม่เชื่อมต่อการบันทึกแม่แบบและการออก PDF ผ่าน API จึงปิดการสร้าง แก้ไข และพิมพ์เอกสารจริงไว้'
+          : 'แม่แบบในหน้านี้เป็นข้อมูลตัวอย่าง การพิมพ์ถูกปิดไว้ และการแก้ไขจะหายเมื่อออกจากหน้านี้'
+      "
+      variant="soft"
+    />
+
     <!-- Top Action Header -->
     <div
       class="no-print flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
@@ -1474,6 +1522,7 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
         icon="i-lucide-plus"
         label="สร้างเอกสารใหม่"
         size="lg"
+        :disabled="isProduction"
         @click="openCreateChooser"
       />
     </div>
@@ -2149,9 +2198,9 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
           <UButton
             color="neutral"
             icon="i-lucide-printer"
-            label="สั่งพิมพ์ / PDF"
+            label="PDF ยังไม่พร้อมออก"
             variant="outline"
-            @click="handleStudioPrint"
+            disabled
           />
 
           <UButton

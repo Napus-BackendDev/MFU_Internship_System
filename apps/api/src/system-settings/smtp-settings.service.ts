@@ -27,7 +27,12 @@ type SmtpTestDocument = HydratedDocument<SmtpTestDeliveryRecord> & {
   updatedAt?: Date
 }
 
-const LOCAL_SMTP_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+const LOCAL_SMTP_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  'smtp.gmail.com'
+])
 const SECRET_FIELDS =
   '+passwordCiphertext +passwordIv +passwordAuthTag' as const
 

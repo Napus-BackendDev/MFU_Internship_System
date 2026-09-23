@@ -50,10 +50,23 @@ const campaignSchema = z.object({
   assignmentIds: z.array(z.string().min(1)).min(1).max(1000)
 })
 
+const flexibleEmailSchema = z
+  .string()
+  .trim()
+  .refine(
+    (val) => {
+      if (val.toLowerCase().endsWith('@localhost')) {
+        return /^[a-zA-Z0-9._%+-]+@localhost$/i.test(val)
+      }
+      return z.string().email().safeParse(val).success
+    },
+    { message: 'Invalid email address' }
+  )
+
 const directInvitationSchema = z.object({
   studentId: z.string().min(1),
   competencySetId: z.string().min(1),
-  recipientEmail: z.string().email(),
+  recipientEmail: flexibleEmailSchema,
   evaluatorName: z.string().min(1).optional(),
   deadlineDays: z.coerce.number().int().min(1).max(365).default(30),
   subject: z.string().optional(),
@@ -61,13 +74,11 @@ const directInvitationSchema = z.object({
 })
 
 const targetedEmailSchema = z.object({
+  assignmentId: z.string().min(1),
   studentId: z.string().min(1),
   templateCode: z.enum(['evaluation_request', 'evaluation_reminder']),
-  recipientEmail: z.string().email().optional(),
-  evaluatorName: z.string().min(1).optional(),
-  deadlineDays: z.coerce.number().int().min(1).max(365).optional(),
-  subject: z.string().optional(),
-  notes: z.string().optional()
+  recipientEmail: flexibleEmailSchema.optional(),
+  evaluatorName: z.string().min(1).optional()
 })
 
 @Controller()
@@ -114,7 +125,7 @@ export class CorrespondenceController {
     return this.campaigns.sendTargetedEmail(
       request.actor!,
       targetedEmailSchema.parse(raw),
-      idempotencyKey
+      z.string().min(8).max(128).parse(idempotencyKey)
     )
   }
 

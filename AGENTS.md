@@ -213,3 +213,8 @@ Observed legacy patterns that must not be copied:
 - Production MongoDB URI, email provider, object storage, monitoring, RPO/RTO, and retention periods.
 
 Keep these as `TBD` until an authorized owner decides them.
+
+## 16. Git push policy
+
+- **No Push Without Explicit User Command:** NEVER run `git push` or push code to GitHub automatically under any circumstances unless the user explicitly requests or commands a push in their prompt (e.g., "push", "อัพขึ้น github", "ดันขึ้น git").
+- When explicitly commanded to push, verify the remote host is `github.com` and owner is `Napus-BackendDev` before pushing.

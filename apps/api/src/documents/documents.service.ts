@@ -32,6 +32,7 @@ import {
   DocumentTemplateVersionRecord,
   GeneratedDocumentRecord
 } from './document.schema.js'
+import { studentReferenceFilter } from '../members/student-reference.js'
 
 import { StudentRecord } from '../members/members.schema.js'
 
@@ -310,19 +311,11 @@ export class DocumentsService {
     actor: AuthenticatedActor,
     id: string
   ): Promise<HydratedDocument<StudentRecord>> {
-    const identity = { $or: [{ _id: id }, { studentId: id }] }
+    const identity = studentReferenceFilter(id)
     let filter: QueryFilter<StudentRecord> = identity
     if (actor.scope.studentId) {
       filter = {
-        $and: [
-          identity,
-          {
-            $or: [
-              { studentId: actor.scope.studentId },
-              { _id: actor.scope.studentId }
-            ]
-          }
-        ]
+        $and: [identity, studentReferenceFilter(actor.scope.studentId)]
       }
     } else if (!actor.scope.tenant) {
       filter = { $and: [identity, scopeFilter<StudentRecord>(actor)] }

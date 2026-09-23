@@ -5,6 +5,7 @@ import {
   UnprocessableEntityException
 } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
+import { sanitizeEmailTemplateHtml } from '@internship/email-security'
 import type { Model } from 'mongoose'
 
 import { paginate, type PaginationInput } from '../common/pagination.js'
@@ -27,8 +28,10 @@ export const DEFAULT_SYSTEM_TEMPLATES = {
   evaluation_request: {
     code: 'evaluation_request',
     name: 'ขอความอนุเคราะห์ประเมินผลการฝึกงาน / กรอกข้อมูลผู้ประเมิน',
-    description: 'ส่งไปยังสถานประกอบการหรือผู้ประสานงาน เพื่อขอความอนุเคราะห์กรอกข้อมูลผู้ประเมินหรือเริ่มการประเมินนักศึกษา',
-    subject: '[มหาวิทยาลัยแม่ฟ้าหลวง] ขอความอนุเคราะห์ประเมินผลการฝึกงานของนักศึกษา ({{student_name}})',
+    description:
+      'ส่งไปยังสถานประกอบการหรือผู้ประสานงาน เพื่อขอความอนุเคราะห์กรอกข้อมูลผู้ประเมินหรือเริ่มการประเมินนักศึกษา',
+    subject:
+      '[มหาวิทยาลัยแม่ฟ้าหลวง] ขอความอนุเคราะห์ประเมินผลการฝึกงานของนักศึกษา ({{student_name}})',
     html: `<div style="font-family: 'Sarabun', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
   <div style="text-align: center; margin-bottom: 24px;">
     <h2 style="color: #0f172a; margin: 0; font-size: 20px;">มหาวิทยาลัยแม่ฟ้าหลวง</h2>
@@ -74,8 +77,10 @@ export const DEFAULT_SYSTEM_TEMPLATES = {
   evaluation_reminder: {
     code: 'evaluation_reminder',
     name: 'แจ้งเตือนการกรอกแบบประเมินผลการฝึกงาน',
-    description: 'ส่งไปยังผู้ประเมินเพื่อแจ้งเตือนว่ายังไม่ได้กรอกแบบประเมิน หรือแบบประเมินยังไม่เสร็จสมบูรณ์',
-    subject: '[แจ้งเตือน] ขอความอนุเคราะห์กรอกแบบประเมินการฝึกงานของนักศึกษา ({{student_name}})',
+    description:
+      'ส่งไปยังผู้ประเมินเพื่อแจ้งเตือนว่ายังไม่ได้กรอกแบบประเมิน หรือแบบประเมินยังไม่เสร็จสมบูรณ์',
+    subject:
+      '[แจ้งเตือน] ขอความอนุเคราะห์กรอกแบบประเมินการฝึกงานของนักศึกษา ({{student_name}})',
     html: `<div style="font-family: 'Sarabun', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
   <div style="text-align: center; margin-bottom: 24px;">
     <h2 style="color: #0f172a; margin: 0; font-size: 20px;">มหาวิทยาลัยแม่ฟ้าหลวง</h2>
@@ -158,6 +163,7 @@ export class TemplateService {
     html: string
     text: string
   }): Promise<unknown> {
+    const html = sanitizeEmailTemplateHtml(input.html)
     const template = await this.templates.create({
       code: input.code,
       audience: input.audience,
@@ -168,11 +174,9 @@ export class TemplateService {
       versionNumber: 1,
       status: 'draft',
       subject: input.subject,
-      html: input.html,
+      html,
       text: input.text,
-      placeholders: [
-        ...extractPlaceholders(input.subject, input.html, input.text)
-      ]
+      placeholders: [...extractPlaceholders(input.subject, html, input.text)]
     })
     return { ...template.toJSON(), versions: [version.toJSON()] }
   }
@@ -185,7 +189,7 @@ export class TemplateService {
     }
     const placeholders = extractPlaceholders(
       version.subject,
-      version.html,
+      sanitizeEmailTemplateHtml(version.html),
       version.text
     )
     const unknown = placeholders.filter(
@@ -201,7 +205,12 @@ export class TemplateService {
       .findOneAndUpdate(
         { _id: versionId, status: 'draft' },
         {
-          $set: { status: 'published', placeholders, publishedAt: new Date() }
+          $set: {
+            status: 'published',
+            html: sanitizeEmailTemplateHtml(version.html),
+            placeholders,
+            publishedAt: new Date()
+          }
         },
         { new: true }
       )
@@ -258,7 +267,7 @@ export class TemplateService {
         name: def.name,
         description: def.description,
         subject: version.subject,
-        html: version.html,
+        html: sanitizeEmailTemplateHtml(version.html),
         text: version.text,
         placeholders: version.placeholders,
         versionId: version.id,
@@ -291,8 +300,9 @@ export class TemplateService {
       })
     }
 
+    const html = sanitizeEmailTemplateHtml(input.html)
     const placeholders = [
-      ...extractPlaceholders(input.subject, input.html, input.text)
+      ...extractPlaceholders(input.subject, html, input.text)
     ]
     const unknown = placeholders.filter(
       (item) => !ALLOWED_PLACEHOLDERS.has(item)
@@ -315,7 +325,7 @@ export class TemplateService {
       versionNumber,
       status: 'published',
       subject: input.subject,
-      html: input.html,
+      html,
       text: input.text,
       placeholders,
       publishedAt: new Date()
@@ -327,7 +337,7 @@ export class TemplateService {
       name: def.name,
       description: def.description,
       subject: newVersion.subject,
-      html: newVersion.html,
+      html: sanitizeEmailTemplateHtml(newVersion.html),
       text: newVersion.text,
       placeholders: newVersion.placeholders,
       versionId: newVersion.id,

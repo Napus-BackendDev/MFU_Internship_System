@@ -11,6 +11,7 @@ Status vocabulary:
 - `Blocked`: requires another task, owner decision, credential, or external system.
 - `Planned`: sequenced but dependencies are incomplete.
 - `In Progress`: one agent/contributor currently owns it.
+- `Out of MVP`: explicitly excluded from this release; requires a new approved scope to resume.
 
 Priority vocabulary: `P0` release foundation, `P1` core release, `P2` important follow-up, `P3` optional.
 
@@ -20,9 +21,9 @@ Every task must follow `AGENTS.md`, link relevant requirement IDs, add tests, an
 
 **Release 1 implementation baseline complete; Production integration and release approval remain.**
 
-Next safe engineering tasks: finish `FND-005` and `FND-007`. Product-policy work must wait for the owner decisions recorded in `AI_HANDOFF.md`.
+Next safe engineering tasks: finish the P0/P1 integration gaps below. `FND-007` is complete. MFU SSO configuration and Production infrastructure remain release blockers.
 
-Evidence snapshot (2026-08-26): final `pnpm verify` passed after the owner-supplied Verdana Health UI redesign. Token validation resolved 201 runtime definitions and every machine-readable reference; Production SSR returned `200` for Landing/Login with bundled fonts and SVG icons. Earlier API smoke confirmed redacted Administrator SMTP read/save, non-admin `403`, stale-version `409`, and responsive UI save against local MongoDB. Docker/SMTP/S3 integration remains unverified; local Redis `3.0.504` is below BullMQ's Redis 5 minimum. `In Progress` means implementation exists but one or more acceptance/validation items still lack evidence.
+Evidence snapshot (2026-09-23): full `pnpm verify` passes; production and full-workspace `pnpm audit` previously reported zero vulnerabilities. Production readiness rejects MongoDB without replica-set/sharded transaction capability. Isolated Mongo replica-set submit, outbox rollback/idempotency, and email recovery tests pass. No application DB, SMTP, S3, or production environment was used in the latest continuation. Docker daemon is unavailable, so container builds and real Redis outage/recovery remain unverified; real MFU OIDC/UAT and production operations remain external blockers. `In Progress` means implementation exists but one or more acceptance/validation items still lack evidence.
 
 ## 3. Documentation baseline
 
@@ -162,6 +163,18 @@ Evidence snapshot (2026-08-26): final `pnpm verify` passed after the owner-suppl
   - `@internship/api-client` lint, typecheck, tests, and build pass;
   - API health controller tests pass; root `verify` invokes `openapi:check` in CI.
 
+### FND-008 — Dependency remediation and transactional readiness gate
+
+- Status: `Done`
+- Priority: `P0`
+- Depends on: `FND-005`, `FND-006`
+- Acceptance:
+  - production and full-workspace dependency audits report zero advisories;
+  - Production readiness accepts only MongoDB replica sets or sharded clusters with sessions and transaction-capable wire versions;
+  - Development connectivity behavior and existing health response contract remain unchanged.
+- Validation: `pnpm audit --prod`, `pnpm audit`, API tests, and full `pnpm verify` pass; transaction topology policy has positive/negative unit cases. Isolated MongoDB replica-set integration verifies submit transaction behavior.
+- Limitation: broader containerized API/Worker/SMTP/S3 integration remains unverified because the Docker daemon was unavailable.
+
 ## 5. Phase 1 — Identity and access
 
 ### AUTH-001 — User, role assignment, and scope schemas
@@ -196,6 +209,7 @@ Evidence snapshot (2026-08-26): final `pnpm verify` passed after the owner-suppl
 - Depends on: `AUTH-001`, owner supplies OIDC configuration
 - Requirements: `FR-AUTH-001`
 - Blocking decisions: issuer, client ID, claims, allowed domains, role mapping, logout, key rotation
+- Production staff/student access must remain blocked until real MFU SSO and controlled account linking pass staging/UAT. Unknown OIDC subjects are rejected; email-only auto-link is not allowed.
 - Acceptance:
   - Authorization Code with PKCE or approved server flow;
   - issuer/audience/nonce/state validated;
@@ -243,6 +257,7 @@ Evidence snapshot (2026-08-26): final `pnpm verify` passed after the owner-suppl
   - referenced records archive instead of destructive delete;
   - list pagination/filter/sort and scoped read enforced.
 - Validation: CRUD, duplicate code, archive-reference, and scope integration tests.
+- Latest UI integration: real academic Terms now load from the API and can be created, edited, opened, or closed with pagination and explicit loading/error/empty states. Replica-set CRUD and scope tests remain open.
 
 ### DATA-002 — Students, organizations, evaluators, and placements
 
@@ -334,11 +349,12 @@ Evidence snapshot (2026-08-26): final `pnpm verify` passed after the owner-suppl
   - atomic submit creates one final evaluation and locks assignment;
   - retry returns existing final state without duplicate record;
   - submit records actor, time, version, consent, and safe request evidence.
-- Validation: simultaneous submit, retry, invalid score, missing answer, and cross-owner tests.
+  - Hard Skill and Soft Skill use separate arithmetic means; Situation/comment does not score; no total or pass/fail is inferred; scoring policy version is stored.
+- Validation: isolated replica-set tests verify draft/final transaction, category score projection, idempotent replay/payload conflict, concurrent identical submit, cross-owner denial, orphan-reference rejection, and rollback after a later write fails. Missing-answer/invalid-score and broader actor/state cases remain in the regression matrix.
 
 ### EVL-006 — Reopen workflow
 
-- Status: `Blocked`
+- Status: `Out of MVP`
 - Priority: `P1`
 - Depends on: `EVL-005`, owner confirms reopen authority/window
 - Requirements: `FR-EVL-007`
@@ -376,6 +392,8 @@ Evidence snapshot (2026-08-26): final `pnpm verify` passed after the owner-suppl
   - subject/text/html stored and validated;
   - only allowlisted placeholders compile;
   - preview uses synthetic data, not arbitrary Production records.
+- Implemented: API sanitizes template HTML on create/update/publish/read; Worker escapes substituted values and sanitizes immediately before sending; browser previews use sandboxed iframe plus restrictive CSP. Regression tests reject script/event-handler/javascript/CSS URL payloads while preserving allowed styles and invitation placeholders.
+- Remaining: workflow-level API/database integration test, plus review that preview data follows the approved privacy policy.
 
 ### MAIL-002 — Invitation/reminder campaigns and queue
 
@@ -387,8 +405,10 @@ Evidence snapshot (2026-08-26): final `pnpm verify` passed after the owner-suppl
   - campaign preview shows recipients and validation failures;
   - one idempotent job per intended delivery;
   - provider timeout/retry cannot send unintended duplicate;
+  - reminder keeps the existing invitation/PIN/deadline; only definite `failed` deliveries are retryable automatically, while `uncertain` requires reconciliation;
   - rate limits, backoff, max attempts, and failed state recorded.
-- Validation: fake provider timeout-after-acceptance test.
+- Implemented: email Workers claim deliveries with an owner token and renewable lease. A stale pre-SMTP attempt is atomically marked retryable and re-enqueued; an attempt that may have reached SMTP (including legacy `sending` rows) becomes `uncertain` and is never auto-resubmitted. Persisted `queued` deliveries and known queue-insertion failures are reconciled from Mongo at Worker startup and every 60 seconds, covering API interruption after the delivery record is durable. Recovery pages through backlogs; campaign state is reconciled from delivery records after claims and recovery.
+- Validation: Worker recovery tests cover pre-SMTP requeue, post-attempt uncertainty/no resend, legacy rows, API-before-enqueue interruption, duplicate queued-job suppression, and backlog pagination. Isolated Mongo replica-set tests verify stale delivery transitions, durable queued-intent recovery, atomic campaign/invitation/delivery creation for generic, targeted, and direct flows, rollback on an injected persistence failure, and concurrent idempotent replay. Full real Redis outage/recovery and controlled Production index migration remain open.
 
 ### MAIL-003 — Delivery monitoring and retry UI
 
@@ -552,17 +572,17 @@ Evidence snapshot (2026-08-26): final `pnpm verify` passed after the owner-suppl
 
 ## 11. Owner decision register
 
-| Decision                                     | Blocks                                 | Current state |
-| -------------------------------------------- | -------------------------------------- | ------------- |
-| MFU OIDC configuration and claims            | `AUTH-003`                             | `TBD`         |
-| Invitation lifetime/verification/reminders   | `AUTH-005`, `MAIL-002`                 | `TBD`         |
-| Score scale, required questions, aggregation | `EVL-005`, reporting                   | `TBD`         |
-| Reopen authority and time window             | `EVL-006`                              | `TBD`         |
-| Result visibility policy                     | student dashboard/document eligibility | `TBD`         |
-| Official PDF layouts, fonts, publisher       | `DOC-103`                              | `TBD`         |
-| Production MongoDB/email/storage/monitoring  | `OPS-002`                              | `TBD`         |
-| Retention, RPO, RTO                          | `OPS-001`                              | `TBD`         |
-| Migration collections and thresholds         | `MIG-001`                              | `TBD`         |
+| Decision                                     | Blocks                                 | Current state                                                             |
+| -------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
+| MFU OIDC configuration and claims            | `AUTH-003`                             | `TBD`                                                                     |
+| Invitation lifetime/verification/reminders   | `AUTH-005`, `MAIL-002`                 | deadline-bound; reminder reuses invitation and never extends time         |
+| Score scale, required questions, aggregation | `EVL-005`, reporting                   | category means decided; scale/required rules come from published snapshot |
+| Reopen authority and time window             | `EVL-006`                              | explicitly out of MVP                                                     |
+| Result visibility policy                     | student dashboard/document eligibility | final result visible after atomic submit                                  |
+| Official PDF layouts, fonts, publisher       | `DOC-103`                              | Certificate/Transcript only; use approved layout/assets                   |
+| Production MongoDB/email/storage/monitoring  | `OPS-002`                              | `TBD`                                                                     |
+| Retention, RPO, RTO                          | `OPS-001`                              | `TBD`                                                                     |
+| Migration collections and thresholds         | `MIG-001`                              | `TBD`                                                                     |
 
 ## 12. Completion report template
 

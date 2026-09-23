@@ -19,6 +19,10 @@ const schemaOptions = {
 
 @Schema({ ...schemaOptions, collection: 'students' })
 export class StudentRecord {
+  public readonly createdAt!: Date
+
+  public readonly updatedAt!: Date
+
   @Prop({ required: true, trim: true, unique: true })
   public studentId!: string
 
@@ -58,19 +62,33 @@ export class StudentRecord {
   @Prop({ trim: true })
   public province?: string
 
+  @Prop({ trim: true })
+  public evaluatorName?: string
+
+  @Prop({ lowercase: true, trim: true })
+  public evaluatorEmail?: string
+
   @Prop({ min: 2000 })
   public admissionYear?: number
+
+  @Prop({ min: 2000 })
+  public academicYear?: number
 
   @Prop({ default: 'active', enum: ['active', 'archived'], index: true })
   public status!: 'active' | 'archived'
 
   @Prop({
     default: 'awaiting_evaluator',
-    enum: ['awaiting_evaluator', 'awaiting_response', 'submitted'],
+    enum: [
+      'awaiting_evaluator',
+      'awaiting_response',
+      'submitted',
+      'email_error'
+    ],
     index: true
   })
   public evaluationStatus!:
-    'awaiting_evaluator' | 'awaiting_response' | 'submitted'
+    'awaiting_evaluator' | 'awaiting_response' | 'submitted' | 'email_error'
 
   @Prop()
   public archivedAt?: Date

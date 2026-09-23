@@ -3,18 +3,23 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
   Query,
   Req
 } from '@nestjs/common'
+import { FileInterceptor } from '@nestjs/platform-express'
 import { z } from 'zod'
+import { UseInterceptors, UploadedFile } from '@nestjs/common'
 
 import { RequirePermissions } from '../auth/auth.decorators.js'
 import type { AuthenticatedRequest } from '../common/http.js'
 import { MembersService } from './members.service.js'
+import { StudentImportService } from './student-import.service.js'
 
 const nameSchema = z.object({ th: z.string().min(1), en: z.string().min(1) })
 const listSchema = z.object({
@@ -28,7 +33,12 @@ const listSchema = z.object({
   academicTermId: z.string().optional(),
   status: z.enum(['planned', 'active', 'completed', 'cancelled']).optional(),
   evaluationStatus: z
-    .enum(['awaiting_evaluator', 'awaiting_response', 'submitted'])
+    .enum([
+      'awaiting_evaluator',
+      'awaiting_response',
+      'submitted',
+      'email_error'
+    ])
     .optional()
 })
 const studentSchema = z.object({
@@ -63,12 +73,13 @@ const studentSchema = z.object({
     })
     .optional(),
   company: z.string().trim().optional(),
+  companyAddress: z.string().trim().optional(),
   province: z.string().trim().optional(),
+  evaluatorName: z.string().trim().optional(),
+  evaluatorEmail: z.string().trim().optional(),
   admissionYear: z.number().int().min(2000).optional(),
-  status: z.enum(['active', 'archived']).default('active'),
-  evaluationStatus: z
-    .enum(['awaiting_evaluator', 'awaiting_response', 'submitted'])
-    .default('awaiting_evaluator')
+  academicYear: z.number().int().min(2000).optional(),
+  status: z.enum(['active', 'archived']).default('active')
 })
 const organizationSchema = z.object({
   organizationCode: z.string().min(1).max(40),
@@ -104,9 +115,92 @@ const placementSchema = z
     path: ['endsAt']
   })
 
+const importCommitSchema = z
+  .object({
+    decisions: z
+      .array(
+        z.object({
+          rowId: z.string().regex(/^[a-f0-9]{24}$/i),
+          action: z.enum(['create', 'update'])
+        })
+      )
+      .min(1)
+      .max(100)
+  })
+  .strict()
+const idempotencyKeySchema = z
+  .string()
+  .min(8)
+  .max(128)
+  .regex(/^[\w.:-]+$/)
+
+interface UploadedWorkbook {
+  readonly originalname: string
+  readonly buffer: Buffer
+}
+
 @Controller()
 export class MembersController {
-  public constructor(private readonly service: MembersService) {}
+  public constructor(
+    private readonly service: MembersService,
+    private readonly importService: StudentImportService
+  ) {}
+
+  @RequirePermissions('students.import')
+  @Post('students/import-preview')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fields: 0, files: 1, fileSize: 5 * 1024 * 1024 }
+    })
+  )
+  public previewStudentImport(
+    @Req() request: AuthenticatedRequest,
+    @UploadedFile() file: UploadedWorkbook | undefined
+  ): Promise<unknown> {
+    if (!file) {
+      throw new z.ZodError([
+        {
+          code: 'custom',
+          path: ['file'],
+          message: 'A workbook file is required.'
+        }
+      ])
+    }
+    return this.importService.preview(
+      request.actor!,
+      file.originalname,
+      file.buffer
+    )
+  }
+
+  @RequirePermissions('students.import')
+  @Get('students/imports/:batchId')
+  public getStudentImportPreview(
+    @Req() request: AuthenticatedRequest,
+    @Param('batchId') batchId: string
+  ): Promise<unknown> {
+    return this.importService.getPreview(request.actor!, batchId)
+  }
+
+  @RequirePermissions('students.import')
+  @Post('students/imports/:batchId/commit')
+  @HttpCode(HttpStatus.OK)
+  public commitStudentImport(
+    @Req() request: AuthenticatedRequest,
+    @Param('batchId') batchId: string,
+    @Headers('idempotency-key') rawIdempotencyKey: string | undefined,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey)
+    const body = importCommitSchema.parse(raw)
+    return this.importService.commit(
+      request.actor!,
+      batchId,
+      idempotencyKey,
+      body.decisions,
+      request.requestId ?? 'unknown'
+    )
+  }
 
   @RequirePermissions('students.read')
   @Get('students')
@@ -142,10 +236,11 @@ export class MembersController {
     @Param('studentId') id: string,
     @Body() raw: unknown
   ): Promise<unknown> {
+    const updateSchema = studentSchema.partial()
     return this.service.updateStudent(
       request.actor!,
       id,
-      studentSchema.partial().parse(raw)
+      updateSchema.parse(raw)
     )
   }
 

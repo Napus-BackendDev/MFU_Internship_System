@@ -57,7 +57,7 @@ export class InvitationService {
       _id: assignmentId,
       evaluatorId: invitation.evaluatorId,
       deadlineAt: { $gt: new Date() },
-      status: { $in: ['pending', 'inProgress', 'reopened'] }
+      status: { $in: ['pending', 'inProgress'] }
     })
     const evaluator = await this.evaluators.exists({
       _id: invitation.evaluatorId,
@@ -119,7 +119,7 @@ export class InvitationService {
         evaluatorId: invitation.evaluatorId,
         accessPinHash: pinHash,
         deadlineAt: { $gt: new Date() },
-        status: { $in: ['pending', 'inProgress', 'reopened'] }
+        status: { $in: ['pending', 'inProgress'] }
       })
       .exec()
     if (!assignment) {

@@ -126,6 +126,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List users within the caller's approved scope */
+        get: operations["listUsers"];
+        put?: never;
+        /** Create a scoped operational user or explicitly link a student record */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count users within the caller's management scope */
+        get: operations["getUserSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Archive a user within the caller's management scope */
+        delete: operations["archiveUser"];
+        options?: never;
+        head?: never;
+        /** Update a user within the caller's management scope */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
     "/public/invitations/exchange": {
         parameters: {
             query?: never;
@@ -323,6 +378,61 @@ export interface paths {
         put?: never;
         /** Create a Student */
         post: operations["createStudent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/students/import-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate a student workbook without writing student records */
+        post: operations["previewStudentImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/students/imports/{batchId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batchId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        /** Read an unexpired import preview owned by the caller */
+        get: operations["getStudentImportPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/students/imports/{batchId}/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batchId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Commit up to 100 explicitly confirmed rows atomically per row */
+        post: operations["commitStudentImport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -623,8 +733,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reopen a submitted evaluation under approved policy
-         * @description Authorized role and reopen window remain TBD.
+         * Reserved route; reopen is disabled in the Production MVP
+         * @description No role is granted evaluations.reopen. The operation does not create a new editable version.
          */
         post: operations["reopenEvaluation"];
         delete?: never;
@@ -696,8 +806,31 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create an evaluator assignment and queue its invitation email */
+        /**
+         * Create a scoped evaluator assignment and queue its invitation email
+         * @description Requires exactly one active placement and applicable active cycle, a published competency version, and an active evaluator. Ambiguous placement/cycle and missing master data are rejected; no defaults are created.
+         */
         post: operations["sendStudentInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/campaigns/send-targeted": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue an invitation or reminder for one scoped existing assignment
+         * @description Does not create placements/cycles/assignments or extend deadlines. Reminders require the existing active invitation.
+         */
+        post: operations["sendTargetedEmail"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1131,6 +1264,70 @@ export interface components {
                 studentId?: string;
                 assignmentId?: string;
             };
+            roleScopes?: {
+                /** @enum {string} */
+                role: "systemAdmin" | "internshipStaff" | "coordinator" | "student" | "evaluator" | "auditor";
+                tenant: boolean;
+                schoolIds: string[];
+                programIds: string[];
+            }[];
+        };
+        ManagedUser: {
+            id: string;
+            /** Format: email */
+            email: string;
+            displayName: string;
+            /** @enum {string} */
+            status: "active" | "archived" | "suspended";
+            studentId?: string;
+            roleAssignments: {
+                /** @enum {string} */
+                role: "systemAdmin" | "internshipStaff" | "coordinator" | "student" | "evaluator" | "auditor";
+                tenant: boolean;
+                schoolIds: string[];
+                programIds: string[];
+                active: boolean;
+            }[];
+        };
+        ManagedUserPage: {
+            items: components["schemas"]["ManagedUser"][];
+            meta: {
+                page: number;
+                pageSize: number;
+                total: number;
+                totalPages: number;
+            };
+        };
+        UserSummary: {
+            total: number;
+            systemAdmin: number;
+            internshipStaff: number;
+            coordinator: number;
+            student: number;
+        };
+        CreateManagedUser: {
+            /** Format: email */
+            email: string;
+            displayName: string;
+            /** @enum {string} */
+            role: "systemAdmin" | "internshipStaff" | "coordinator" | "student" | "evaluator" | "auditor";
+            /** @enum {string} */
+            status?: "active" | "archived" | "suspended";
+            studentId?: string;
+            schoolIds?: string[];
+            programIds?: string[];
+        };
+        UpdateManagedUser: {
+            /** Format: email */
+            email?: string;
+            displayName?: string;
+            /** @enum {string} */
+            role?: "systemAdmin" | "internshipStaff" | "coordinator" | "student" | "evaluator" | "auditor";
+            /** @enum {string} */
+            status?: "active" | "archived" | "suspended";
+            studentId?: string;
+            schoolIds?: string[];
+            programIds?: string[];
         };
         InvitationExchangeRequest: {
             token: string;
@@ -1223,37 +1420,136 @@ export interface components {
             meta: components["schemas"]["PageMeta"];
         };
         StudentInput: {
-            studentNumber: string;
+            studentId: string;
             name: components["schemas"]["LocalizedText"];
             /** Format: email */
             email: string;
-            schoolId: components["schemas"]["ObjectId"];
-            programId: components["schemas"]["ObjectId"];
-            courseId?: components["schemas"]["ObjectId"] | null;
+            /** Format: email */
+            personalEmail?: string;
+            schoolId: string;
+            programId: string;
+            courseId?: string;
+            academicTermId?: string;
+            semester?: string;
+            company?: string;
+            companyAddress?: string;
+            province?: string;
+            evaluatorName?: string;
+            /** Format: email */
+            evaluatorEmail?: string;
+            admissionYear?: number;
+            academicYear?: number;
+            /**
+             * @default active
+             * @enum {string}
+             */
+            status: "active" | "archived";
         };
         StudentPatch: {
-            version: number;
-            studentNumber?: string;
+            studentId?: string;
             name?: components["schemas"]["LocalizedText"];
             /** Format: email */
             email?: string;
-            schoolId?: components["schemas"]["ObjectId"];
-            programId?: components["schemas"]["ObjectId"];
-            courseId?: components["schemas"]["ObjectId"] | null;
+            /** Format: email */
+            personalEmail?: string;
+            schoolId?: string;
+            programId?: string;
+            courseId?: string;
+            academicTermId?: string;
+            semester?: string;
+            company?: string;
+            companyAddress?: string;
+            province?: string;
+            evaluatorName?: string;
+            /** Format: email */
+            evaluatorEmail?: string;
+            admissionYear?: number;
+            academicYear?: number;
+            /** @enum {string} */
+            status?: "active" | "archived";
         };
         Student: components["schemas"]["StudentInput"] & {
-            id: components["schemas"]["ObjectId"];
+            id: string;
             /** Format: date-time */
-            createdAt: string;
+            createdAt?: string;
             /** Format: date-time */
-            updatedAt: string;
-            version: number;
+            updatedAt?: string;
+            /** @enum {string} */
+            evaluationStatus?: "awaiting_evaluator" | "awaiting_response" | "submitted" | "email_error";
             /** Format: date-time */
             archivedAt?: string | null;
         };
         StudentList: {
             items: components["schemas"]["Student"][];
             meta: components["schemas"]["PageMeta"];
+        };
+        StudentImportIssue: {
+            code: string;
+            field: string;
+            message: string;
+        };
+        StudentImportChange: {
+            field: string;
+            before: unknown;
+            after: unknown;
+        };
+        StudentImportItem: {
+            id: components["schemas"]["ObjectId"];
+            sheet: string;
+            rowNumber: number;
+            student?: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            action: "create" | "update" | "unchanged" | "invalid";
+            /** @enum {string} */
+            status: "pending" | "committed" | "skipped";
+            /** @enum {string} */
+            outcome?: "created" | "updated" | "unchanged" | "skipped";
+            issues: components["schemas"]["StudentImportIssue"][];
+            warnings: components["schemas"]["StudentImportIssue"][];
+            changes: components["schemas"]["StudentImportChange"][];
+        };
+        StudentImportSummary: {
+            total: number;
+            creates: number;
+            updates: number;
+            unchanged: number;
+            invalid: number;
+            warnings: number;
+            committed: number;
+        };
+        StudentImportPreview: {
+            batchId: components["schemas"]["ObjectId"];
+            sourceName: string;
+            checksum: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** @enum {string} */
+            status: "preview" | "committed";
+            questionFieldsDetected: string[];
+            summary: components["schemas"]["StudentImportSummary"];
+            items: components["schemas"]["StudentImportItem"][];
+        };
+        StudentImportCommitInput: {
+            decisions: {
+                rowId: components["schemas"]["ObjectId"];
+                /** @enum {string} */
+                action: "create" | "update";
+            }[];
+        };
+        StudentImportCommit: {
+            batchId: components["schemas"]["ObjectId"];
+            commitId: components["schemas"]["ObjectId"];
+            /** @enum {string} */
+            status: "completed";
+            results: {
+                rowId: components["schemas"]["ObjectId"];
+                /** @enum {string} */
+                action: "create" | "update";
+                /** @enum {string} */
+                outcome: "created" | "updated" | "unchanged";
+            }[];
         };
         JobAccepted: {
             jobId: components["schemas"]["ObjectId"];
@@ -1448,11 +1744,28 @@ export interface components {
             questionSnapshot: components["schemas"]["Criterion"][];
             scoringRuleSnapshot?: components["schemas"]["ScoringRule"];
             answers: components["schemas"]["EvaluationAnswer"][];
+            /** @description Deprecated compatibility field; new submissions leave it null to avoid cross-category scoring. */
+            aggregateScore?: number | null;
+            categoryScores?: components["schemas"]["EvaluationCategoryScores"];
+            /** @enum {string} */
+            scoringPolicyVersion?: "mfu-category-mean-v1";
             /** Format: date-time */
             submittedAt?: string | null;
             version: number;
             /** Format: date-time */
             updatedAt: string;
+        };
+        EvaluationCategoryScore: {
+            average: number | null;
+            answeredCount: number;
+            scaleMin: number | null;
+            scaleMax: number | null;
+        };
+        EvaluationCategoryScores: {
+            hardSkill: components["schemas"]["EvaluationCategoryScore"];
+            softSkill: components["schemas"]["EvaluationCategoryScore"];
+            /** @enum {string} */
+            scoringPolicyVersion: "mfu-category-mean-v1";
         };
         EvaluationDraftInput: {
             version: number;
@@ -1461,11 +1774,6 @@ export interface components {
         EvaluationSubmitInput: components["schemas"]["EvaluationDraftInput"] & {
             /** @constant */
             consent: true;
-        };
-        ReopenEvaluationRequest: {
-            reason: string;
-            /** Format: date-time */
-            closesAt?: string;
         };
         /** @enum {string} */
         EmailAudience: "student" | "evaluator" | "staff";
@@ -1500,15 +1808,11 @@ export interface components {
             meta: components["schemas"]["PageMeta"];
         };
         /** @enum {string} */
-        CampaignType: "invitation" | "reminder" | "notification";
+        CampaignType: "invitation" | "reminder";
         CampaignInput: {
             type: components["schemas"]["CampaignType"];
-            cycleId: components["schemas"]["ObjectId"];
-            emailTemplateVersionId: components["schemas"]["ObjectId"];
-            audience: components["schemas"]["EmailAudience"];
-            filters?: {
-                [key: string]: unknown;
-            };
+            templateVersionId: components["schemas"]["ObjectId"];
+            assignmentIds: components["schemas"]["ObjectId"][];
         };
         CampaignPreview: {
             eligible: number;
@@ -1525,6 +1829,23 @@ export interface components {
             /** @enum {string} */
             status: "queued" | "processing" | "completed" | "partial";
             total: number;
+        };
+        QueuedDelivery: {
+            /** @deprecated */
+            success?: boolean;
+            /** @enum {string} */
+            status: "queued" | "processing" | "completed" | "partial";
+            campaignId: components["schemas"]["ObjectId"];
+            deliveryId: components["schemas"]["ObjectId"];
+            assignmentId: components["schemas"]["ObjectId"];
+            invitationId?: components["schemas"]["ObjectId"];
+            /** Format: uri */
+            invitationUrl?: string;
+            /** Format: email */
+            recipientEmail?: string;
+            studentName?: string;
+            /** Format: date-time */
+            deadlineAt?: string;
         };
         /** @enum {string} */
         DeliveryStatus: "queued" | "sending" | "sent" | "failed" | "uncertain";
@@ -1820,7 +2141,7 @@ export interface components {
         Archived: boolean;
         IdempotencyKey: string;
         SchoolId: components["schemas"]["ObjectId"];
-        StudentId: components["schemas"]["ObjectId"];
+        StudentId: string;
         CompetencySetId: components["schemas"]["ObjectId"];
         VersionId: components["schemas"]["ObjectId"];
         CycleId: components["schemas"]["ObjectId"];
@@ -2008,6 +2329,135 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
         };
     };
+    listUsers: {
+        parameters: {
+            query?: {
+                page?: number;
+                pageSize?: number;
+                search?: string;
+                role?: "systemAdmin" | "internshipStaff" | "coordinator" | "student" | "evaluator" | "auditor";
+                status?: "active" | "archived" | "suspended";
+                schoolId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped user page without OIDC subject identifiers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedUserPage"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateManagedUser"];
+            };
+        };
+        responses: {
+            /** @description Created scoped user */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedUser"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    getUserSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped user totals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummary"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    archiveUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description User archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateManagedUser"];
+            };
+        };
+        responses: {
+            /** @description Updated scoped user */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedUser"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
     exchangeInvitation: {
         parameters: {
             query?: never;
@@ -2076,8 +2526,8 @@ export interface operations {
         parameters: {
             query?: {
                 page?: components["parameters"]["Page"];
-                limit?: components["parameters"]["Limit"];
-                search?: components["parameters"]["Search"];
+                pageSize?: number;
+                search?: string;
                 archived?: components["parameters"]["Archived"];
             };
             header?: never;
@@ -2404,8 +2854,8 @@ export interface operations {
                 search?: components["parameters"]["Search"];
                 schoolId?: components["schemas"]["ObjectId"];
                 programId?: components["schemas"]["ObjectId"];
-                termId?: components["schemas"]["ObjectId"];
-                archived?: components["parameters"]["Archived"];
+                studentId?: string;
+                evaluationStatus?: "awaiting_evaluator" | "awaiting_response" | "submitted" | "email_error";
             };
             header?: never;
             path?: never;
@@ -2447,6 +2897,99 @@ export interface operations {
                     "application/json": components["schemas"]["Student"];
                 };
             };
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    previewStudentImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Import preview batch created; valid rows are not committed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentImportPreview"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description Workbook exceeds the 5 MiB upload or row limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    getStudentImportPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batchId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current row decisions and commit outcomes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentImportPreview"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    commitStudentImport: {
+        parameters: {
+            query?: never;
+            header: {
+                "idempotency-key": string;
+            };
+            path: {
+                batchId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StudentImportCommitInput"];
+            };
+        };
+        responses: {
+            /** @description Committed rows; retry with the same key and payload is safe */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentImportCommit"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
@@ -3093,21 +3636,9 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReopenEvaluationRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Controlled editable version created */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Evaluation"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
@@ -3236,12 +3767,51 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Invitation queued */
+            /** @description Invitation delivery queued (not yet confirmed as sent) */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["QueuedDelivery"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    sendTargetedEmail: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    assignmentId: string;
+                    studentId: string;
+                    /** @enum {string} */
+                    templateCode: "evaluation_request" | "evaluation_reminder";
+                    /** Format: email */
+                    recipientEmail?: string;
+                    evaluatorName?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Delivery accepted into the queue; inspect Delivery for final outcome */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueuedDelivery"];
+                };
             };
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];

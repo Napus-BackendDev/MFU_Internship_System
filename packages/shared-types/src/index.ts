@@ -1,3 +1,8 @@
+export {
+  campaignStatusFromDeliveryCounts,
+  type CampaignStatus
+} from './campaign-status.js'
+
 export const ROLE_KEYS = [
   'systemAdmin',
   'internshipStaff',
@@ -69,6 +74,12 @@ export interface AuthenticatedActor {
   readonly displayName: string
   readonly roles: readonly RoleKey[]
   readonly scope: AccessScope
+  readonly roleScopes?: readonly {
+    readonly role: RoleKey
+    readonly tenant: boolean
+    readonly schoolIds: readonly string[]
+    readonly programIds: readonly string[]
+  }[]
   readonly avatarUrl?: string
   readonly picture?: string
 }

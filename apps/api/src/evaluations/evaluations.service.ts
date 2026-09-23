@@ -7,7 +7,14 @@ import {
   UnprocessableEntityException
 } from '@nestjs/common'
 import { InjectConnection, InjectModel } from '@nestjs/mongoose'
-import type { Connection, HydratedDocument, Model, QueryFilter } from 'mongoose'
+import { Types } from 'mongoose'
+import type {
+  ClientSession,
+  Connection,
+  HydratedDocument,
+  Model,
+  QueryFilter
+} from 'mongoose'
 
 import { paginate, type PaginationInput } from '../common/pagination.js'
 import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
@@ -21,6 +28,8 @@ import {
   EvaluationRecord
 } from './evaluation.schema.js'
 import { StudentRecord } from '../members/members.schema.js'
+import { assignmentIdWithinScope } from './evaluation-assignment.scope.js'
+import { calculateCategoryScores } from './evaluation.scoring.js'
 import {
   validateAnswers,
   validateCompetencySections,
@@ -261,14 +270,7 @@ export class EvaluationsService {
     const [draft, finals, student] = await Promise.all([
       this.drafts.findOne({ assignmentId }).exec(),
       this.evaluations.find({ assignmentId }).sort({ version: -1 }).exec(),
-      this.students
-        .findOne({
-          $or: [
-            { _id: assignment.studentId },
-            { studentId: assignment.studentId }
-          ]
-        })
-        .exec()
+      this.resolveStudentReference(assignment.studentId)
     ])
     return {
       assignment: assignment.toJSON(),
@@ -291,25 +293,65 @@ export class EvaluationsService {
     assignmentId: string,
     input: { answers: Readonly<Record<string, unknown>>; revision: number }
   ): Promise<unknown> {
-    const assignment = await this.findAssignment(actor, assignmentId, true)
-    validateDraftAnswers(assignment, input.answers)
+    await this.findAssignment(actor, assignmentId, true)
+    let savedDraft: HydratedDocument<EvaluationDraftRecord> | undefined
     try {
-      const draft = await this.drafts
-        .findOneAndUpdate(
-          { assignmentId, revision: input.revision },
-          {
-            $set: { answers: input.answers, updatedBy: actor.id },
-            $setOnInsert: { assignmentId },
-            $inc: { revision: 1 }
-          },
-          { new: true, runValidators: true, upsert: true }
-        )
-        .exec()
-      await this.assignments.updateOne(
-        { _id: assignmentId, status: 'pending' },
-        { $set: { status: 'inProgress' } }
-      )
-      return draft.toJSON()
+      const session = await this.connection.startSession()
+      try {
+        await session.withTransaction(async () => {
+          const scope = await this.assignmentScope(actor, true)
+          const now = new Date()
+          const assignmentQuery = assignmentIdWithinScope(assignmentId, scope)
+          const assignment = await this.assignments
+            .findOne({
+              ...assignmentQuery,
+              status: { $in: ['pending', 'inProgress'] },
+              deadlineAt: { $gt: now }
+            })
+            .session(session)
+            .exec()
+          if (!assignment) {
+            throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
+          }
+          await this.assertCycleWritable(assignment.cycleId, now, session)
+          validateDraftAnswers(assignment, input.answers)
+          const draft = await this.drafts
+            .findOneAndUpdate(
+              { assignmentId, revision: input.revision },
+              {
+                $set: { answers: input.answers, updatedBy: actor.id },
+                $setOnInsert: { assignmentId },
+                $inc: { revision: 1 }
+              },
+              {
+                returnDocument: 'after',
+                runValidators: true,
+                upsert: true,
+                session
+              }
+            )
+            .exec()
+          if (!draft) throw new ConflictException({ code: 'VERSION_CONFLICT' })
+          const updated = await this.assignments.updateOne(
+            {
+              ...assignmentQuery,
+              status: { $in: ['pending', 'inProgress'] },
+              deadlineAt: { $gt: now }
+            },
+            { $set: { status: 'inProgress' } },
+            { session }
+          )
+          if (updated.matchedCount !== 1) {
+            throw new ConflictException({ code: 'VERSION_CONFLICT' })
+          }
+          savedDraft = draft
+        })
+      } finally {
+        await session.endSession()
+      }
+      if (!savedDraft)
+        throw new ConflictException({ code: 'DRAFT_SAVE_FAILED' })
+      return savedDraft.toJSON()
     } catch (error: unknown) {
       if (this.isDuplicateKey(error)) {
         throw new ConflictException({ code: 'VERSION_CONFLICT' })
@@ -344,18 +386,30 @@ export class EvaluationsService {
       return existing.toJSON()
     }
 
+    let submitted: HydratedDocument<EvaluationRecord> | undefined
     const session = await this.connection.startSession()
     try {
-      let submitted: HydratedDocument<EvaluationRecord> | undefined
       await session.withTransaction(async () => {
         const scope = await this.assignmentScope(actor, true)
+        const now = new Date()
+        const assignmentQuery = assignmentIdWithinScope(assignmentId, scope)
         const assignment = await this.assignments
-          .findOne({ _id: assignmentId, ...scope })
+          .findOne({
+            ...assignmentQuery,
+            status: { $in: ['pending', 'inProgress'] },
+            deadlineAt: { $gt: now }
+          })
           .session(session)
           .exec()
-        if (!assignment)
-          throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+        if (!assignment) {
+          throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
+        }
+        await this.assertCycleWritable(assignment.cycleId, now, session)
         validateAnswers(assignment, input.answers)
+        const categoryScores = calculateCategoryScores(
+          assignment.questionSnapshot,
+          input.answers
+        )
         const created = await this.evaluations.create(
           [
             {
@@ -364,6 +418,8 @@ export class EvaluationsService {
               answers: input.answers,
               questionSnapshot: assignment.questionSnapshot,
               aggregateScore: null,
+              categoryScores,
+              scoringPolicyVersion: categoryScores.scoringPolicyVersion,
               evaluatorId: assignment.evaluatorId,
               submittedAt: new Date(),
               idempotencyKey: input.idempotencyKey,
@@ -373,9 +429,16 @@ export class EvaluationsService {
           ],
           { session }
         )
-        submitted = created[0]
+        const submittedDoc = created[0]
+        if (!submittedDoc) {
+          throw new ConflictException({ code: 'SUBMIT_FAILED' })
+        }
         const result = await this.assignments.updateOne(
-          { _id: assignmentId, status: assignment.status },
+          {
+            ...assignmentQuery,
+            status: assignment.status,
+            deadlineAt: { $gt: now }
+          },
           { $set: { status: 'submitted' } },
           { session }
         )
@@ -383,39 +446,53 @@ export class EvaluationsService {
           throw new ConflictException({ code: 'VERSION_CONFLICT' })
         }
         if (assignment.studentId) {
-          await this.students.updateOne(
-            {
-              $or: [
-                { studentId: assignment.studentId },
-                { _id: assignment.studentId }
-              ]
-            },
+          const student = await this.resolveStudentReference(
+            assignment.studentId,
+            session
+          )
+          if (!student) {
+            throw new UnprocessableEntityException({
+              code: 'STUDENT_REFERENCE_INVALID'
+            })
+          }
+          const studentUpdate = await this.students.updateOne(
+            { _id: student._id },
             { $set: { evaluationStatus: 'submitted' } },
             { session }
           )
+          if (studentUpdate.matchedCount !== 1) {
+            throw new ConflictException({
+              code: 'STUDENT_STATUS_UPDATE_FAILED'
+            })
+          }
         }
         await this.drafts.deleteOne({ assignmentId }, { session })
+        submitted = submittedDoc
       })
-      if (!submitted) throw new ConflictException({ code: 'SUBMIT_FAILED' })
-      return submitted.toJSON()
     } catch (error: unknown) {
-      if (this.isDuplicateKey(error)) {
-        const retry = await this.evaluations.findOne({
-          assignmentId,
-          idempotencyScopeKey: scopedKey
-        })
-        if (retry) {
-          if (retry.requestHash !== payloadHash) {
-            throw new ConflictException({ code: 'IDEMPOTENCY_KEY_REUSED' })
-          }
-          return retry.toJSON()
+      let retry: HydratedDocument<EvaluationRecord> | null
+      try {
+        retry = await this.evaluations
+          .findOne({ assignmentId, idempotencyScopeKey: scopedKey })
+          .exec()
+      } catch {
+        throw error
+      }
+      if (retry) {
+        if (retry.requestHash !== payloadHash) {
+          throw new ConflictException({ code: 'IDEMPOTENCY_KEY_REUSED' })
         }
+        return retry.toJSON()
+      }
+      if (this.isDuplicateKey(error)) {
         throw new ConflictException({ code: 'EVALUATION_ALREADY_SUBMITTED' })
       }
       throw error
     } finally {
       await session.endSession()
     }
+    if (!submitted) throw new ConflictException({ code: 'SUBMIT_FAILED' })
+    return submitted.toJSON()
   }
 
   public reopen(): never {
@@ -431,12 +508,52 @@ export class EvaluationsService {
     mutation = false
   ): Promise<HydratedDocument<EvaluationAssignmentRecord>> {
     const scope = await this.assignmentScope(actor, mutation)
-    const assignment = await this.assignments.findOne({
-      _id: id,
-      ...scope
-    })
+    const assignment = await this.assignments
+      .findOne(assignmentIdWithinScope(id, scope))
+      .exec()
     if (!assignment) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
     return assignment
+  }
+
+  private async assertCycleWritable(
+    cycleId: string,
+    at: Date,
+    session: ClientSession
+  ): Promise<void> {
+    const cycle = await this.cycles
+      .findOne({
+        _id: cycleId,
+        status: 'active',
+        opensAt: { $lte: at },
+        closesAt: { $gt: at }
+      })
+      .session(session)
+      .select({ _id: 1 })
+      .exec()
+    if (!cycle) throw new ConflictException({ code: 'CYCLE_CLOSED' })
+  }
+
+  private async resolveStudentReference(
+    reference: string,
+    session?: ClientSession
+  ): Promise<HydratedDocument<StudentRecord> | null> {
+    const byId = Types.ObjectId.isValid(reference)
+      ? await this.students
+          .findById(new Types.ObjectId(reference))
+          .session(session ?? null)
+          .exec()
+      : null
+    const byStudentNumber = await this.students
+      .findOne({ studentId: reference })
+      .session(session ?? null)
+      .exec()
+
+    if (byId && byStudentNumber && !byId._id.equals(byStudentNumber._id)) {
+      throw new UnprocessableEntityException({
+        code: 'AMBIGUOUS_STUDENT_REFERENCE'
+      })
+    }
+    return byId ?? byStudentNumber
   }
 
   private async assignmentScope(

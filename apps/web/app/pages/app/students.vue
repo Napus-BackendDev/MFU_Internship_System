@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import * as XLSX from 'xlsx'
+import { createSandboxedEmailPreviewDocument } from '~/utils/email-preview'
 
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
@@ -15,7 +16,10 @@ interface Student {
   readonly academicTermId?: string
   readonly semester?: string
   readonly company?: string
+  readonly companyAddress?: string
   readonly province?: string
+  readonly evaluatorName?: string
+  readonly evaluatorEmail?: string
   readonly status: string
   readonly evaluationStatus?:
     'awaiting_evaluator' | 'awaiting_response' | 'submitted' | string
@@ -64,24 +68,56 @@ interface OrganizationItem {
 }
 
 interface ParsedStudentRow {
-  studentId: string
-  nameTh: string
-  nameEn: string
-  email: string
-  personalEmail?: string
-  schoolCode: string
-  programCode: string
-  courseCode?: string
-  semester?: string
-  company?: string
-  province?: string
-  admissionYear?: number
-  schoolId?: string
-  programId?: string
-  courseId?: string
-  academicTermId?: string
-  status: 'valid' | 'invalid'
-  errorMessage?: string
+  readonly id: string
+  readonly sheet: string
+  readonly rowNumber: number
+  readonly student?: {
+    readonly studentId: string
+    readonly name: { readonly th: string; readonly en: string }
+    readonly email: string
+    readonly schoolId: string
+    readonly programId: string
+    readonly schoolReference?: string
+    readonly programReference?: string
+    readonly course?: string
+    readonly semester?: string
+    readonly company?: string
+    readonly province?: string
+    readonly admissionYear?: number
+  }
+  readonly action: 'create' | 'update' | 'unchanged' | 'invalid'
+  readonly status: 'pending' | 'committed' | 'skipped'
+  readonly outcome?: 'created' | 'updated' | 'unchanged' | 'skipped'
+  readonly issues: readonly {
+    readonly code: string
+    readonly message: string
+  }[]
+  readonly warnings: readonly {
+    readonly code: string
+    readonly message: string
+  }[]
+  readonly changes: readonly {
+    readonly field: string
+    readonly before: unknown
+    readonly after: unknown
+  }[]
+  selected: boolean
+}
+
+interface StudentImportBatchResponse {
+  readonly batchId: string
+  readonly status: 'preview' | 'committed'
+  readonly questionFieldsDetected: readonly string[]
+  readonly summary: {
+    readonly total: number
+    readonly creates: number
+    readonly updates: number
+    readonly unchanged: number
+    readonly invalid: number
+    readonly warnings: number
+    readonly committed: number
+  }
+  readonly items: readonly Omit<ParsedStudentRow, 'selected'>[]
 }
 
 const api = useApi()
@@ -294,6 +330,12 @@ const { data: evaluationFormsData } = await useAsyncData(
     }).catch(() => ({ items: [] }))
 )
 
+const activeCompetencyForms = computed(() =>
+  (evaluationFormsData.value?.items ?? []).filter(
+    (form) => form.status === 'active'
+  )
+)
+
 // Helper lookup for names
 function getSchoolDisplay(schoolId: string): string {
   const s = schoolsData.value?.items?.find(
@@ -342,6 +384,82 @@ function getCourseDisplay(student: Student): string {
   }
 
   return '-'
+}
+
+function getStudentCourseTrack(student: Student): {
+  display: string
+  color: 'primary' | 'neutral'
+  icon: string
+} {
+  const directId = student.courseId
+  const c = directId
+    ? coursesData.value?.items?.find(
+        (item) => item.id === directId || item.courseCode === directId
+      )
+    : null
+  const placement = placementsData.value?.items?.find(
+    (p) => p.studentId === student.id || p.studentId === student.studentId
+  )
+  const placementCourse = placement?.courseId
+    ? coursesData.value?.items?.find(
+        (item) =>
+          item.id === placement.courseId ||
+          item.courseCode === placement.courseId
+      )
+    : null
+
+  const resolvedCourse = c || placementCourse || coursesData.value?.items?.[0]
+  const rawCourse = (student as unknown as { course?: string }).course || ''
+
+  if (rawCourse) {
+    if (
+      rawCourse.toLowerCase().includes('coop') ||
+      rawCourse.includes('สหกิจ')
+    ) {
+      return {
+        display: 'Cooperative Education',
+        color: 'primary',
+        icon: 'i-lucide-briefcase'
+      }
+    } else if (
+      rawCourse.toLowerCase().includes('intern') ||
+      rawCourse.includes('ฝึกงาน')
+    ) {
+      return {
+        display: 'Internship',
+        color: 'neutral',
+        icon: 'i-lucide-graduation-cap'
+      }
+    } else {
+      return {
+        display: rawCourse,
+        color: 'neutral',
+        icon: 'i-lucide-graduation-cap'
+      }
+    }
+  } else if (resolvedCourse) {
+    const en = resolvedCourse.name?.en || ''
+    const th = resolvedCourse.name?.th || ''
+    if (en.toLowerCase().includes('coop') || th.includes('สหกิจ')) {
+      return {
+        display: 'Cooperative Education',
+        color: 'primary',
+        icon: 'i-lucide-briefcase'
+      }
+    } else {
+      return {
+        display: 'Internship',
+        color: 'neutral',
+        icon: 'i-lucide-graduation-cap'
+      }
+    }
+  }
+
+  return {
+    display: 'Cooperative Education',
+    color: 'primary',
+    icon: 'i-lucide-briefcase'
+  }
 }
 
 function getSemesterDisplay(student: Student): string {
@@ -493,6 +611,33 @@ function getProvinceDisplay(student: Student): string {
   return '-'
 }
 
+function getCompanyAddressDisplay(student: Student): string {
+  if ((student as unknown as { companyAddress?: string }).companyAddress) {
+    return (student as unknown as { companyAddress?: string }).companyAddress!
+  }
+  const placement = placementsData.value?.items?.find(
+    (p) => p.studentId === student.id || p.studentId === student.studentId
+  )
+  if (placement?.organizationId) {
+    const org = organizationsData.value?.items?.find(
+      (o) =>
+        o.id === placement.organizationId ||
+        o.organizationCode === placement.organizationId
+    )
+    if (org?.address) {
+      const addr =
+        org.address.street ||
+        org.address.location ||
+        (org.address as unknown as { fullAddress?: string }).fullAddress ||
+        org.address.province ||
+        ''
+      if (addr) return addr
+    }
+  }
+  if (student.province) return student.province
+  return '-'
+}
+
 // Date time formatter for createdAt and updatedAt
 function formatDateTime(isoStr?: string): string {
   if (!isoStr) return '-'
@@ -530,6 +675,16 @@ function getStudentEvaluationStatus(student: Student) {
       description: 'นักศึกษาได้รับการประเมินผลเรียบร้อยแล้ว'
     }
   }
+  if (status === 'email_error') {
+    return {
+      code: 'email_error',
+      label: 'ส่งอีเมลผิดพลาด',
+      color: 'error' as const,
+      icon: 'i-lucide-alert-triangle',
+      description:
+        'ส่งอีเมลแบบประเมินไม่สำเร็จ เนื่องจากที่อยู่อีเมลไม่ถูกต้องหรือการส่งล้มเหลว'
+    }
+  }
   if (status === 'awaiting_response') {
     return {
       code: 'awaiting_response',
@@ -564,9 +719,12 @@ const editForm = ref({
   courseId: '',
   semester: '',
   company: '',
+  companyAddress: '',
   province: '',
-  admissionYear: 2566,
-  status: 'active' as 'active'
+  evaluatorName: '',
+  evaluatorEmail: '',
+  academicYear: 2569,
+  admissionYear: 2565
 })
 
 const availableProgramsForEditSchool = computed(() => {
@@ -589,12 +747,19 @@ function openEditStudentModal(student: Student) {
     schoolId: student.schoolId,
     programId: student.programId,
     courseId: student.courseId || '',
-    semester:
-      student.semester || (termsData.value?.items?.[0]?.code ?? '1/2566'),
+    semester: student.semester
+      ? formatSemesterText(student.semester) !== '-'
+        ? formatSemesterText(student.semester)
+        : student.semester
+      : 'ภาคการศึกษาต้น',
     company: student.company || '',
+    companyAddress:
+      (student as unknown as { companyAddress?: string }).companyAddress || '',
     province: student.province || '',
-    admissionYear: student.admissionYear || 2566,
-    status: 'active'
+    evaluatorName: student.evaluatorName || '',
+    evaluatorEmail: student.evaluatorEmail || '',
+    academicYear: Number(getAcademicYearDisplay(student)) || 2569,
+    admissionYear: student.admissionYear || 2565
   }
   isEditModalOpen.value = true
 }
@@ -619,9 +784,13 @@ async function handleEditSubmit() {
         courseId: editForm.value.courseId || undefined,
         semester: editForm.value.semester || undefined,
         company: editForm.value.company.trim() || undefined,
+        companyAddress: editForm.value.companyAddress.trim() || undefined,
         province: editForm.value.province.trim() || undefined,
-        admissionYear: Number(editForm.value.admissionYear),
-        status: editForm.value.status
+        evaluatorName: editForm.value.evaluatorName?.trim() || undefined,
+        evaluatorEmail:
+          editForm.value.evaluatorEmail?.trim()?.toLowerCase() || undefined,
+        academicYear: Number(editForm.value.academicYear) || undefined,
+        admissionYear: Number(editForm.value.admissionYear) || undefined
       }
     })
 
@@ -652,7 +821,23 @@ async function handleEditSubmit() {
 const isManualModalOpen = ref(false)
 const isManualSubmitting = ref(false)
 
-const manualForm = ref({
+interface ManualStudentForm {
+  studentId: string
+  nameTh: string
+  nameEn: string
+  email: string
+  personalEmail: string
+  schoolId: string
+  programId: string
+  courseId: string
+  academicTermId: string
+  company: string
+  province: string
+  admissionYear?: number
+  status: 'active'
+}
+
+const manualForm = ref<ManualStudentForm>({
   studentId: '',
   nameTh: '',
   nameEn: '',
@@ -661,11 +846,11 @@ const manualForm = ref({
   schoolId: '',
   programId: '',
   courseId: '',
-  semester: '1/2566',
+  academicTermId: '',
   company: '',
   province: '',
-  admissionYear: 2566,
-  status: 'active' as 'active'
+  admissionYear: undefined,
+  status: 'active'
 })
 
 // Filter programs when schoolId changes
@@ -679,27 +864,19 @@ const availableProgramsForSchool = computed(() => {
 })
 
 function openManualAddModal() {
-  // Reset form
-  const firstSchool = schoolsData.value?.items?.[0]
-  const firstProgram = programsData.value?.items?.find(
-    (p) => p.schoolId === firstSchool?.id
-  )
-  const firstCourse = coursesData.value?.items?.[0]
-  const firstTerm = termsData.value?.items?.[0]
-
   manualForm.value = {
     studentId: '',
     nameTh: '',
     nameEn: '',
     email: '',
     personalEmail: '',
-    schoolId: firstSchool?.id || '',
-    programId: firstProgram?.id || '',
-    courseId: firstCourse?.id || '',
-    semester: firstTerm?.code || '1/2566',
+    schoolId: '',
+    programId: '',
+    courseId: '',
+    academicTermId: '',
     company: '',
     province: '',
-    admissionYear: 2566,
+    admissionYear: undefined,
     status: 'active'
   }
   isManualModalOpen.value = true
@@ -740,10 +917,12 @@ async function handleManualAddSubmit() {
         schoolId: manualForm.value.schoolId,
         programId: manualForm.value.programId,
         courseId: manualForm.value.courseId || undefined,
-        semester: manualForm.value.semester || undefined,
+        academicTermId: manualForm.value.academicTermId || undefined,
         company: manualForm.value.company.trim() || undefined,
         province: manualForm.value.province.trim() || undefined,
-        admissionYear: Number(manualForm.value.admissionYear),
+        admissionYear: manualForm.value.admissionYear
+          ? Number(manualForm.value.admissionYear)
+          : undefined,
         status: manualForm.value.status
       }
     })
@@ -778,10 +957,20 @@ const isExcelModalOpen = ref(false)
 const isExcelImporting = ref(false)
 const parsedRows = ref<ParsedStudentRow[]>([])
 const selectedFileName = ref<string>('')
-const defaultSchoolId = ref<string>('')
-const defaultProgramId = ref<string>('')
+const studentImportBatchId = ref<string | null>(null)
+const importQuestionFields = ref<string[]>([])
+const importCommitKeys = ref<Record<string, string>>({})
 const excelPreviewPage = ref(1)
 const excelPreviewPageSize = 5
+const selectedImportCount = computed(
+  () =>
+    parsedRows.value.filter(
+      (row) =>
+        row.selected &&
+        row.status === 'pending' &&
+        (row.action === 'create' || row.action === 'update')
+    ).length
+)
 const paginatedParsedRows = computed(() => {
   const start = (excelPreviewPage.value - 1) * excelPreviewPageSize
   return parsedRows.value.slice(start, start + excelPreviewPageSize)
@@ -790,12 +979,10 @@ const paginatedParsedRows = computed(() => {
 function openExcelImportModal() {
   parsedRows.value = []
   selectedFileName.value = ''
+  studentImportBatchId.value = null
+  importQuestionFields.value = []
+  importCommitKeys.value = {}
   excelPreviewPage.value = 1
-  defaultSchoolId.value = schoolsData.value?.items?.[0]?.id || ''
-  const matchedP = programsData.value?.items?.find(
-    (p) => p.schoolId === defaultSchoolId.value
-  )
-  defaultProgramId.value = matchedP?.id || ''
   isExcelModalOpen.value = true
 }
 
@@ -861,313 +1048,185 @@ function downloadStudentExcelTemplate() {
   })
 }
 
-// Parse Excel File on Selection
-function handleExcelFileUpload(event: Event) {
+// The backend owns workbook parsing, reference resolution, diffing, and commit.
+function applyStudentImportBatch(batch: StudentImportBatchResponse) {
+  studentImportBatchId.value = batch.batchId
+  importQuestionFields.value = [...batch.questionFieldsDetected]
+  parsedRows.value = batch.items.map((row) => ({
+    ...row,
+    selected: row.status === 'pending' && row.action === 'create'
+  }))
+  excelPreviewPage.value = 1
+}
+
+function importFieldLabel(field: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    'name.th': 'ชื่อไทย',
+    'name.en': 'ชื่ออังกฤษ',
+    email: 'อีเมล',
+    personalEmail: 'อีเมลส่วนตัว',
+    schoolId: 'สำนักวิชา',
+    programId: 'หลักสูตร',
+    course: 'วิชา',
+    courseId: 'รหัสวิชา',
+    academicTermId: 'ภาคการศึกษา',
+    semester: 'ภาคการศึกษา',
+    academicYear: 'ปีการศึกษา',
+    admissionYear: 'ปีที่เข้าศึกษา',
+    company: 'สถานประกอบการ',
+    province: 'จังหวัด'
+  }
+  return labels[field] ?? field
+}
+
+function importDiffValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).join(' / ')
+  }
+  return String(value)
+}
+
+function importErrorMessage(error: unknown): string {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'data' in error &&
+    error.data &&
+    typeof error.data === 'object' &&
+    'error' in error.data &&
+    error.data.error &&
+    typeof error.data.error === 'object' &&
+    'message' in error.data.error &&
+    typeof error.data.error.message === 'string'
+  ) {
+    return error.data.error.message
+  }
+  return error instanceof Error
+    ? error.message
+    : 'เกิดข้อผิดพลาดในการนำเข้าข้อมูล'
+}
+
+async function handleExcelFileUpload(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
 
   selectedFileName.value = file.name
-  const reader = new FileReader()
+  parsedRows.value = []
+  studentImportBatchId.value = null
+  importQuestionFields.value = []
+  importCommitKeys.value = {}
+  isExcelImporting.value = true
 
-  reader.onload = (e) => {
-    try {
-      const buffer = e.target?.result
-      const wb = XLSX.read(buffer, { type: 'array' })
-      const firstSheetName = wb.SheetNames[0]
-      if (!firstSheetName) {
-        throw new Error('ไม่พบข้อมูลชีทในไฟล์ Excel')
-      }
-      const sheet = wb.Sheets[firstSheetName]
-      const rawData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet!)
-
-      if (rawData.length === 0) {
-        toast.add({
-          title: 'ไฟล์ว่างเปล่า',
-          description: 'ไม่พบแถวข้อมูลนักศึกษาในไฟล์ Excel ที่อัปโหลด',
-          color: 'warning'
-        })
-        parsedRows.value = []
-        return
-      }
-
-      // Map raw data columns to ParsedStudentRow
-      const rows: ParsedStudentRow[] = rawData.map((row, idx) => {
-        // Extract fields using flexible Thai/English key lookup
-        const sId = String(
-          row['studentId'] ||
-            row['รหัสนักศึกษา'] ||
-            row['รหัสนักศึกษา (studentId)'] ||
-            row['Student ID'] ||
-            row['ID'] ||
-            ''
-        ).trim()
-
-        const nTh = String(
-          row['nameTh'] ||
-            row['ชื่อ-นามสกุลไทย'] ||
-            row['ชื่อ-นามสกุลไทย (nameTh)'] ||
-            row['ชื่อไทย'] ||
-            row['ชื่อ'] ||
-            ''
-        ).trim()
-
-        const nEn = String(
-          row['nameEn'] ||
-            row['ชื่อ-นามสกุลอังกฤษ'] ||
-            row['ชื่อ-นามสกุลอังกฤษ (nameEn)'] ||
-            row['ชื่ออังกฤษ'] ||
-            row['Name EN'] ||
-            ''
-        ).trim()
-
-        const mail = String(
-          row['email'] ||
-            row['อีเมล'] ||
-            row['อีเมล (email)'] ||
-            row['อีเมลนักศึกษา'] ||
-            row['อีเมลนักศึกษา (email)'] ||
-            row['Email'] ||
-            ''
-        ).trim()
-
-        const persMail = String(
-          row['personalEmail'] ||
-            row['อีเมลส่วนตัว'] ||
-            row['อีเมลส่วนตัว (personalEmail)'] ||
-            row['Personal Email'] ||
-            ''
-        ).trim()
-
-        const scCode = String(
-          row['schoolCode'] ||
-            row['รหัสสำนักวิชา'] ||
-            row['รหัสสำนักวิชา (schoolCode)'] ||
-            row['สำนักวิชา'] ||
-            row['School'] ||
-            ''
-        ).trim()
-
-        const prCode = String(
-          row['programCode'] ||
-            row['รหัสหลักสูตร'] ||
-            row['รหัสหลักสูตร (programCode)'] ||
-            row['หลักสูตร'] ||
-            row['Program'] ||
-            ''
-        ).trim()
-
-        const crCode = String(
-          row['courseCode'] ||
-            row['รหัสวิชา'] ||
-            row['รหัสวิชา (courseCode)'] ||
-            row['วิชา'] ||
-            row['Course'] ||
-            ''
-        ).trim()
-
-        const sem = String(
-          row['semester'] ||
-            row['ภาคการศึกษา'] ||
-            row['ภาคการศึกษา (semester)'] ||
-            row['เทอม'] ||
-            row['Semester'] ||
-            ''
-        ).trim()
-
-        const comp = String(
-          row['company'] ||
-            row['สถานประกอบการ'] ||
-            row['สถานประกอบการ (company)'] ||
-            row['บริษัท'] ||
-            row['Company'] ||
-            ''
-        ).trim()
-
-        const prov = String(
-          row['province'] ||
-            row['จังหวัด'] ||
-            row['จังหวัด (province)'] ||
-            row['Province'] ||
-            ''
-        ).trim()
-
-        const admYear = Number(
-          row['admissionYear'] ||
-            row['ปีการศึกษา'] ||
-            row['ปีการศึกษา (admissionYear)'] ||
-            row['ปี'] ||
-            2566
-        )
-
-        // Find matching schoolId & programId
-        const matchedSchool = schoolsData.value?.items?.find(
-          (s) =>
-            s.schoolCode.toLowerCase() === scCode.toLowerCase() ||
-            s.name.th.includes(scCode) ||
-            s.name.en.toLowerCase().includes(scCode.toLowerCase())
-        )
-        const finalSchoolId = matchedSchool?.id || defaultSchoolId.value
-
-        const matchedProgram = programsData.value?.items?.find(
-          (p) =>
-            p.programCode.toLowerCase() === prCode.toLowerCase() ||
-            p.name.th.includes(prCode) ||
-            p.name.en.toLowerCase().includes(prCode.toLowerCase())
-        )
-        const finalProgramId = matchedProgram?.id || defaultProgramId.value
-
-        const matchedCourse = coursesData.value?.items?.find(
-          (c) =>
-            c.courseCode.toLowerCase() === crCode.toLowerCase() ||
-            c.name.th.includes(crCode) ||
-            c.name.en.toLowerCase().includes(crCode.toLowerCase())
-        )
-        const finalCourseId =
-          matchedCourse?.id || coursesData.value?.items?.[0]?.id
-        let finalSemester = sem || termsData.value?.items?.[0]?.code || '1/2566'
-        const semLower = finalSemester.toLowerCase().trim()
-        if (
-          semLower === 'first' ||
-          semLower === '1' ||
-          semLower === 'ต้น' ||
-          semLower === 'ภาคการศึกษาต้น'
-        ) {
-          finalSemester = 'ภาคการศึกษาต้น'
-        } else if (
-          semLower === 'second' ||
-          semLower === '2' ||
-          semLower === 'ปลาย' ||
-          semLower === 'ภาคการศึกษาปลาย'
-        ) {
-          finalSemester = 'ภาคการศึกษาปลาย'
-        } else if (
-          semLower === 'third' ||
-          semLower === '3' ||
-          semLower === 'summer' ||
-          semLower.includes('ฤดูร้อน')
-        ) {
-          finalSemester = 'ภาคการศึกษาฤดูร้อน'
-        }
-
-        let status: 'valid' | 'invalid' = 'valid'
-        let errorMessage = ''
-
-        if (!sId) {
-          status = 'invalid'
-          errorMessage = `แถวที่ ${idx + 1}: ไม่ระบุรหัสนักศึกษา`
-        } else if (!nTh && !nEn) {
-          status = 'invalid'
-          errorMessage = `แถวที่ ${idx + 1}: ไม่ระบุชื่อ-นามสกุล`
-        } else if (!mail || !mail.includes('@')) {
-          status = 'invalid'
-          errorMessage = `แถวที่ ${idx + 1}: รูปแบบอีเมลไม่ถูกต้อง`
-        } else if (!finalSchoolId || !finalProgramId) {
-          status = 'invalid'
-          errorMessage = `แถวที่ ${idx + 1}: ไม่สามารถระบุสำนักวิชาหรือหลักสูตรได้`
-        }
-
-        return {
-          studentId: sId,
-          nameTh: nTh || nEn,
-          nameEn: nEn || nTh,
-          email: mail.toLowerCase(),
-          personalEmail: persMail ? persMail.toLowerCase() : undefined,
-          schoolCode: scCode || (matchedSchool?.schoolCode ?? ''),
-          programCode: prCode || (matchedProgram?.programCode ?? ''),
-          courseCode: crCode || (matchedCourse?.courseCode ?? 'SWE491'),
-          semester: finalSemester,
-          company: comp || undefined,
-          province: prov || undefined,
-          admissionYear: admYear || 2566,
-          schoolId: finalSchoolId,
-          programId: finalProgramId,
-          courseId: finalCourseId,
-          status,
-          errorMessage
-        }
-      })
-
-      parsedRows.value = rows
-      toast.add({
-        title: 'อ่านไฟล์ Excel สำเร็จ',
-        description: `พบข้อมูลนักศึกษาทั้งหมด ${rows.length} รายการ (พร้อมนำเข้า ${rows.filter((r) => r.status === 'valid').length} รายการ)`,
-        color: 'success'
-      })
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'อ่านไฟล์ Excel ล้มเหลว'
-      toast.add({
-        title: 'ไม่สามารถอ่านไฟล์ได้',
-        description: msg,
-        color: 'error'
-      })
-    }
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    const batch = await api<StudentImportBatchResponse>(
+      '/students/import-preview',
+      { method: 'POST', body: form }
+    )
+    applyStudentImportBatch(batch)
+    toast.add({
+      title: 'ตรวจสอบไฟล์เสร็จแล้ว',
+      description: `พบใหม่ ${batch.summary.creates}, มีส่วนต่าง ${batch.summary.updates}, ไม่เปลี่ยน ${batch.summary.unchanged}, ผิดเงื่อนไข ${batch.summary.invalid} รายการ`,
+      color: batch.summary.invalid > 0 ? 'warning' : 'success'
+    })
+  } catch (error: unknown) {
+    toast.add({
+      title: 'ตรวจสอบไฟล์ไม่สำเร็จ',
+      description: importErrorMessage(error),
+      color: 'error'
+    })
+  } finally {
+    isExcelImporting.value = false
+    input.value = ''
   }
-
-  reader.readAsArrayBuffer(file)
 }
 
-// Execute Import of Valid Rows
 async function handleExecuteExcelImport() {
-  const validRows = parsedRows.value.filter((r) => r.status === 'valid')
-  if (validRows.length === 0) {
+  const batchId = studentImportBatchId.value
+  const decisions = parsedRows.value
+    .filter(
+      (row) =>
+        row.selected &&
+        row.status === 'pending' &&
+        (row.action === 'create' || row.action === 'update')
+    )
+    .map((row) => ({
+      rowId: row.id,
+      action: row.action as 'create' | 'update'
+    }))
+
+  if (!batchId || decisions.length === 0) {
     toast.add({
-      title: 'ไม่มีข้อมูลที่พร้อมนำเข้า',
-      description: 'กรุณาตรวจสอบข้อผิดพลาดในตาราง หรืออัปโหลดไฟล์ใหม่',
+      title: 'ไม่มีรายการที่ยืนยันนำเข้า',
+      description: 'รายการแก้ไขต้องเลือกยืนยันแยกเป็นแถวก่อน',
       color: 'warning'
     })
     return
   }
 
   isExcelImporting.value = true
-  let successCount = 0
-  let failCount = 0
+  let committedCount = 0
+  let commitError: string | null = null
 
-  for (const row of validRows) {
-    try {
-      await api('/students', {
-        method: 'POST',
-        body: {
-          studentId: row.studentId,
-          name: { th: row.nameTh, en: row.nameEn },
-          email: row.email,
-          personalEmail: row.personalEmail,
-          schoolId: row.schoolId || defaultSchoolId.value,
-          programId: row.programId || defaultProgramId.value,
-          courseId: row.courseId,
-          semester: row.semester,
-          company: row.company,
-          province: row.province,
-          admissionYear: row.admissionYear || 2566,
-          status: 'active'
-        }
-      })
-      successCount++
-    } catch {
-      failCount++
+  try {
+    for (let offset = 0; offset < decisions.length; offset += 100) {
+      const chunk = decisions.slice(offset, offset + 100)
+      const keySlot = `${batchId}:${chunk.map((item) => `${item.rowId}:${item.action}`).join(',')}`
+      const idempotencyKey =
+        importCommitKeys.value[keySlot] ?? crypto.randomUUID()
+      importCommitKeys.value[keySlot] = idempotencyKey
+
+      try {
+        await api(`/students/imports/${batchId}/commit`, {
+          method: 'POST',
+          headers: { 'idempotency-key': idempotencyKey },
+          body: { decisions: chunk }
+        })
+        committedCount += chunk.length
+      } catch (error: unknown) {
+        commitError = importErrorMessage(error)
+        break
+      }
     }
-  }
 
-  isExcelImporting.value = false
-  isExcelModalOpen.value = false
+    const updatedBatch = await api<StudentImportBatchResponse>(
+      `/students/imports/${batchId}`
+    )
+    applyStudentImportBatch(updatedBatch)
+    if (committedCount > 0) await refresh()
 
-  if (successCount > 0) {
+    if (commitError) {
+      toast.add({
+        title: committedCount > 0 ? 'นำเข้าได้บางส่วน' : 'นำเข้าไม่สำเร็จ',
+        description: `${committedCount} รายการสำเร็จ; ${commitError} ตรวจสถานะแล้วลองรายการที่ยังค้างใหม่ได้`,
+        color: committedCount > 0 ? 'warning' : 'error'
+      })
+      return
+    }
+
     toast.add({
-      title: 'นำเข้าข้อมูลนักศึกษาสำเร็จ',
-      description: `นำเข้าข้อมูลเรียบร้อยแล้ว ${successCount} รายการ${failCount > 0 ? ` (ล้มเหลว/ซ้ำ ${failCount} รายการ)` : ''}`,
+      title: 'นำเข้าข้อมูลสำเร็จ',
+      description: `บันทึกหรืออัปเดตข้อมูล ${committedCount} รายการ`,
       color: 'success'
     })
     await refresh()
-  } else {
+    isExcelModalOpen.value = false
+  } catch (error: unknown) {
     toast.add({
-      title: 'นำเข้าข้อมูลไม่สำเร็จ',
-      description: 'อาจมีรหัสนักศึกษาหรืออีเมลซ้ำกับที่มีอยู่ในระบบแล้ว',
+      title: 'ตรวจสอบสถานะการนำเข้าไม่สำเร็จ',
+      description: importErrorMessage(error),
       color: 'error'
     })
+  } finally {
+    isExcelImporting.value = false
   }
 }
 
 // =========================================================================
+
 // MULTI-SELECT & BULK ACTIONS
 // =========================================================================
 const selectedStudentIds = ref<string[]>([])
@@ -1212,36 +1271,6 @@ function toggleSelectStudent(id: string) {
 
 function clearSelection() {
   selectedStudentIds.value = []
-}
-
-async function handleBulkSetStatus(newStatus: 'active') {
-  if (selectedStudentIds.value.length === 0) return
-  isBulkUpdating.value = true
-  try {
-    await Promise.all(
-      selectedStudentIds.value.map((id) =>
-        api(`/students/${id}`, {
-          method: 'PATCH',
-          body: { status: newStatus }
-        })
-      )
-    )
-    toast.add({
-      title: 'เปลี่ยนสถานะสำเร็จ',
-      description: `อัปเดตสถานะเป็น ACTIVE แล้ว ${selectedStudentIds.value.length} รายการ`,
-      color: 'success'
-    })
-    clearSelection()
-    await refresh()
-  } catch {
-    toast.add({
-      title: 'เกิดข้อผิดพลาด',
-      description: 'ไม่สามารถอัปเดตสถานะนักศึกษาบางรายการได้',
-      color: 'error'
-    })
-  } finally {
-    isBulkUpdating.value = false
-  }
 }
 
 async function handleBulkDelete() {
@@ -1297,6 +1326,8 @@ function handleBulkExport() {
     ภาคการศึกษา: getSemesterDisplay(s),
     รายวิชา: getCourseDisplay(s),
     สถานประกอบการ: getCompanyDisplay(s),
+    'ผู้ประเมิน / พี่เลี้ยง': s.evaluatorName || '-',
+    อีเมลผู้ประเมิน: s.evaluatorEmail || '-',
     จังหวัด: getProvinceDisplay(s),
     สถานะการประเมิน: getStudentEvaluationStatus(s).label,
     สถานะบัญชี: s.status
@@ -1326,14 +1357,14 @@ function getStudentMenuItems(student: Student) {
     ],
     [
       {
-        label: 'แก้ไขข้อมูลนักศึกษา',
+        label: 'แก้ไขข้อมูล',
         icon: 'i-lucide-pencil',
         onSelect: () => openEditStudentModal(student)
       }
     ],
     [
       {
-        label: 'ลบข้อมูลนักศึกษา',
+        label: 'ลบข้อมูล',
         icon: 'i-lucide-trash-2',
         color: 'error' as const,
         onSelect: () => handleDeleteStudent(student)
@@ -1403,30 +1434,191 @@ const sendEmailForm = ref({
 
 const sendEmailSuccessData = ref<{
   success: boolean
+  status: 'queued' | 'processing' | 'completed' | 'partial'
   assignmentId: string
   invitationId: string
+  campaignId: string
+  deliveryId: string
   invitationUrl: string
   recipientEmail: string
   studentName: string
   deadlineAt: string
 } | null>(null)
 
+// Modal Mode: 'single' | 'bulk'
+const sendEmailModalMode = ref<'single' | 'bulk'>('single')
+const bulkModalStudents = ref<Student[]>([])
+const bulkStudentEvaluators = ref<
+  Record<string, { email: string; name: string }>
+>({})
+const bulkCommonEmail = ref('')
+const bulkCommonEvaluator = ref('')
+const bulkSendProgress = ref<{
+  current: number
+  total: number
+  successCount: number
+  failedCount: number
+  currentStudentName: string
+}>({
+  current: 0,
+  total: 0,
+  successCount: 0,
+  failedCount: 0,
+  currentStudentName: ''
+})
+
+interface BulkSendResultItem {
+  studentId: string
+  studentCode: string
+  studentName: string
+  email: string
+  evaluatorName: string
+  company: string
+  success: boolean
+  invitationUrl?: string
+  error?: string
+}
+
+const bulkSendSuccessData = ref<{
+  totalSent: number
+  failedCount: number
+  items: BulkSendResultItem[]
+} | null>(null)
+
+interface SystemEmailTemplateItem {
+  id: string
+  code: string
+  name: string
+  description: string
+  subject: string
+  html: string
+  text: string
+  placeholders: string[]
+  versionId: string
+  versionNumber: number
+  updatedAt: string
+}
+
+const systemEmailTemplate = ref<SystemEmailTemplateItem | null>(null)
+const isLoadingEmailTemplate = ref(false)
+const emailPreviewTab = ref<'design' | 'text'>('design')
+
+async function fetchEvaluationEmailTemplate() {
+  isLoadingEmailTemplate.value = true
+  try {
+    const res = await api<SystemEmailTemplateItem[]>('/email-templates/system')
+    if (Array.isArray(res)) {
+      const match = res.find((t) => t.code === 'evaluation_request')
+      systemEmailTemplate.value = match || res[0] || null
+    }
+  } catch (err) {
+    console.error('Failed to load system email template:', err)
+  } finally {
+    isLoadingEmailTemplate.value = false
+  }
+}
+
+function renderPlaceholders(str: string): string {
+  if (!str) return ''
+  const student = sendModalStudent.value
+  const studentName =
+    student?.name.th || student?.name.en || '[ไม่ระบุชื่อนักศึกษา]'
+  const studentId = student?.studentId || '[ไม่ระบุรหัสนักศึกษา]'
+  const companyName = student?.company || '[ไม่ระบุสถานประกอบการ]'
+  const evaluatorName =
+    (sendEmailModalMode.value === 'bulk' && student
+      ? bulkStudentEvaluators.value[student.id]?.name
+      : sendEmailForm.value.evaluatorName?.trim()) || '[ไม่ระบุชื่อผู้ประเมิน]'
+
+  const values: Record<string, string> = {
+    student_name: studentName,
+    student_id: studentId,
+    company_name: companyName,
+    evaluator_name: evaluatorName,
+    deadline: '[ระบบคำนวณจากวันปิดรอบ]',
+    pin: '[ระบบสร้าง PIN เมื่อส่งคำเชิญ]',
+    invitation_url: '[ระบบสร้างลิงก์เมื่อส่งคำเชิญ]'
+  }
+
+  return str.replace(/{{\s*([a-z_]+)\s*}}/g, (_, key: string) => {
+    return values[key] ?? `{{${key}}}`
+  })
+}
+
+const previewSubject = computed(() => {
+  if (!systemEmailTemplate.value?.subject) {
+    return '[ยังไม่มีเทมเพลตคำเชิญที่โหลดได้]'
+  }
+  return renderPlaceholders(systemEmailTemplate.value.subject)
+})
+
+const previewHtml = computed(() => {
+  if (!systemEmailTemplate.value?.html) {
+    return ''
+  }
+  return renderPlaceholders(systemEmailTemplate.value.html)
+})
+
+const previewEmailDocument = computed(() =>
+  createSandboxedEmailPreviewDocument(previewHtml.value)
+)
+
+const previewText = computed(() => {
+  if (!systemEmailTemplate.value?.text) {
+    return ''
+  }
+  return renderPlaceholders(systemEmailTemplate.value.text)
+})
+
+function applyBulkEmailToAll() {
+  if (!bulkCommonEmail.value.trim()) return
+  bulkModalStudents.value.forEach((st) => {
+    const entry = bulkStudentEvaluators.value[st.id]
+    if (entry) {
+      entry.email = bulkCommonEmail.value.trim()
+    }
+  })
+  toast.add({
+    title: 'ปรับใช้อีเมลกับทุกคนแล้ว',
+    description: `ตั้งค่าอีเมลเป็น ${bulkCommonEmail.value} ให้กับนักศึกษาทั้งหมด ${bulkModalStudents.value.length} คน`,
+    color: 'success'
+  })
+}
+
+function applyBulkEvaluatorToAll() {
+  if (!bulkCommonEvaluator.value.trim()) return
+  bulkModalStudents.value.forEach((st) => {
+    const entry = bulkStudentEvaluators.value[st.id]
+    if (entry) {
+      entry.name = bulkCommonEvaluator.value.trim()
+    }
+  })
+  toast.add({
+    title: 'ปรับใช้ชื่อผู้ประเมินกับทุกคนแล้ว',
+    description: `ตั้งค่าชื่อผู้ประเมินเป็น "${bulkCommonEvaluator.value}" ให้ทุกคนแล้ว`,
+    color: 'success'
+  })
+}
+
 async function openSendEmailModal(student: Student) {
+  sendEmailModalMode.value = 'single'
   sendModalStudent.value = student
+  bulkModalStudents.value = [student]
   sendEmailSuccessData.value = null
+  bulkSendSuccessData.value = null
   isSendingEvaluationEmail.value = false
   sendInvitationIdempotencyKey.value = crypto.randomUUID()
 
   sendEmailForm.value = {
-    recipientEmail: 'evaluator@localhost',
-    evaluatorName: student.company
-      ? `ผู้ดูแล (${student.company})`
-      : 'ผู้ดูแลการฝึกงาน',
+    recipientEmail: student.evaluatorEmail || '',
+    evaluatorName: student.evaluatorName || '',
     deadlineDays: 30,
     notes: ''
   }
 
-  const firstForm = evaluationFormsData.value?.items?.[0]
+  fetchEvaluationEmailTemplate()
+
+  const firstForm = activeCompetencyForms.value[0]
   if (firstForm) {
     await selectCompetencyForm(firstForm)
   } else {
@@ -1437,24 +1629,67 @@ async function openSendEmailModal(student: Student) {
   isSendEmailModalOpen.value = true
 }
 
-function openBulkSendEmailModal() {
-  const firstSelected = data.value?.items?.find((s) =>
+async function openBulkSendEmailModal() {
+  const selectedList = (data.value?.items ?? []).filter((s) =>
     selectedStudentIds.value.includes(s.id)
   )
-  if (firstSelected) {
-    openSendEmailModal(firstSelected)
+  if (selectedList.length === 0) return
+
+  const first = selectedList[0]
+  if (!first) return
+
+  if (selectedList.length === 1) {
+    openSendEmailModal(first)
+    return
   }
+
+  sendEmailModalMode.value = 'bulk'
+  bulkModalStudents.value = [...selectedList]
+  sendModalStudent.value = first
+  sendEmailSuccessData.value = null
+  bulkSendSuccessData.value = null
+  isSendingEvaluationEmail.value = false
+
+  const evaluators: Record<string, { email: string; name: string }> = {}
+  selectedList.forEach((st) => {
+    evaluators[st.id] = {
+      email: st.evaluatorEmail || '',
+      name: st.evaluatorName || ''
+    }
+  })
+  bulkStudentEvaluators.value = evaluators
+  bulkCommonEmail.value = ''
+  bulkCommonEvaluator.value = ''
+
+  sendEmailForm.value = {
+    recipientEmail: '',
+    evaluatorName: '',
+    deadlineDays: 30,
+    notes: ''
+  }
+
+  fetchEvaluationEmailTemplate()
+
+  const firstForm = activeCompetencyForms.value[0]
+  if (firstForm) {
+    await selectCompetencyForm(firstForm)
+  } else {
+    selectedCompetencySet.value = null
+    selectedCompetencyVersion.value = null
+  }
+
+  isSendEmailModalOpen.value = true
 }
 
 async function selectCompetencyForm(form: CompetencySetItem) {
   selectedCompetencySet.value = form
   isLoadingFormVersion.value = true
   try {
-    const res = await api<{ items: CompetencyVersionItem[] }>(
-      `/competency-sets/${form.id}/versions`
-    )
-    const published =
-      res.items.find((v) => v.status === 'published') || res.items[0]
+    const res = await api<
+      CompetencyVersionItem[] | { items: CompetencyVersionItem[] }
+    >(`/competency-sets/${form.id}/versions`)
+    const list = Array.isArray(res) ? res : res?.items || []
+    const published = list.find((v) => v.status === 'published')
     selectedCompetencyVersion.value = published || null
   } catch {
     selectedCompetencyVersion.value = null
@@ -1467,19 +1702,23 @@ async function handleSendEvaluationEmailSubmit() {
   if (!sendModalStudent.value || !selectedCompetencySet.value) return
   if (!sendEmailForm.value.recipientEmail.trim()) {
     toast.add({
-      title: 'กรุณาระบุอีเมลผู้รับ',
-      description: 'โปรดกรอกอีเมลผู้ประเมินหรือสถานประกอบการ',
+      title: 'กรุณาระบุอีเมลผู้ประเมิน',
+      description: 'โปรดกรอกอีเมลของผู้ประเมินที่ลงทะเบียนกับสถานประกอบการ',
       color: 'warning'
     })
     return
   }
 
   isSendingEvaluationEmail.value = true
+  const startTime = Date.now()
   try {
     const result = await api<{
       success: boolean
+      status: 'queued' | 'processing' | 'completed' | 'partial'
       assignmentId: string
       invitationId: string
+      campaignId: string
+      deliveryId: string
       invitationUrl: string
       recipientEmail: string
       studentName: string
@@ -1504,18 +1743,25 @@ async function handleSendEvaluationEmailSubmit() {
       )
     }
 
+    // Ensure loading animation is visible for at least 800ms before showing success state
+    const elapsed = Date.now() - startTime
+    if (elapsed < 800) {
+      await new Promise((resolve) => setTimeout(resolve, 800 - elapsed))
+    }
+
     sendEmailSuccessData.value = result
     toast.add({
-      title: 'ส่งอีเมลแบบประเมินสำเร็จ!',
-      description: `ระบบได้ส่งลิงก์แบบประเมินไปยัง ${result.recipientEmail} เรียบร้อยแล้ว`,
-      color: 'success'
+      title: 'คิวส่งคำเชิญแล้ว',
+      description: `คิวส่งงานไปยัง ${result.recipientEmail} แล้ว ติดตามผลได้จากสถานะ Delivery`,
+      color: 'info'
     })
+    await refresh()
   } catch (err: unknown) {
     const msg =
       err instanceof Error ? err.message : 'ไม่สามารถส่งอีเมลแบบประเมินได้'
     toast.add({
-      title: 'ส่งอีเมลไม่สำเร็จ',
-      description: msg,
+      title: 'ส่งอีเมลไม่สำเร็จ (Email Error)',
+      description: `${msg} — ตรวจสอบสถานะการส่งจากรายการอีเมลก่อนลองส่งซ้ำ`,
       color: 'error'
     })
   } finally {
@@ -1523,14 +1769,145 @@ async function handleSendEvaluationEmailSubmit() {
   }
 }
 
-function copyInvitationLink() {
-  if (!sendEmailSuccessData.value?.invitationUrl) return
-  navigator.clipboard.writeText(sendEmailSuccessData.value.invitationUrl)
-  toast.add({
-    title: 'คัดลอกลิงก์สำเร็จ',
-    description: 'คัดลอกลิงก์แบบประเมินไปยังคลิปบอร์ดแล้ว',
-    color: 'success'
+async function handleBulkSendEvaluationEmailSubmit() {
+  if (bulkModalStudents.value.length === 0 || !selectedCompetencySet.value)
+    return
+
+  const invalid = bulkModalStudents.value.filter((st) => {
+    const ev = bulkStudentEvaluators.value[st.id]
+    return !ev?.email?.trim()
   })
+  if (invalid.length > 0) {
+    toast.add({
+      title: 'กรุณาระบุอีเมลผู้ประเมินให้ครบถ้วน',
+      description: `ยังมี ${invalid.length} รายการที่ขาดอีเมลผู้ประเมิน`,
+      color: 'warning'
+    })
+    return
+  }
+
+  isSendingEvaluationEmail.value = true
+  const total = bulkModalStudents.value.length
+  bulkSendProgress.value = {
+    current: 0,
+    total,
+    successCount: 0,
+    failedCount: 0,
+    currentStudentName: ''
+  }
+
+  const itemsResults: BulkSendResultItem[] = []
+
+  for (let i = 0; i < bulkModalStudents.value.length; i++) {
+    const st = bulkModalStudents.value[i]
+    if (!st) continue
+    const ev = bulkStudentEvaluators.value[st.id] ?? { email: '', name: '' }
+    bulkSendProgress.value.current = i + 1
+    bulkSendProgress.value.currentStudentName = `${st.name.th} (${st.studentId})`
+
+    try {
+      const idempotencyKey = crypto.randomUUID()
+      const res = await api<{
+        success: boolean
+        assignmentId: string
+        invitationId: string
+        invitationUrl: string
+        recipientEmail: string
+        studentName: string
+        deadlineAt: string
+      }>('/campaigns/send-student-invitation', {
+        method: 'POST',
+        headers: { 'idempotency-key': idempotencyKey },
+        body: {
+          studentId: st.id,
+          competencySetId: selectedCompetencySet.value.id,
+          recipientEmail: ev.email.trim(),
+          evaluatorName: ev.name.trim(),
+          deadlineDays: Number(sendEmailForm.value.deadlineDays),
+          notes: sendEmailForm.value.notes.trim()
+        }
+      })
+
+      let finalUrl = res.invitationUrl
+      if (import.meta.client && finalUrl) {
+        finalUrl = finalUrl.replace(/^https?:\/\/[^/]+/, window.location.origin)
+      }
+
+      bulkSendProgress.value.successCount++
+      itemsResults.push({
+        studentId: st.id,
+        studentCode: st.studentId,
+        studentName: st.name.th,
+        email: ev.email.trim(),
+        evaluatorName: ev.name.trim(),
+        company: st.company || '-',
+        success: true,
+        invitationUrl: finalUrl
+      })
+    } catch (err: unknown) {
+      bulkSendProgress.value.failedCount++
+      const msg = err instanceof Error ? err.message : 'ส่งไม่สำเร็จ'
+      itemsResults.push({
+        studentId: st.id,
+        studentCode: st.studentId,
+        studentName: st.name.th,
+        email: ev.email.trim(),
+        evaluatorName: ev.name.trim(),
+        company: st.company || '-',
+        success: false,
+        error: msg
+      })
+    }
+  }
+
+  bulkSendSuccessData.value = {
+    totalSent: bulkSendProgress.value.successCount,
+    failedCount: bulkSendProgress.value.failedCount,
+    items: itemsResults
+  }
+
+  isSendingEvaluationEmail.value = false
+  await refresh()
+  clearSelection()
+
+  if (bulkSendProgress.value.successCount > 0) {
+    toast.add({
+      title: 'ส่งอีเมลแบบประเมินเรียบร้อย',
+      description: `สำเร็จ ${bulkSendProgress.value.successCount} คน${bulkSendProgress.value.failedCount > 0 ? `, ผิดพลาด ${bulkSendProgress.value.failedCount} คน` : ''}`,
+      color: bulkSendProgress.value.failedCount > 0 ? 'warning' : 'success'
+    })
+  } else {
+    toast.add({
+      title: 'เกิดข้อผิดพลาดในการส่งอีเมล',
+      description: 'ไม่สามารถส่งอีเมลได้ กรุณาลองใหม่อีกครั้ง',
+      color: 'error'
+    })
+  }
+}
+
+function copyInvitationLink(url?: string) {
+  const targetUrl = url || sendEmailSuccessData.value?.invitationUrl
+  if (!targetUrl) return
+  if (import.meta.client) {
+    navigator.clipboard.writeText(targetUrl)
+    toast.add({
+      title: 'คัดลอกลิงก์สำเร็จ',
+      description: 'คัดลอกลิงก์แบบประเมินไปยังคลิปบอร์ดแล้ว',
+      color: 'success'
+    })
+  }
+}
+
+function finishAndCloseSendModal() {
+  isSendEmailModalOpen.value = false
+  sendEmailSuccessData.value = null
+  bulkSendSuccessData.value = null
+  isSendingEvaluationEmail.value = false
+}
+
+function handleModalBackdropClick() {
+  if (isSendingEvaluationEmail.value) return
+  finishAndCloseSendModal()
 }
 </script>
 
@@ -1641,6 +2018,9 @@ function copyInvitationLink() {
             <option value="awaiting_evaluator">⚪ รอระบุผู้ประเมิน</option>
             <option value="awaiting_response">🟡 ส่งคำขอประเมินแล้ว</option>
             <option value="submitted">🟢 ส่งผลประเมินแล้ว</option>
+            <option value="email_error">
+              🔴 ส่งอีเมลผิดพลาด (Email Error)
+            </option>
           </select>
         </div>
 
@@ -1744,15 +2124,6 @@ function copyInvitationLink() {
 
         <div class="flex flex-wrap items-center gap-2">
           <UButton
-            color="success"
-            icon="i-lucide-check-circle"
-            label="ตั้งเป็น ACTIVE"
-            size="xs"
-            variant="subtle"
-            :loading="isBulkUpdating"
-            @click="handleBulkSetStatus('active')"
-          />
-          <UButton
             color="primary"
             icon="i-lucide-mail"
             label="ส่งอีเมลแบบประเมิน"
@@ -1782,12 +2153,16 @@ function copyInvitationLink() {
     </Transition>
 
     <!-- Students Data Table -->
-    <UCard :ui="{ body: 'p-0 sm:p-0' }">
+    <div
+      class="rounded-xl border border-default bg-default overflow-hidden shadow-sm"
+    >
       <div class="overflow-x-auto">
-        <table class="data-table">
-          <thead>
+        <table class="w-full text-left text-xs">
+          <thead
+            class="border-b border-default bg-muted/40 font-semibold text-highlighted"
+          >
             <tr>
-              <th class="w-10 text-center">
+              <th scope="col" class="py-3 px-4 w-10 text-center">
                 <input
                   type="checkbox"
                   :checked="isAllSelected"
@@ -1796,29 +2171,35 @@ function copyInvitationLink() {
                   @change="toggleSelectAll"
                 />
               </th>
-              <th class="min-w-[200px] whitespace-nowrap">ข้อมูลนักศึกษา</th>
-              <th class="whitespace-nowrap">สำนักวิชา / หลักสูตร</th>
-              <th class="w-48 whitespace-nowrap">
-                ปีการศึกษา / ภาคการศึกษา / รายวิชา
+              <th scope="col" class="py-3 px-4 min-w-[200px]">
+                ข้อมูลนักศึกษา
               </th>
-              <th class="w-60 whitespace-nowrap">สถานประกอบการ / จังหวัด</th>
-              <th class="w-24 text-center whitespace-nowrap">สถานะ</th>
-              <th class="w-44 whitespace-nowrap">อัปเดตล่าสุด / วันที่สร้าง</th>
-              <th class="w-16 text-right whitespace-nowrap">การจัดการ</th>
+              <th scope="col" class="py-3 px-4 min-w-[200px]">
+                สำนักวิชา / สาขาวิชา / รายวิชา
+              </th>
+              <th scope="col" class="py-3 px-4 min-w-[120px]">ปี / ภาคเรียน</th>
+              <th scope="col" class="py-3 px-4 min-w-[210px]">
+                สถานประกอบการ / ที่ตั้งบริษัท
+              </th>
+              <th scope="col" class="py-3 px-4 min-w-[140px]">สถานะประเมิน</th>
+              <th scope="col" class="py-3 px-4 min-w-[150px] whitespace-nowrap">
+                อัปเดตล่าสุด / วันที่สร้าง
+              </th>
+              <th scope="col" class="py-3 px-4 w-16 text-right">จัดการ</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody class="divide-y divide-default">
             <tr
               v-for="student in data?.items"
               :key="student.id"
-              class="group hover:bg-muted/30 transition-colors"
+              class="hover:bg-muted/30 transition-colors group"
               :class="{
                 'bg-primary/[0.04] dark:bg-primary/[0.08]':
                   selectedStudentIds.includes(student.id)
               }"
             >
-              <!-- Multi-select checkbox -->
-              <td class="text-center" @click.stop>
+              <!-- 1. Multi-select checkbox -->
+              <td class="py-3 px-4 text-center" @click.stop>
                 <input
                   type="checkbox"
                   :checked="selectedStudentIds.includes(student.id)"
@@ -1827,7 +2208,7 @@ function copyInvitationLink() {
                 />
               </td>
 
-              <!-- ข้อมูลนักศึกษา (รวบ รหัส, ชื่อ-นามสกุล, อีเมล เหมือน Dashboard) -->
+              <!-- 2. ข้อมูลนักศึกษา -->
               <td class="py-3 px-4">
                 <div class="space-y-0.5">
                   <div class="flex items-center gap-1.5">
@@ -1855,84 +2236,130 @@ function copyInvitationLink() {
                 </div>
               </td>
 
-              <!-- Column 4: สำนักวิชา & หลักสูตร -->
-              <td class="whitespace-nowrap">
-                <span class="block text-xs font-semibold text-highlighted">
-                  {{ getProgramDisplay(student.programId) }}
-                </span>
-                <span class="block text-[11px] text-muted">
-                  {{ getSchoolDisplay(student.schoolId) }}
-                </span>
-              </td>
-
-              <!-- Column 5: ปีการศึกษา / ภาคการศึกษา & รายวิชา (ปีการศึกษาอยู่บนสุด ถัดมาเป็นภาคการศึกษา และรายวิชา) -->
-              <td class="whitespace-nowrap">
-                <span class="block text-xs font-semibold text-highlighted">
-                  ปีการศึกษา {{ getAcademicYearDisplay(student) }}
-                </span>
-                <div class="mt-1">
-                  <UBadge
-                    v-if="getSemesterDisplay(student) !== '-'"
-                    color="info"
-                    :label="formatSemesterText(getSemesterDisplay(student))"
-                    size="sm"
-                    variant="subtle"
-                    class="font-mono font-medium"
-                  />
-                  <span v-else class="text-xs text-muted"> - </span>
+              <!-- 3. สำนักวิชา / สาขาวิชา / รายวิชา -->
+              <td class="py-3 px-4">
+                <div class="space-y-1">
+                  <div>
+                    <p
+                      class="font-medium text-highlighted text-xs leading-snug"
+                    >
+                      {{ getSchoolDisplay(student.schoolId) }}
+                    </p>
+                    <p class="text-[11px] text-muted leading-snug">
+                      {{ getProgramDisplay(student.programId) }}
+                    </p>
+                  </div>
+                  <div class="pt-0.5">
+                    <UBadge
+                      :color="getStudentCourseTrack(student).color"
+                      size="xs"
+                      variant="subtle"
+                      class="text-[10px] font-medium inline-flex items-center gap-1"
+                    >
+                      <UIcon
+                        :name="getStudentCourseTrack(student).icon"
+                        class="size-3"
+                      />
+                      <span>{{ getStudentCourseTrack(student).display }}</span>
+                    </UBadge>
+                  </div>
                 </div>
-                <span
-                  v-if="getCourseDisplay(student) !== '-'"
-                  class="block text-xs text-muted truncate max-w-[220px] mt-1"
-                  :title="getCourseDisplay(student)"
-                >
-                  {{ getCourseDisplay(student) }}
-                </span>
-                <span v-else class="block text-xs text-muted mt-1"> - </span>
               </td>
 
-              <!-- Column 6: สถานประกอบการ & จังหวัด (สถานประกอบการอยู่บน จังหวัดอยู่ล่าง) -->
-              <td class="whitespace-nowrap">
-                <span
-                  class="block text-xs font-medium text-highlighted truncate max-w-[220px]"
-                  :title="getCompanyDisplay(student)"
-                >
-                  {{ getCompanyDisplay(student) }}
-                </span>
-                <span
-                  v-if="getProvinceDisplay(student) !== '-'"
-                  class="inline-flex items-center gap-1 text-[11px] text-muted mt-1"
-                >
-                  <UIcon
-                    name="i-lucide-map-pin"
-                    class="size-3 text-primary shrink-0"
-                  />
-                  <span>{{ getProvinceDisplay(student) }}</span>
-                </span>
-                <span v-else class="block text-[11px] text-muted mt-1">
-                  -
-                </span>
+              <!-- 4. ปี / ภาคเรียน -->
+              <td class="py-3 px-4">
+                <div class="space-y-1">
+                  <UBadge
+                    color="primary"
+                    size="xs"
+                    variant="subtle"
+                    class="font-mono font-semibold"
+                  >
+                    ปี {{ getAcademicYearDisplay(student) }}
+                  </UBadge>
+                  <p class="text-[11px] text-muted">
+                    {{ formatSemesterText(getSemesterDisplay(student)) }}
+                  </p>
+                </div>
               </td>
 
-              <!-- Column 7: สถานะการประเมิน (แบบ 3) -->
-              <td class="text-center whitespace-nowrap">
-                <UBadge
-                  :color="getStudentEvaluationStatus(student).color"
-                  size="sm"
-                  variant="subtle"
-                  class="font-medium inline-flex items-center gap-1.5 px-2.5 py-1"
-                  :title="getStudentEvaluationStatus(student).description"
-                >
-                  <UIcon
-                    :name="getStudentEvaluationStatus(student).icon"
-                    class="size-3.5 shrink-0"
-                  />
-                  <span>{{ getStudentEvaluationStatus(student).label }}</span>
-                </UBadge>
+              <!-- 5. สถานประกอบการ / ผู้ประเมิน / ที่ตั้งบริษัท -->
+              <td class="py-3 px-4">
+                <div class="space-y-1">
+                  <p class="font-medium text-highlighted text-xs leading-snug">
+                    {{ getCompanyDisplay(student) }}
+                  </p>
+
+                  <!-- คนทำแบบประเมิน & อีเมล (อยู่ใต้สถานที่ประกอบการ และอยู่ข้างบนที่ตั้งบริษัท) -->
+                  <div
+                    v-if="student.evaluatorName || student.evaluatorEmail"
+                    class="space-y-0.5"
+                  >
+                    <p
+                      v-if="student.evaluatorName"
+                      class="text-[11px] text-primary font-medium flex items-center gap-1 leading-tight"
+                    >
+                      <UIcon
+                        name="i-lucide-user-check"
+                        class="size-3 shrink-0"
+                      />
+                      <span class="truncate">{{ student.evaluatorName }}</span>
+                    </p>
+                    <p
+                      v-if="student.evaluatorEmail"
+                      class="text-[10px] text-muted font-mono flex items-center gap-1 leading-tight"
+                    >
+                      <UIcon
+                        name="i-lucide-mail"
+                        class="size-3 shrink-0 text-muted"
+                      />
+                      <span class="truncate">{{ student.evaluatorEmail }}</span>
+                    </p>
+                  </div>
+                  <div
+                    v-else
+                    class="text-[10px] text-muted/60 italic flex items-center gap-1 leading-tight"
+                  >
+                    <UIcon name="i-lucide-user-x" class="size-2.5 shrink-0" />
+                    <span>ยังไม่ระบุผู้ประเมิน</span>
+                  </div>
+
+                  <!-- ที่ตั้งบริษัท / สาขา / จังหวัด -->
+                  <p
+                    class="text-[11px] text-muted font-normal flex items-center gap-1 leading-tight"
+                  >
+                    <UIcon
+                      name="i-lucide-map-pin"
+                      class="size-3 shrink-0 text-muted/70"
+                    />
+                    <span class="truncate">{{
+                      getCompanyAddressDisplay(student)
+                    }}</span>
+                  </p>
+                </div>
               </td>
 
-              <!-- Column 8: อัปเดตล่าสุด & วันเวลาที่สร้าง -->
-              <td class="text-xs whitespace-nowrap">
+              <!-- 6. สถานะประเมิน -->
+              <td class="py-3 px-4">
+                <div class="space-y-1">
+                  <UBadge
+                    :color="getStudentEvaluationStatus(student).color"
+                    size="xs"
+                    variant="subtle"
+                    class="font-semibold flex items-center gap-1 w-fit"
+                    :title="getStudentEvaluationStatus(student).description"
+                  >
+                    <UIcon
+                      :name="getStudentEvaluationStatus(student).icon"
+                      class="size-3 shrink-0"
+                    />
+                    <span>{{ getStudentEvaluationStatus(student).label }}</span>
+                  </UBadge>
+                </div>
+              </td>
+
+              <!-- 7. อัปเดตล่าสุด / วันที่สร้าง -->
+              <td class="py-3 px-4 text-xs whitespace-nowrap">
                 <span
                   class="block font-medium text-highlighted"
                   title="อัปเดตล่าสุด"
@@ -1947,8 +2374,8 @@ function copyInvitationLink() {
                 </span>
               </td>
 
-              <!-- Column 9: การจัดการ (3 dots dropdown menu ตามภาพที่ 1) -->
-              <td class="text-right" @click.stop>
+              <!-- 8. จัดการ -->
+              <td class="py-3 px-4 text-right" @click.stop>
                 <div class="flex items-center justify-end">
                   <UDropdownMenu
                     :items="getStudentMenuItems(student)"
@@ -1969,15 +2396,16 @@ function copyInvitationLink() {
 
             <tr v-if="!pending && !data?.items.length">
               <td class="py-12 text-center text-muted" colspan="8">
-                <UIcon
-                  name="i-lucide-users"
-                  class="mx-auto mb-2 size-8 text-muted"
-                />
-                <p class="font-medium">ไม่พบข้อมูลนักศึกษาตามเงื่อนไข</p>
-                <p class="text-xs text-muted">
-                  คลิกปุ่ม &quot;นำเข้าจาก Excel&quot; หรือ
-                  &quot;เพิ่มข้อมูลด้วยตัวเอง&quot; เพื่อเพิ่มนักศึกษา
-                </p>
+                <div class="flex flex-col items-center justify-center gap-2">
+                  <UIcon name="i-lucide-users" class="size-8 text-muted" />
+                  <p class="text-sm font-semibold text-highlighted">
+                    ไม่พบข้อมูลนักศึกษาตามเงื่อนไข
+                  </p>
+                  <p class="text-xs text-muted">
+                    คลิกปุ่ม &quot;นำเข้าจาก Excel&quot; หรือ
+                    &quot;เพิ่มข้อมูลด้วยตัวเอง&quot; เพื่อเพิ่มนักศึกษา
+                  </p>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -1990,7 +2418,7 @@ function copyInvitationLink() {
         :total="data?.meta?.total ?? 0"
         items-name="คน"
       />
-    </UCard>
+    </div>
 
     <!-- ================================================================= -->
     <!-- MODAL 1: MANUAL ADD STUDENT (เพิ่มข้อมูลด้วยตัวเอง)                -->
@@ -2127,44 +2555,26 @@ function copyInvitationLink() {
                 </select>
               </div>
 
-              <!-- Semester & Province Selection (2-Column Subgrid) -->
+              <!-- Academic Term & Province Selection (2-Column Subgrid) -->
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label
                     class="block text-xs font-semibold text-highlighted mb-1.5"
                   >
-                    ภาคการศึกษา (Semester)
+                    รอบ/ภาคการศึกษาฝึกงาน (Term)
                   </label>
                   <select
-                    v-model="manualForm.semester"
-                    class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors"
+                    v-model="manualForm.academicTermId"
+                    class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
                   >
+                    <option value="">-- ยังไม่ระบุรอบฝึกงาน --</option>
                     <option
-                      v-for="t in termsData?.items"
-                      :key="t.id"
-                      :value="t.code"
+                      v-for="term in termsData?.items ?? []"
+                      :key="term.id"
+                      :value="term.id"
                     >
-                      {{ formatSemesterText(t.code) }}
-                    </option>
-                    <option value="1/2566">ภาคการศึกษาที่ 1/2566</option>
-                    <option value="2/2566">ภาคการศึกษาที่ 2/2566</option>
-                    <option value="3/2566">
-                      ภาคการศึกษาที่ 3/2566 (ภาคฤดูร้อน)
-                    </option>
-                    <option value="1/2567">ภาคการศึกษาที่ 1/2567</option>
-                    <option value="2/2567">ภาคการศึกษาที่ 2/2567</option>
-                    <option value="3/2567">
-                      ภาคการศึกษาที่ 3/2567 (ภาคฤดูร้อน)
-                    </option>
-                    <option value="1/2568">ภาคการศึกษาที่ 1/2568</option>
-                    <option value="2/2568">ภาคการศึกษาที่ 2/2568</option>
-                    <option value="3/2568">
-                      ภาคการศึกษาที่ 3/2568 (ภาคฤดูร้อน)
-                    </option>
-                    <option value="1/2569">ภาคการศึกษาที่ 1/2569</option>
-                    <option value="2/2569">ภาคการศึกษาที่ 2/2569</option>
-                    <option value="3/2569">
-                      ภาคการศึกษาที่ 3/2569 (ภาคฤดูร้อน)
+                      {{ term.code }} — {{ term.semester }}
+                      {{ term.academicYear }}
                     </option>
                   </select>
                 </div>
@@ -2458,7 +2868,7 @@ function copyInvitationLink() {
             <input
               ref="excelFileInput"
               type="file"
-              accept=".xlsx, .xls, .csv"
+              accept=".xlsx,.csv"
               class="hidden"
               @change="handleExcelFileUpload"
             />
@@ -2470,55 +2880,29 @@ function copyInvitationLink() {
               }}
             </p>
             <p class="text-[11px] text-muted mt-0.5">
-              รองรับไฟล์ .xlsx, .xls และ .csv
+              รองรับไฟล์ .xlsx และ .csv (ไม่เกิน 5 MB)
             </p>
           </div>
         </div>
 
-        <!-- Fallback Defaults if Excel missing school/program -->
         <div
-          v-if="parsedRows.length > 0"
-          class="rounded-xl border border-default bg-muted/10 p-3 text-xs flex flex-wrap items-center gap-3"
+          v-if="importQuestionFields.length > 0"
+          class="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-xs text-muted"
         >
-          <span class="font-semibold text-highlighted"
-            >สำนักวิชาและหลักสูตรเริ่มต้น (กรณีแถวใดไม่ระบุ):</span
-          >
-          <div class="flex items-center gap-2">
-            <select
-              v-model="defaultSchoolId"
-              class="h-8 rounded border border-default bg-default px-2 text-xs text-highlighted focus:outline-none"
-            >
-              <option v-for="s in schoolsData?.items" :key="s.id" :value="s.id">
-                {{ s.name.th }}
-              </option>
-            </select>
-            <select
-              v-model="defaultProgramId"
-              class="h-8 rounded border border-default bg-default px-2 text-xs text-highlighted focus:outline-none"
-            >
-              <option
-                v-for="p in programsData?.items"
-                :key="p.id"
-                :value="p.id"
-              >
-                {{ p.name.th }}
-              </option>
-            </select>
-          </div>
+          พบคอลัมน์คำถาม/คะแนน ({{ importQuestionFields.length }} คอลัมน์):
+          {{ importQuestionFields.join(', ') }} — รอบนี้จะไม่นำไปสร้างผลประเมิน
+          ต้องจัดการแบบประเมินแยกในระบบ
         </div>
 
         <!-- Preview Table -->
         <div v-if="parsedRows.length > 0" class="space-y-2">
           <div class="flex items-center justify-between">
             <span class="text-xs font-bold text-highlighted">
-              รายการที่อ่านได้จากไฟล์ ({{ parsedRows.length }} รายการ):
+              รายการตรวจสอบจากไฟล์ ({{ parsedRows.length }} รายการ):
             </span>
-            <span
-              class="text-xs font-semibold text-emerald-600 dark:text-emerald-400"
-            >
-              พร้อมนำเข้า:
-              {{ parsedRows.filter((r) => r.status === 'valid').length }} /
-              {{ parsedRows.length }} รายการ
+            <span class="text-xs font-semibold text-primary">
+              เลือกนำเข้า {{ selectedImportCount }} รายการ ·
+              ต้องยืนยันแถวอัปเดตแยกต่างหาก
             </span>
           </div>
 
@@ -2528,6 +2912,7 @@ function copyInvitationLink() {
             <table class="w-full text-left text-xs border-collapse">
               <thead class="bg-muted/40 sticky top-0 border-b border-default">
                 <tr>
+                  <th class="p-2 w-10 text-center">เลือก</th>
                   <th class="p-2 w-10 text-center">#</th>
                   <th class="p-2">รหัส</th>
                   <th class="p-2">ชื่อ-นามสกุล</th>
@@ -2541,75 +2926,159 @@ function copyInvitationLink() {
               <tbody class="divide-y divide-default">
                 <tr
                   v-for="(row, idx) in paginatedParsedRows"
-                  :key="idx"
+                  :key="row.id"
                   class="hover:bg-muted/10"
                   :class="
-                    row.status === 'invalid'
+                    row.action === 'invalid'
                       ? 'bg-rose-50/40 dark:bg-rose-950/20'
-                      : ''
+                      : row.action === 'update'
+                        ? 'bg-amber-50/40 dark:bg-amber-950/10'
+                        : ''
                   "
                 >
+                  <td class="p-2 text-center">
+                    <input
+                      v-model="row.selected"
+                      type="checkbox"
+                      :disabled="
+                        row.status !== 'pending' ||
+                        (row.action !== 'create' && row.action !== 'update')
+                      "
+                      :aria-label="`ยืนยันนำเข้า ${row.student?.studentId ?? 'แถว'}`"
+                    />
+                  </td>
                   <td class="p-2 text-center font-mono text-muted">
                     {{
                       (excelPreviewPage - 1) * excelPreviewPageSize + idx + 1
                     }}
                   </td>
                   <td class="p-2 font-mono font-bold text-highlighted">
-                    {{ row.studentId }}
+                    {{ row.student?.studentId || '-' }}
                   </td>
                   <td class="p-2">
-                    <span class="block text-highlighted">{{ row.nameTh }}</span>
-                    <span class="text-[10px] text-muted">{{ row.nameEn }}</span>
+                    <span class="block text-highlighted">{{
+                      row.student?.name.th || '-'
+                    }}</span>
+                    <span class="text-[10px] text-muted">{{
+                      row.student?.name.en || ''
+                    }}</span>
                   </td>
-                  <td class="p-2 font-mono text-muted">{{ row.email }}</td>
+                  <td class="p-2 font-mono text-muted">
+                    {{ row.student?.email || '-' }}
+                  </td>
                   <td class="p-2">
                     <span class="font-semibold text-highlighted">{{
-                      row.programCode || 'Default'
+                      row.student?.programReference ||
+                      getProgramDisplay(row.student?.programId || '')
                     }}</span>
                     <span class="text-muted text-[10px] ml-1"
-                      >({{ row.schoolCode || 'Default' }})</span
+                      >({{
+                        row.student?.schoolReference ||
+                        getSchoolDisplay(row.student?.schoolId || '')
+                      }})</span
                     >
                   </td>
                   <td class="p-2">
                     <span
                       class="font-mono text-xs font-semibold text-highlighted block"
                     >
-                      {{ row.semester || '-' }}
+                      {{ row.student?.semester || '-' }}
                     </span>
                     <span
-                      v-if="row.courseCode"
+                      v-if="row.student?.course"
                       class="text-[10px] text-muted block"
                     >
-                      {{ row.courseCode }}
+                      {{ row.student.course }}
                     </span>
                   </td>
                   <td class="p-2 text-xs truncate max-w-[160px]">
                     <span class="block text-highlighted font-medium truncate">
-                      {{ row.company || '-' }}
+                      {{ row.student?.company || '-' }}
                     </span>
                     <span
-                      v-if="row.province"
+                      v-if="row.student?.province"
                       class="text-[10px] text-muted block"
                     >
-                      📍 {{ row.province }}
+                      📍 {{ row.student.province }}
                     </span>
                   </td>
                   <td class="p-2 text-center">
                     <UBadge
-                      v-if="row.status === 'valid'"
+                      v-if="row.status === 'committed'"
                       color="success"
-                      label="พร้อมนำเข้า"
+                      :label="
+                        row.outcome === 'created' ? 'เพิ่มแล้ว' : 'อัปเดตแล้ว'
+                      "
+                      size="xs"
+                      variant="subtle"
+                    />
+                    <UBadge
+                      v-else-if="row.action === 'invalid'"
+                      color="error"
+                      label="ข้อมูลไม่ครบ"
+                      size="xs"
+                      variant="subtle"
+                    />
+                    <UBadge
+                      v-else-if="row.action === 'update'"
+                      color="warning"
+                      label="มีส่วนต่าง"
+                      size="xs"
+                      variant="subtle"
+                    />
+                    <UBadge
+                      v-else-if="row.action === 'unchanged'"
+                      color="neutral"
+                      label="ไม่เปลี่ยน"
                       size="xs"
                       variant="subtle"
                     />
                     <UBadge
                       v-else
-                      color="error"
-                      :label="row.errorMessage || 'ข้อผิดพลาด'"
+                      color="primary"
+                      label="เพิ่มใหม่"
                       size="xs"
                       variant="subtle"
-                      :title="row.errorMessage"
                     />
+                  </td>
+                </tr>
+                <tr
+                  v-for="row in paginatedParsedRows.filter(
+                    (item) =>
+                      item.issues.length ||
+                      item.warnings.length ||
+                      item.changes.length
+                  )"
+                  :key="`${row.id}:details`"
+                  class="border-b border-default bg-muted/10"
+                >
+                  <td colspan="9" class="px-4 pb-3 pt-1 text-[11px] text-muted">
+                    <p
+                      v-for="issue in row.issues"
+                      :key="issue.code"
+                      class="text-error"
+                    >
+                      {{ issue.message }}
+                    </p>
+                    <p
+                      v-for="warning in row.warnings"
+                      :key="warning.code"
+                      class="text-warning"
+                    >
+                      {{ warning.message }}
+                    </p>
+                    <p
+                      v-for="change in row.changes"
+                      :key="change.field"
+                      class="text-highlighted"
+                    >
+                      {{ importFieldLabel(change.field) }}:
+                      {{ importDiffValue(change.before) }} →
+                      {{ importDiffValue(change.after) }}
+                    </p>
+                    <p v-if="row.action === 'update'">
+                      ยืนยันเฉพาะแถวนี้เพื่อใช้ค่าที่แสดงด้านบนแทนข้อมูลปัจจุบัน
+                    </p>
                   </td>
                 </tr>
               </tbody>
@@ -2638,11 +3107,9 @@ function copyInvitationLink() {
             v-if="parsedRows.length > 0"
             color="primary"
             icon="i-lucide-upload"
-            :label="`ยืนยันนำเข้าข้อมูล (${parsedRows.filter((r) => r.status === 'valid').length} รายการ)`"
+            :label="`ยืนยันนำเข้าข้อมูล (${selectedImportCount} รายการ)`"
             :loading="isExcelImporting"
-            :disabled="
-              parsedRows.filter((r) => r.status === 'valid').length === 0
-            "
+            :disabled="selectedImportCount === 0"
             @click="handleExecuteExcelImport"
           />
         </div>
@@ -2695,7 +3162,7 @@ function copyInvitationLink() {
         <form class="space-y-6" @submit.prevent="handleEditSubmit">
           <!-- 2 Columns Grid -->
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <!-- คอลัมน์ที่ 1: ข้อมูลหลักสูตรและการฝึกงาน -->
+            <!-- คอลัมน์ที่ 1: ข้อมูลสถานประกอบการและหลักสูตร -->
             <div
               class="rounded-2xl border border-default/70 bg-muted/15 dark:bg-muted/10 p-5 sm:p-6 space-y-4 shadow-sm"
             >
@@ -2703,13 +3170,128 @@ function copyInvitationLink() {
                 class="flex items-center gap-2.5 pb-3 border-b border-default text-xs font-bold uppercase tracking-wider text-primary"
               >
                 <UIcon
-                  name="i-lucide-briefcase"
+                  name="i-lucide-building-2"
                   class="size-4.5 text-primary"
                 />
-                <span>ข้อมูลหลักสูตรและการฝึกงาน (Internship Info)</span>
+                <span
+                  >ข้อมูลสถานประกอบการและหลักสูตร (Internship & Course
+                  Info)</span
+                >
               </div>
 
-              <!-- School Selection -->
+              <!-- 1. สถานประกอบการ -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  สถานประกอบการ (Company / หน่วยงานที่ฝึกงาน)
+                </label>
+                <UInput
+                  v-model="editForm.company"
+                  placeholder="เช่น บริษัท ดิจิทัล โซลูชั่นส์ จำกัด หรือ สวทช."
+                  size="lg"
+                  class="w-full"
+                  icon="i-lucide-building-2"
+                />
+              </div>
+
+              <!-- 2. ชื่อผู้ประเมิน / พี่เลี้ยง -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  ชื่อผู้ประเมิน / พี่เลี้ยง (Evaluator / Mentor Name)
+                </label>
+                <UInput
+                  v-model="editForm.evaluatorName"
+                  placeholder="เช่น นายสมบูรณ์ หัวหน้างาน หรือ พี่เลี้ยงฝึกงาน"
+                  size="lg"
+                  class="w-full"
+                  icon="i-lucide-user-check"
+                />
+              </div>
+
+              <!-- 3. อีเมลผู้ประเมิน / HR -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  อีเมลผู้ประเมิน / HR (Evaluator Email)
+                </label>
+                <UInput
+                  v-model="editForm.evaluatorEmail"
+                  type="email"
+                  placeholder="เช่น evaluator@workplace.co.th หรือ hr@company.com"
+                  size="lg"
+                  class="w-full font-mono"
+                  icon="i-lucide-mail"
+                />
+                <p class="text-[11px] text-muted mt-1">
+                  อีเมลผู้ดูแลหรือฝ่ายบุคคลของสถานประกอบการสำหรับรับลิงก์ทำแบบประเมิน
+                </p>
+              </div>
+
+              <!-- 4. สาขา / ที่ตั้งสถานประกอบการ -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  สาขา / ที่ตั้งสถานประกอบการ (Branch / Location)
+                </label>
+                <UInput
+                  v-model="editForm.companyAddress"
+                  placeholder="เช่น สำนักงานใหญ่ หรือ 99/1 ถ.พหลโยธิน"
+                  size="lg"
+                  class="w-full"
+                  icon="i-lucide-map-pin"
+                />
+              </div>
+
+              <!-- 3. จังหวัดที่ฝึกงาน -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  จังหวัดที่ฝึกงาน (Province)
+                </label>
+                <select
+                  v-model="editForm.province"
+                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                >
+                  <option value="">-- ไม่ระบุ / เลือกจังหวัด --</option>
+                  <option
+                    v-if="
+                      editForm.province &&
+                      !isProvinceInMaster(editForm.province)
+                    "
+                    :value="editForm.province"
+                  >
+                    {{ editForm.province }} (เดิม)
+                  </option>
+                  <optgroup
+                    v-for="reg in provinceRegions"
+                    :key="reg"
+                    :label="reg"
+                  >
+                    <option
+                      v-for="prov in getProvincesByRegion(reg)"
+                      :key="prov.id || prov.code"
+                      :value="prov.nameTh"
+                    >
+                      {{ prov.nameTh }} ({{ prov.nameEn }})
+                    </option>
+                  </optgroup>
+                  <option
+                    v-for="prov in getProvincesWithoutRegion()"
+                    :key="prov.id || prov.code"
+                    :value="prov.nameTh"
+                  >
+                    {{ prov.nameTh }} ({{ prov.nameEn }})
+                  </option>
+                </select>
+              </div>
+
+              <!-- 4. สำนักวิชา -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2731,7 +3313,7 @@ function copyInvitationLink() {
                 </select>
               </div>
 
-              <!-- Program Selection -->
+              <!-- 5. สาขาวิชา / หลักสูตร -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2754,7 +3336,7 @@ function copyInvitationLink() {
                 </select>
               </div>
 
-              <!-- Course Selection (Full Width) -->
+              <!-- 6. รายวิชาที่ฝึกงาน -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2777,110 +3359,45 @@ function copyInvitationLink() {
                 </select>
               </div>
 
-              <!-- Semester & Province Selection (2-Column Subgrid) -->
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label
-                    class="block text-xs font-semibold text-highlighted mb-1.5"
-                  >
-                    ภาคการศึกษา (Semester)
-                  </label>
-                  <select
-                    v-model="editForm.semester"
-                    class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors"
-                  >
-                    <option
-                      v-for="t in termsData?.items"
-                      :key="t.id"
-                      :value="t.code"
-                    >
-                      {{ formatSemesterText(t.code) }}
-                    </option>
-                    <option value="1/2566">ภาคการศึกษาที่ 1/2566</option>
-                    <option value="2/2566">ภาคการศึกษาที่ 2/2566</option>
-                    <option value="3/2566">
-                      ภาคการศึกษาที่ 3/2566 (ภาคฤดูร้อน)
-                    </option>
-                    <option value="1/2567">ภาคการศึกษาที่ 1/2567</option>
-                    <option value="2/2567">ภาคการศึกษาที่ 2/2567</option>
-                    <option value="3/2567">
-                      ภาคการศึกษาที่ 3/2567 (ภาคฤดูร้อน)
-                    </option>
-                    <option value="1/2568">ภาคการศึกษาที่ 1/2568</option>
-                    <option value="2/2568">ภาคการศึกษาที่ 2/2568</option>
-                    <option value="3/2568">
-                      ภาคการศึกษาที่ 3/2568 (ภาคฤดูร้อน)
-                    </option>
-                    <option value="1/2569">ภาคการศึกษาที่ 1/2569</option>
-                    <option value="2/2569">ภาคการศึกษาที่ 2/2569</option>
-                    <option value="3/2569">
-                      ภาคการศึกษาที่ 3/2569 (ภาคฤดูร้อน)
-                    </option>
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    class="block text-xs font-semibold text-highlighted mb-1.5"
-                  >
-                    จังหวัดที่ฝึกงาน (Province)
-                  </label>
-                  <select
-                    v-model="editForm.province"
-                    class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                  >
-                    <option value="">-- ไม่ระบุ / เลือกจังหวัด --</option>
-                    <option
-                      v-if="
-                        editForm.province &&
-                        !isProvinceInMaster(editForm.province)
-                      "
-                      :value="editForm.province"
-                    >
-                      {{ editForm.province }} (เดิม)
-                    </option>
-                    <optgroup
-                      v-for="reg in provinceRegions"
-                      :key="reg"
-                      :label="reg"
-                    >
-                      <option
-                        v-for="prov in getProvincesByRegion(reg)"
-                        :key="prov.id || prov.code"
-                        :value="prov.nameTh"
-                      >
-                        {{ prov.nameTh }} ({{ prov.nameEn }})
-                      </option>
-                    </optgroup>
-                    <option
-                      v-for="prov in getProvincesWithoutRegion()"
-                      :key="prov.id || prov.code"
-                      :value="prov.nameTh"
-                    >
-                      {{ prov.nameTh }} ({{ prov.nameEn }})
-                    </option>
-                  </select>
-                </div>
-              </div>
-
-              <!-- Company Selection (Full Width) -->
+              <!-- 7. ภาคการศึกษา -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
                 >
-                  สถานประกอบการ (Company / หน่วยงานที่ฝึกงาน)
+                  ภาคการศึกษา (Semester)
                 </label>
-                <UInput
-                  v-model="editForm.company"
-                  placeholder="เช่น บริษัท ดิจิทัล โซลูชั่นส์ จำกัด หรือ สวทช."
-                  size="lg"
-                  class="w-full"
-                  icon="i-lucide-building-2"
-                />
+                <select
+                  v-model="editForm.semester"
+                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                >
+                  <option value="" disabled>-- เลือกภาคการศึกษา --</option>
+                  <option
+                    v-if="
+                      editForm.semester &&
+                      ![
+                        'ภาคการศึกษาต้น',
+                        'ภาคการศึกษาปลาย',
+                        'ภาคการศึกษาฤดูร้อน'
+                      ].includes(editForm.semester)
+                    "
+                    :value="editForm.semester"
+                  >
+                    {{ formatSemesterText(editForm.semester) }}
+                  </option>
+                  <option value="ภาคการศึกษาต้น">
+                    ภาคการศึกษาที่ 1 (ภาคการศึกษาต้น)
+                  </option>
+                  <option value="ภาคการศึกษาปลาย">
+                    ภาคการศึกษาที่ 2 (ภาคการศึกษาปลาย)
+                  </option>
+                  <option value="ภาคการศึกษาฤดูร้อน">
+                    ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)
+                  </option>
+                </select>
               </div>
             </div>
 
-            <!-- คอลัมน์ที่ 2: ข้อมูลส่วนตัวและสถานะ -->
+            <!-- คอลัมน์ที่ 2: ข้อมูลส่วนตัวและการศึกษา -->
             <div
               class="rounded-2xl border border-default/70 bg-muted/15 dark:bg-muted/10 p-5 sm:p-6 space-y-4 shadow-sm"
             >
@@ -2888,10 +3405,10 @@ function copyInvitationLink() {
                 class="flex items-center gap-2.5 pb-3 border-b border-default text-xs font-bold uppercase tracking-wider text-primary"
               >
                 <UIcon name="i-lucide-user" class="size-4.5 text-primary" />
-                <span>ข้อมูลส่วนตัวและสถานะ (Personal Info)</span>
+                <span>ข้อมูลส่วนตัวและการศึกษา (Personal & Academic Info)</span>
               </div>
 
-              <!-- Student ID (Readonly) -->
+              <!-- 1. รหัสนักศึกษา (Readonly) -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2907,7 +3424,41 @@ function copyInvitationLink() {
                 />
               </div>
 
-              <!-- Thai Name -->
+              <!-- 2. ปีการศึกษา และ ปีที่เข้าศึกษา (2-Column Subgrid) -->
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label
+                    class="block text-xs font-semibold text-highlighted mb-1.5"
+                  >
+                    ปีการศึกษา (Academic Year)
+                  </label>
+                  <UInput
+                    v-model.number="editForm.academicYear"
+                    type="number"
+                    placeholder="2569"
+                    size="lg"
+                    class="w-full font-mono"
+                    icon="i-lucide-calendar"
+                  />
+                </div>
+                <div>
+                  <label
+                    class="block text-xs font-semibold text-highlighted mb-1.5"
+                  >
+                    ปีที่เข้าศึกษา (Admission Year)
+                  </label>
+                  <UInput
+                    v-model.number="editForm.admissionYear"
+                    type="number"
+                    placeholder="2565"
+                    size="lg"
+                    class="w-full font-mono"
+                    icon="i-lucide-calendar-days"
+                  />
+                </div>
+              </div>
+
+              <!-- 3. ชื่อ-นามสกุล (ภาษาไทย) -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2923,7 +3474,7 @@ function copyInvitationLink() {
                 />
               </div>
 
-              <!-- English Name -->
+              <!-- 4. Full Name (English) -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2939,7 +3490,7 @@ function copyInvitationLink() {
                 />
               </div>
 
-              <!-- Email: เมลนักศึกษาอยู่ข้างบน -->
+              <!-- 5. อีเมลนักศึกษา (Student Email) -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2961,7 +3512,7 @@ function copyInvitationLink() {
                 </p>
               </div>
 
-              <!-- Email: เมลส่วนตัวอยู่ข้างล่าง -->
+              <!-- 6. อีเมลส่วนตัว (Personal Email) -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2979,37 +3530,6 @@ function copyInvitationLink() {
                 <p class="text-[11px] text-muted mt-1">
                   อีเมลส่วนตัวหรืออีเมลสำรองสำหรับติดต่อ (เช่น Gmail, Outlook)
                 </p>
-              </div>
-
-              <!-- Admission Year & Status -->
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label
-                    class="block text-xs font-semibold text-highlighted mb-1.5"
-                  >
-                    ปีที่เข้าศึกษา (Year)
-                  </label>
-                  <UInput
-                    v-model.number="editForm.admissionYear"
-                    type="number"
-                    placeholder="2566"
-                    size="lg"
-                    class="w-full font-mono"
-                  />
-                </div>
-                <div>
-                  <label
-                    class="block text-xs font-semibold text-highlighted mb-1.5"
-                  >
-                    สถานะ (Status)
-                  </label>
-                  <select
-                    v-model="editForm.status"
-                    class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors"
-                  >
-                    <option value="active">Active (กำลังศึกษา / ปกติ)</option>
-                  </select>
-                </div>
               </div>
             </div>
           </div>
@@ -3044,15 +3564,27 @@ function copyInvitationLink() {
     <div
       v-if="isSendEmailModalOpen"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
-      @click="isSendEmailModalOpen = false"
+      @click="handleModalBackdropClick"
     >
       <div
-        class="w-full max-w-5xl rounded-2xl border border-default bg-default p-6 shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto"
+        class="w-full rounded-2xl border border-default bg-elevated shadow-2xl overflow-hidden flex flex-col max-h-[94vh] transition-all duration-300"
+        :class="[
+          (isSendingEvaluationEmail && sendEmailModalMode === 'single') ||
+          sendEmailSuccessData
+            ? 'max-w-md sm:max-w-lg'
+            : bulkSendSuccessData
+              ? 'max-w-4xl'
+              : 'max-w-[1440px]'
+        ]"
         @click.stop
       >
-        <!-- Modal Header -->
+        <!-- Modal Header (only visible during configuration form or bulk success) -->
         <div
-          class="flex items-center justify-between border-b border-default pb-4"
+          v-if="
+            !sendEmailSuccessData &&
+            !(isSendingEvaluationEmail && sendEmailModalMode === 'single')
+          "
+          class="flex items-center justify-between border-b border-default px-6 py-4 bg-muted/20 shrink-0"
         >
           <div class="flex items-center gap-3">
             <span
@@ -3061,16 +3593,42 @@ function copyInvitationLink() {
               <UIcon name="i-lucide-mail" class="size-5" />
             </span>
             <div>
-              <h2 class="text-lg font-bold text-highlighted">
-                ส่งแบบประเมินผลการฝึกงานทางอีเมล
-              </h2>
+              <div class="flex items-center gap-2">
+                <h2 class="text-base sm:text-lg font-bold text-highlighted">
+                  {{
+                    sendEmailModalMode === 'bulk'
+                      ? 'ส่งแบบประเมินผลการฝึกงานหลายคน (Bulk Evaluation Dispatch)'
+                      : 'ส่งแบบประเมินผลการฝึกงานทางอีเมล'
+                  }}
+                </h2>
+                <UBadge
+                  color="primary"
+                  variant="subtle"
+                  size="xs"
+                  :label="
+                    sendEmailModalMode === 'bulk'
+                      ? `เลือกอยู่ ${bulkModalStudents.length} คน`
+                      : 'Evaluation Dispatch'
+                  "
+                />
+              </div>
               <p class="text-xs text-muted">
-                ส่งลิงก์แบบประเมินให้แก่ผู้ดูแล / สถานประกอบการสำหรับนักศึกษา
-                <strong class="text-highlighted">
-                  {{ sendModalStudent?.name.th }} ({{
-                    sendModalStudent?.studentId
-                  }})
-                </strong>
+                <template v-if="sendEmailModalMode === 'bulk'">
+                  ส่งลิงก์แบบประเมินให้แก่ผู้ดูแล /
+                  สถานประกอบการของนักศึกษาที่เลือกจำนวน
+                  <strong class="text-highlighted"
+                    >{{ bulkModalStudents.length }} คน</strong
+                  >
+                  พร้อมกัน
+                </template>
+                <template v-else>
+                  ส่งลิงก์แบบประเมินให้แก่ผู้ดูแล / สถานประกอบการสำหรับนักศึกษา
+                  <strong class="text-highlighted">
+                    {{ sendModalStudent?.name.th }} ({{
+                      sendModalStudent?.studentId
+                    }})
+                  </strong>
+                </template>
               </p>
             </div>
           </div>
@@ -3079,74 +3637,292 @@ function copyInvitationLink() {
             icon="i-lucide-x"
             size="sm"
             variant="ghost"
-            @click="isSendEmailModalOpen = false"
+            :disabled="isSendingEvaluationEmail"
+            @click="finishAndCloseSendModal"
           />
         </div>
 
-        <!-- If Success State: Show Sent Success Screen -->
+        <!-- State 1: Sending Loading Animation Screen (Single Mode) -->
         <div
-          v-if="sendEmailSuccessData"
-          class="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-6 space-y-5 text-center"
+          v-if="isSendingEvaluationEmail && sendEmailModalMode === 'single'"
+          class="p-8 sm:p-10 flex flex-col items-center justify-center text-center space-y-6"
         >
-          <div
-            class="grid size-14 place-items-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 mx-auto"
-          >
-            <UIcon name="i-lucide-check-circle-2" class="size-8" />
+          <!-- Animated Spinner with Send Icon -->
+          <div class="relative size-24 flex items-center justify-center">
+            <div
+              class="absolute inset-0 rounded-full border-4 border-primary/20"
+            ></div>
+            <div
+              class="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin"
+            ></div>
+            <UIcon
+              name="i-lucide-send"
+              class="size-10 text-primary animate-pulse"
+            />
           </div>
-          <div class="space-y-1">
+
+          <div class="space-y-2">
             <h3 class="text-xl font-bold text-highlighted">
-              ส่งอีเมลแบบประเมินสำเร็จ!
+              กำลังส่งแบบประเมิน...
             </h3>
-            <p class="text-sm text-muted">
-              ระบบได้ส่งลิงก์แบบประเมินสำหรับนักศึกษา
-              <strong class="text-highlighted">{{
-                sendEmailSuccessData.studentName
-              }}</strong>
-              ไปยังอีเมล
-              <strong class="text-highlighted">{{
-                sendEmailSuccessData.recipientEmail
-              }}</strong>
-              เรียบร้อยแล้ว
+            <p class="text-sm text-muted max-w-sm mx-auto leading-relaxed">
+              ระบบกำลังสร้างชุดข้อสอบและส่งลิงก์แบบประเมินไปยัง
+              <span class="font-mono font-semibold text-highlighted block mt-1">
+                {{ sendEmailForm.recipientEmail }}
+              </span>
             </p>
           </div>
 
-          <!-- Direct Link Box -->
           <div
-            class="rounded-xl border border-default bg-default p-4 text-left space-y-2 max-w-2xl mx-auto shadow-sm"
+            class="inline-flex items-center gap-2 text-xs text-muted bg-muted/40 px-3.5 py-1.5 rounded-full border border-default/50"
           >
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold text-highlighted"
-                >ลิงก์สำหรับทำแบบประเมิน (Secure Evaluation URL):</span
+            <UIcon
+              name="i-lucide-loader-2"
+              class="size-3.5 animate-spin text-primary"
+            />
+            <span>กรุณารอสักครู่ ระบบกำลังประมวลผล...</span>
+          </div>
+        </div>
+
+        <!-- State 2: Compact Animated Success Screen (Single Mode) -->
+        <div
+          v-else-if="sendEmailSuccessData"
+          class="p-6 sm:p-8 space-y-5 text-center relative"
+        >
+          <!-- Top 'X' Close Button -->
+          <div class="flex justify-end -mt-2 -mr-2">
+            <UButton
+              color="neutral"
+              icon="i-lucide-x"
+              size="sm"
+              variant="ghost"
+              @click="finishAndCloseSendModal"
+            />
+          </div>
+
+          <!-- Animated Green Checkmark Badge -->
+          <div
+            class="relative size-20 mx-auto flex items-center justify-center"
+          >
+            <div
+              class="absolute inset-0 rounded-full bg-emerald-500/15 animate-ping opacity-60"
+            ></div>
+            <div
+              class="relative grid size-20 place-items-center rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 shadow-lg shadow-emerald-500/10"
+            >
+              <UIcon name="i-lucide-check-circle-2" class="size-10" />
+            </div>
+          </div>
+
+          <!-- Title and Description -->
+          <div class="space-y-1.5">
+            <h3 class="text-xl font-bold text-highlighted">
+              เข้าคิวส่งคำเชิญแล้ว
+            </h3>
+            <p class="text-xs text-muted max-w-md mx-auto leading-relaxed">
+              ระบบรับคำขอและเข้าคิวส่งลิงก์แบบประเมินสำหรับนักศึกษา
+              <strong class="text-highlighted font-semibold">{{
+                sendEmailSuccessData.studentName
+              }}</strong>
+              ไปยังอีเมล
+              <strong class="text-highlighted font-mono">{{
+                sendEmailSuccessData.recipientEmail
+              }}</strong>
+              แล้ว โดยสามารถติดตามผลจริงจากรายการ Delivery
+            </p>
+          </div>
+
+          <!-- Compact Direct Link Box -->
+          <div
+            class="rounded-xl border border-default bg-muted/20 p-3.5 text-left space-y-2 max-w-md mx-auto shadow-2xs"
+          >
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-semibold text-highlighted"
+                >ลิงก์สำหรับทำแบบประเมิน:</span
               >
-              <span class="text-[11px] text-muted"
-                >ใช้เปิดทำแบบประเมินได้ทันที</span
-              >
+              <span class="text-[11px] text-muted">คลิกเพื่อคัดลอก</span>
             </div>
             <div class="flex items-center gap-2">
               <input
                 readonly
                 :value="sendEmailSuccessData.invitationUrl"
-                class="flex-1 h-9 rounded-lg border border-default bg-muted/20 px-3 text-xs font-mono text-highlighted focus:outline-none"
+                class="flex-1 h-8 rounded-lg border border-default bg-default px-3 text-xs font-mono text-highlighted focus:outline-none select-all"
               />
               <UButton
                 color="primary"
+                variant="subtle"
                 icon="i-lucide-copy"
-                label="คัดลอกลิงก์"
-                size="sm"
-                @click="copyInvitationLink"
+                label="คัดลอก"
+                size="xs"
+                @click="copyInvitationLink(sendEmailSuccessData.invitationUrl)"
               />
             </div>
           </div>
 
-          <div class="flex flex-wrap items-center justify-center gap-3 pt-2">
+          <!-- Actions: Prominent 'ตกลง' (Finished) button & secondary actions -->
+          <div class="space-y-2 pt-2 max-w-md mx-auto">
             <UButton
               color="primary"
-              icon="i-lucide-external-link"
-              label="ทดลองเปิดทำแบบประเมิน"
-              size="md"
-              target="_blank"
-              :to="sendEmailSuccessData.invitationUrl"
+              size="lg"
+              block
+              label="ตกลง (เสร็จสิ้น)"
+              icon="i-lucide-check"
+              @click="finishAndCloseSendModal"
             />
+            <div class="flex items-center justify-center gap-3 pt-1">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                icon="i-lucide-external-link"
+                label="ทดลองเปิดทำแบบประเมิน"
+                target="_blank"
+                :to="sendEmailSuccessData.invitationUrl"
+              />
+              <span class="text-muted/40">•</span>
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                icon="i-lucide-inbox"
+                label="ดูประวัติในหน้าการสื่อสาร"
+                to="/app/correspondence"
+                @click="finishAndCloseSendModal"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- If Bulk Success State: Show Sent Success Screen for Bulk -->
+        <div
+          v-else-if="bulkSendSuccessData"
+          class="p-6 overflow-y-auto flex-1 space-y-5 max-w-4xl mx-auto w-full"
+        >
+          <div
+            class="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-6 text-center space-y-3 shadow-sm"
+          >
+            <div
+              class="grid size-14 place-items-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 mx-auto"
+            >
+              <UIcon name="i-lucide-check-circle-2" class="size-8" />
+            </div>
+            <div class="space-y-1">
+              <h3 class="text-xl font-bold text-highlighted">
+                ส่งอีเมลแบบประเมินกลุ่มเรียบร้อยแล้ว
+              </h3>
+              <p class="text-xs text-muted">
+                ส่งสำเร็จทั้งหมด
+                <strong
+                  class="text-emerald-600 dark:text-emerald-400 font-bold"
+                >
+                  {{ bulkSendSuccessData.totalSent }}
+                </strong>
+                จาก {{ bulkSendSuccessData.items.length }} รายการ
+                <span
+                  v-if="bulkSendSuccessData.failedCount > 0"
+                  class="text-rose-500 font-semibold ml-1"
+                >
+                  (ผิดพลาด {{ bulkSendSuccessData.failedCount }} รายการ)
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <!-- Bulk Results Table -->
+          <div
+            class="rounded-xl border border-default bg-default overflow-hidden shadow-xs"
+          >
+            <div class="overflow-x-auto max-h-[360px]">
+              <table class="w-full text-left text-xs">
+                <thead
+                  class="border-b border-default bg-muted/40 font-semibold text-highlighted sticky top-0 bg-default z-10"
+                >
+                  <tr>
+                    <th class="py-2.5 px-3">นักศึกษา</th>
+                    <th class="py-2.5 px-3">สถานประกอบการ</th>
+                    <th class="py-2.5 px-3">ผู้รับ / อีเมล</th>
+                    <th class="py-2.5 px-3 text-center">สถานะ</th>
+                    <th class="py-2.5 px-3 text-right">การดำเนินการ</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-default">
+                  <tr
+                    v-for="item in bulkSendSuccessData.items"
+                    :key="item.studentId"
+                    class="hover:bg-muted/10 transition-colors"
+                  >
+                    <td class="py-2.5 px-3">
+                      <div class="font-semibold text-highlighted">
+                        {{ item.studentName }}
+                      </div>
+                      <div class="text-[11px] font-mono text-muted">
+                        {{ item.studentCode }}
+                      </div>
+                    </td>
+                    <td class="py-2.5 px-3 text-muted">
+                      {{ item.company }}
+                    </td>
+                    <td class="py-2.5 px-3">
+                      <div class="text-highlighted font-medium">
+                        {{ item.evaluatorName }}
+                      </div>
+                      <div class="text-[11px] font-mono text-muted">
+                        {{ item.email }}
+                      </div>
+                    </td>
+                    <td class="py-2.5 px-3 text-center">
+                      <UBadge
+                        v-if="item.success"
+                        color="success"
+                        variant="subtle"
+                        size="xs"
+                        label="ส่งสำเร็จ"
+                        icon="i-lucide-check"
+                      />
+                      <UBadge
+                        v-else
+                        color="error"
+                        variant="subtle"
+                        size="xs"
+                        label="ส่งไม่สำเร็จ"
+                        icon="i-lucide-alert-circle"
+                        :title="item.error"
+                      />
+                    </td>
+                    <td class="py-2.5 px-3 text-right">
+                      <div
+                        v-if="item.invitationUrl"
+                        class="inline-flex items-center gap-1.5 justify-end"
+                      >
+                        <UButton
+                          color="neutral"
+                          variant="ghost"
+                          size="xs"
+                          icon="i-lucide-copy"
+                          title="คัดลอกลิงก์แบบประเมิน"
+                          @click="copyInvitationLink(item.invitationUrl)"
+                        />
+                        <UButton
+                          color="primary"
+                          variant="subtle"
+                          size="xs"
+                          icon="i-lucide-external-link"
+                          label="เปิดลิงก์"
+                          target="_blank"
+                          :to="item.invitationUrl"
+                        />
+                      </div>
+                      <span v-else class="text-[11px] text-rose-500 font-mono">
+                        {{ item.error || 'ผิดพลาด' }}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center justify-center gap-3 pt-2">
             <UButton
               color="neutral"
               icon="i-lucide-inbox"
@@ -3154,51 +3930,56 @@ function copyInvitationLink() {
               size="md"
               variant="outline"
               to="/app/correspondence"
-              @click="isSendEmailModalOpen = false"
+              @click="finishAndCloseSendModal"
             />
             <UButton
-              color="neutral"
-              label="ปิดหน้าต่าง"
+              color="primary"
+              icon="i-lucide-check"
+              label="ตกลง (เสร็จสิ้น)"
               size="md"
-              variant="ghost"
-              @click="isSendEmailModalOpen = false"
+              @click="finishAndCloseSendModal"
             />
           </div>
         </div>
 
-        <!-- Normal State: 2 Panels Form & Live Preview -->
-        <div v-else class="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          <!-- ฝั่งซ้าย (5 คอลัมน์): 1. ตารางเลือกแบบทดสอบ (Select Evaluation Form) -->
-          <div class="lg:col-span-5 space-y-3.5">
+        <!-- Normal State: 3 Columns Grid -->
+        <div
+          v-else
+          class="grid grid-cols-1 lg:grid-cols-12 gap-5 p-6 overflow-y-auto flex-1 items-stretch"
+        >
+          <!-- ============================================================ -->
+          <!-- คอลัมน์ที่ 1 (3 ส่วน): 1. เลือกแบบประเมิน (FORM SELECTION)         -->
+          <!-- ============================================================ -->
+          <div class="lg:col-span-3 flex flex-col space-y-3">
             <div
-              class="flex items-center justify-between border-b border-default pb-2"
+              class="flex items-center justify-between border-b border-default pb-2 shrink-0"
             >
               <div
-                class="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary"
+                class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-primary"
               >
                 <UIcon name="i-lucide-clipboard-list" class="size-4" />
-                <span>1. เลือกแบบประเมิน (Form)</span>
+                <span>1. แบบประเมิน (Form)</span>
               </div>
-              <span class="text-xs text-muted"
-                >{{ evaluationFormsData?.items?.length || 0 }} แบบ</span
+              <span class="text-[11px] text-muted font-medium"
+                >{{ activeCompetencyForms.length }} แบบ</span
               >
             </div>
 
             <!-- List of Forms -->
-            <div class="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
+            <div class="space-y-2.5 overflow-y-auto pr-1 flex-1 max-h-[560px]">
               <div
-                v-for="form in evaluationFormsData?.items"
+                v-for="form in activeCompetencyForms"
                 :key="form.id"
-                class="rounded-xl border p-3.5 cursor-pointer transition-all hover:border-primary/50"
+                class="rounded-xl border p-3.5 cursor-pointer transition-all hover:border-primary/50 shadow-2xs"
                 :class="
                   selectedCompetencySet?.id === form.id
-                    ? 'border-primary bg-primary/[0.05] ring-2 ring-primary/20'
-                    : 'border-default bg-default hover:bg-muted/10'
+                    ? 'border-primary bg-primary/[0.06] ring-2 ring-primary/25'
+                    : 'border-default bg-default hover:bg-muted/15'
                 "
                 @click="selectCompetencyForm(form)"
               >
                 <div class="flex items-start justify-between gap-2">
-                  <div class="space-y-1">
+                  <div class="space-y-1.5 min-w-0">
                     <div class="flex items-center gap-1.5">
                       <span class="font-mono text-xs font-bold text-primary">{{
                         form.code
@@ -3215,7 +3996,7 @@ function copyInvitationLink() {
                       />
                     </div>
                     <h4
-                      class="text-sm font-semibold text-highlighted leading-snug"
+                      class="text-xs sm:text-sm font-semibold text-highlighted leading-snug break-words"
                     >
                       {{ form.name.th }}
                     </h4>
@@ -3226,13 +4007,13 @@ function copyInvitationLink() {
                   <input
                     type="radio"
                     :checked="selectedCompetencySet?.id === form.id"
-                    class="mt-1 size-4 text-primary focus:ring-primary/20 cursor-pointer"
+                    class="mt-1 size-4 text-primary focus:ring-primary/20 cursor-pointer shrink-0"
                   />
                 </div>
               </div>
 
               <div
-                v-if="!evaluationFormsData?.items?.length"
+                v-if="!activeCompetencyForms.length"
                 class="rounded-xl border border-dashed border-default p-6 text-center text-muted text-xs space-y-2"
               >
                 <UIcon
@@ -3250,118 +4031,305 @@ function copyInvitationLink() {
             </div>
           </div>
 
-          <!-- ฝั่งขวา (7 คอลัมน์): 2. ตัวอย่างข้อมูลและข้อสอบ (Preview & Confirm) -->
-          <div class="lg:col-span-7 space-y-4">
+          <!-- ============================================================ -->
+          <!-- คอลัมน์ที่ 2 (5 ส่วน): 2. ข้อมูลผู้รับและเกณฑ์ (RECIPIENT & CRITERIA) -->
+          <!-- ============================================================ -->
+          <div class="lg:col-span-5 flex flex-col space-y-3.5">
             <div
-              class="flex items-center justify-between border-b border-default pb-2"
+              class="flex items-center justify-between border-b border-default pb-2 shrink-0"
             >
               <div
-                class="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary"
+                class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-primary"
               >
-                <UIcon name="i-lucide-eye" class="size-4" />
-                <span>2. ตัวอย่างข้อมูลและข้อสอบ (Preview)</span>
+                <UIcon name="i-lucide-user-check" class="size-4" />
+                <span>
+                  {{
+                    sendEmailModalMode === 'bulk'
+                      ? `2. ข้อมูลผู้รับ (${bulkModalStudents.length} คน)`
+                      : '2. ข้อมูลผู้รับและเกณฑ์'
+                  }}
+                </span>
               </div>
-              <span v-if="selectedCompetencyVersion" class="text-xs text-muted">
-                {{ selectedCompetencyVersion.sections?.length || 0 }} หมวด
+              <span
+                v-if="selectedCompetencyVersion"
+                class="text-[11px] text-muted font-medium"
+              >
+                {{ selectedCompetencyVersion.sections?.length || 0 }} หมวดเกณฑ์
               </span>
             </div>
 
-            <!-- Recipient Form Inputs -->
+            <!-- SINGLE MODE: Single Recipient Card -->
             <div
-              class="rounded-xl border border-default bg-muted/10 p-4 space-y-3"
+              v-if="sendEmailModalMode === 'single'"
+              class="rounded-xl border border-default bg-muted/10 p-4 space-y-3.5 shadow-2xs shrink-0"
             >
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label
-                    class="block text-xs font-semibold text-highlighted mb-1"
-                  >
-                    อีเมลผู้รับ (ผู้ประเมิน / HR)
-                    <span class="text-rose-500">*</span>
-                  </label>
-                  <UInput
-                    v-model="sendEmailForm.recipientEmail"
-                    placeholder="เช่น hr@company.com"
-                    icon="i-lucide-mail"
-                    size="sm"
-                    required
-                  />
-                </div>
-                <div>
-                  <label
-                    class="block text-xs font-semibold text-highlighted mb-1"
-                  >
-                    ชื่อผู้ประเมิน / พี่เลี้ยง
-                  </label>
-                  <UInput
-                    v-model="sendEmailForm.evaluatorName"
-                    placeholder="เช่น นายสมบูรณ์ หัวหน้างาน"
-                    icon="i-lucide-user"
-                    size="sm"
-                  />
-                </div>
+              <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-highlighted">
+                  อีเมลผู้รับ (ผู้ประเมิน / HR)
+                  <span class="text-rose-500">*</span>
+                </label>
+                <UInput
+                  v-model="sendEmailForm.recipientEmail"
+                  placeholder="เช่น hr@company.com"
+                  icon="i-lucide-mail"
+                  size="md"
+                  class="w-full"
+                  required
+                />
               </div>
 
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label
-                    class="block text-xs font-semibold text-highlighted mb-1"
-                  >
+              <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-highlighted">
+                  ชื่อผู้ประเมิน / พี่เลี้ยง
+                </label>
+                <UInput
+                  v-model="sendEmailForm.evaluatorName"
+                  placeholder="เช่น นายสมบูรณ์ หัวหน้างาน"
+                  icon="i-lucide-user"
+                  size="md"
+                  class="w-full"
+                />
+              </div>
+
+              <div class="grid grid-cols-2 gap-3 pt-1">
+                <div class="space-y-1">
+                  <label class="block text-xs font-medium text-muted">
                     กำหนดส่งภายใน
                   </label>
                   <select
                     v-model="sendEmailForm.deadlineDays"
                     class="w-full h-9 rounded-lg border border-default bg-default px-3 text-xs text-highlighted focus:border-primary focus:outline-none"
                   >
-                    <option :value="7">7 วัน (เร่งด่วน)</option>
-                    <option :value="14">14 วัน (2 สัปดาห์)</option>
+                    <option :value="7">7 วัน</option>
+                    <option :value="14">14 วัน</option>
                     <option :value="30">30 วัน (1 เดือน)</option>
                     <option :value="60">60 วัน (2 เดือน)</option>
                   </select>
                 </div>
-                <div>
-                  <label
-                    class="block text-xs font-semibold text-highlighted mb-1"
-                  >
-                    นักศึกษาที่จะประเมิน
+                <div class="space-y-1">
+                  <label class="block text-xs font-medium text-muted">
+                    นักศึกษา
                   </label>
                   <div
-                    class="h-9 rounded-lg border border-default bg-default/60 px-3 flex items-center text-xs text-highlighted font-medium truncate"
+                    class="h-9 rounded-lg border border-default bg-default/70 px-3 flex items-center text-xs text-highlighted font-medium truncate"
+                    :title="`${sendModalStudent?.studentId} - ${sendModalStudent?.name.th}`"
                   >
-                    {{ sendModalStudent?.studentId }} -
                     {{ sendModalStudent?.name.th }}
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Live Form Questions Preview -->
+            <!-- BULK MODE: Global Settings + Student Batch List -->
+            <div v-else class="flex flex-col space-y-3 shrink-0">
+              <!-- Global Deadline & Quick Fill Card -->
+              <div
+                class="rounded-xl border border-default bg-muted/10 p-3.5 space-y-3 shadow-2xs"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span
+                    class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                  >
+                    <UIcon
+                      name="i-lucide-calendar-clock"
+                      class="size-4 text-primary"
+                    />
+                    กำหนดส่งภายใน (ทุกคน):
+                  </span>
+                  <select
+                    v-model="sendEmailForm.deadlineDays"
+                    class="h-8 rounded-lg border border-default bg-default px-2.5 text-xs text-highlighted focus:border-primary focus:outline-none"
+                  >
+                    <option :value="7">7 วัน</option>
+                    <option :value="14">14 วัน</option>
+                    <option :value="30">30 วัน (1 เดือน)</option>
+                    <option :value="60">60 วัน (2 เดือน)</option>
+                  </select>
+                </div>
+
+                <!-- Quick Apply Tools -->
+                <div class="pt-2 border-t border-default/60 space-y-2">
+                  <span
+                    class="text-[11px] font-semibold text-muted flex items-center gap-1"
+                  >
+                    <UIcon name="i-lucide-zap" class="size-3 text-amber-500" />
+                    ตั้งค่าด่วนสำหรับทุกคน (Batch Quick Fill):
+                  </span>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div class="flex items-center gap-1.5">
+                      <UInput
+                        v-model="bulkCommonEmail"
+                        placeholder="อีเมลผู้รับทุกคน"
+                        size="xs"
+                        class="flex-1"
+                      />
+                      <UButton
+                        color="primary"
+                        variant="soft"
+                        size="xs"
+                        label="ใช้ทุกคน"
+                        @click="applyBulkEmailToAll"
+                      />
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                      <UInput
+                        v-model="bulkCommonEvaluator"
+                        placeholder="ชื่อผู้ดูแลทุกคน"
+                        size="xs"
+                        class="flex-1"
+                      />
+                      <UButton
+                        color="neutral"
+                        variant="soft"
+                        size="xs"
+                        label="ใช้ทุกคน"
+                        @click="applyBulkEvaluatorToAll"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Student Rows List -->
+              <div class="space-y-1.5">
+                <div class="flex items-center justify-between px-1">
+                  <span class="text-xs font-semibold text-highlighted">
+                    รายชื่อผู้รับแต่ละคน ({{ bulkModalStudents.length }} คน):
+                  </span>
+                  <span class="text-[11px] text-muted">
+                    กด "ดูตัวอย่าง" เพื่อดูจดหมาย
+                  </span>
+                </div>
+
+                <div
+                  class="space-y-2.5 overflow-y-auto pr-1 max-h-[300px] rounded-xl"
+                >
+                  <div
+                    v-for="(st, sIdx) in bulkModalStudents"
+                    :key="st.id"
+                    class="rounded-xl border p-3 transition-all text-xs space-y-2"
+                    :class="
+                      sendModalStudent?.id === st.id
+                        ? 'border-primary bg-primary/[0.04] ring-1 ring-primary/30'
+                        : 'border-default bg-default hover:bg-muted/10'
+                    "
+                  >
+                    <!-- Student Row Header -->
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span
+                          class="grid size-5 place-items-center rounded-full bg-muted/30 text-[10px] font-bold text-muted shrink-0"
+                        >
+                          {{ sIdx + 1 }}
+                        </span>
+                        <div class="font-semibold text-highlighted truncate">
+                          {{ st.name.th }}
+                          <span
+                            class="font-mono font-normal text-muted text-[11px]"
+                          >
+                            ({{ st.studentId }})
+                          </span>
+                        </div>
+                        <UBadge
+                          v-if="st.company"
+                          color="neutral"
+                          variant="subtle"
+                          size="xs"
+                          :label="st.company"
+                          class="truncate max-w-[140px]"
+                        />
+                      </div>
+
+                      <div class="shrink-0">
+                        <UBadge
+                          v-if="sendModalStudent?.id === st.id"
+                          color="primary"
+                          variant="solid"
+                          size="xs"
+                          label="กำลังดูตัวอย่าง"
+                        />
+                        <button
+                          v-else
+                          type="button"
+                          class="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium cursor-pointer"
+                          @click="sendModalStudent = st"
+                        >
+                          <UIcon name="i-lucide-eye" class="size-3" />
+                          ดูตัวอย่าง
+                        </button>
+                      </div>
+                    </div>
+
+                    <!-- Student Inputs Row -->
+                    <div
+                      v-if="bulkStudentEvaluators[st.id]"
+                      class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5"
+                    >
+                      <div class="space-y-0.5">
+                        <label class="text-[11px] text-muted font-medium">
+                          อีเมลผู้รับ <span class="text-rose-500">*</span>
+                        </label>
+                        <UInput
+                          v-model="bulkStudentEvaluators[st.id]!.email"
+                          placeholder="เช่น hr@company.com"
+                          size="xs"
+                          icon="i-lucide-mail"
+                          class="w-full"
+                          required
+                        />
+                      </div>
+                      <div class="space-y-0.5">
+                        <label class="text-[11px] text-muted font-medium">
+                          ชื่อผู้ประเมิน / พี่เลี้ยง
+                        </label>
+                        <UInput
+                          v-model="bulkStudentEvaluators[st.id]!.name"
+                          placeholder="ชื่อผู้ดูแลการฝึกงาน"
+                          size="xs"
+                          icon="i-lucide-user"
+                          class="w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Live Form Questions Preview Card -->
             <div
-              class="rounded-xl border border-default bg-default p-4 space-y-3"
+              class="rounded-xl border border-default bg-default p-3.5 space-y-2.5 shadow-2xs flex-1 flex flex-col min-h-0"
             >
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-highlighted">
-                  ตัวอย่างเกณฑ์การประเมินในแบบฟอร์มนี้:
+              <div class="flex items-center justify-between shrink-0">
+                <span
+                  class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                >
+                  <UIcon
+                    name="i-lucide-list-checks"
+                    class="size-3.5 text-primary"
+                  />
+                  เกณฑ์การประเมินในแบบฟอร์มนี้:
                 </span>
                 <span
                   v-if="isLoadingFormVersion"
-                  class="text-xs text-primary animate-pulse"
+                  class="text-[11px] text-primary animate-pulse"
                 >
-                  กำลังโหลดข้อมูลข้อสอบ...
+                  กำลังโหลด...
                 </span>
               </div>
 
-              <!-- Sections list in preview -->
+              <!-- Sections list in preview (Scrollable) -->
               <div
                 v-if="selectedCompetencyVersion?.sections?.length"
-                class="space-y-2 max-h-[160px] overflow-y-auto pr-1"
+                class="space-y-2 overflow-y-auto pr-1 flex-1 max-h-[160px]"
               >
                 <div
                   v-for="(sec, sIdx) in selectedCompetencyVersion.sections"
                   :key="sec.id || sIdx"
-                  class="rounded-lg border border-default/70 bg-muted/20 p-2.5 space-y-1.5 text-xs"
+                  class="rounded-lg border border-default/70 bg-muted/20 p-2 space-y-1 text-xs"
                 >
-                  <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-1.5">
+                  <div class="flex items-center justify-between gap-1">
+                    <div class="flex items-center gap-1.5 min-w-0">
                       <UBadge
                         :color="
                           sec.category === 'general'
@@ -3378,12 +4346,14 @@ function copyInvitationLink() {
                               : 'หมวดพิเศษ'
                         "
                         size="xs"
+                        variant="subtle"
+                        class="shrink-0"
                       />
-                      <strong class="text-highlighted">{{
+                      <strong class="text-highlighted truncate">{{
                         sec.title.th
                       }}</strong>
                     </div>
-                    <span class="text-[11px] text-muted"
+                    <span class="text-[11px] text-muted shrink-0"
                       >{{ sec.questions?.length || 0 }} ข้อ</span
                     >
                   </div>
@@ -3401,13 +4371,16 @@ function copyInvitationLink() {
                       v-if="(sec.questions?.length || 0) > 2"
                       class="text-primary italic"
                     >
-                      และคำถามอื่นๆ อีก
+                      และข้ออื่นๆ อีก
                       {{ (sec.questions?.length || 0) - 2 }} ข้อ...
                     </li>
                   </ul>
                 </div>
               </div>
-              <div v-else class="text-xs text-muted text-center py-3">
+              <div
+                v-else
+                class="text-xs text-muted text-center py-4 flex-1 flex items-center justify-center"
+              >
                 {{
                   isLoadingFormVersion
                     ? 'กำลังโหลดข้อสอบ...'
@@ -3415,72 +4388,258 @@ function copyInvitationLink() {
                 }}
               </div>
             </div>
+          </div>
 
-            <!-- Email Invitation Card Preview -->
+          <!-- ============================================================ -->
+          <!-- คอลัมน์ที่ 3 (4 ส่วน): 3. ตัวอย่างจดหมายที่จะส่ง (LIVE PREVIEW)      -->
+          <!-- ============================================================ -->
+          <div class="lg:col-span-4 flex flex-col space-y-3 min-w-0">
             <div
-              class="rounded-xl border border-primary/20 bg-primary/[0.02] p-3.5 space-y-2"
+              class="flex items-center justify-between border-b border-default pb-2 shrink-0 flex-wrap gap-2"
             >
               <div
-                class="flex items-center gap-2 text-xs font-semibold text-primary"
+                class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-primary"
               >
                 <UIcon name="i-lucide-mail-check" class="size-4" />
-                <span>ตัวอย่างอีเมลที่จะส่งไปยังผู้ประเมิน:</span>
+                <span>3. ตัวอย่างจดหมายที่จะส่ง</span>
               </div>
-              <div
-                class="rounded-lg border border-default bg-default p-3 text-xs space-y-2 shadow-xs"
-              >
-                <div class="border-b border-default pb-1.5">
-                  <span class="text-muted">หัวข้อ: </span>
-                  <strong class="text-highlighted">
-                    [มหาวิทยาลัยแม่ฟ้าหลวง]
-                    ขอความอนุเคราะห์ประเมินผลการฝึกงานของ
-                    {{ sendModalStudent?.name.th }}
-                  </strong>
-                </div>
-                <p class="text-muted leading-relaxed text-[11px]">
-                  เรียน
-                  {{ sendEmailForm.evaluatorName || 'ผู้ดูแลการฝึกงาน' }},<br />
-                  มหาวิทยาลัยแม่ฟ้าหลวงขอความอนุเคราะห์ให้ท่านทำแบบประเมินผลการฝึกงานของ
-                  <strong>{{ sendModalStudent?.name.th }}</strong>
-                  ({{ getProgramDisplay(sendModalStudent?.programId || '') }})
-                  โดยท่านสามารถคลิกลิงก์ด้านล่างเพื่อเข้าทำแบบประเมินได้ทันที:
-                </p>
-                <div class="py-1">
-                  <span
-                    class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-inverted shadow-xs"
+
+              <div class="flex items-center gap-2">
+                <!-- Bulk Preview Student Switcher -->
+                <div
+                  v-if="
+                    sendEmailModalMode === 'bulk' &&
+                    bulkModalStudents.length > 1
+                  "
+                  class="flex items-center gap-1"
+                >
+                  <span class="text-[11px] text-muted">ตัวอย่าง:</span>
+                  <select
+                    :value="sendModalStudent?.id"
+                    class="h-7 rounded-md border border-default bg-default px-2 text-[11px] text-highlighted focus:border-primary focus:outline-none max-w-[140px] truncate"
+                    @change="
+                      (e) => {
+                        const targetId = (e.target as HTMLSelectElement).value
+                        const found = bulkModalStudents.find(
+                          (s) => s.id === targetId
+                        )
+                        if (found) sendModalStudent = found
+                      }
+                    "
                   >
-                    <UIcon name="i-lucide-external-link" class="size-3.5" />
-                    คลิกเพื่อเริ่มทำแบบประเมินผลการฝึกงาน
-                  </span>
+                    <option
+                      v-for="s in bulkModalStudents"
+                      :key="s.id"
+                      :value="s.id"
+                    >
+                      {{ s.name.th }}
+                    </option>
+                  </select>
                 </div>
-                <div class="text-[10px] text-muted">
-                  ลิงก์:
-                  http://localhost:8180/evaluate?token=...&amp;assignment=...
+
+                <!-- Mode Switcher -->
+                <div
+                  class="inline-flex rounded-lg border border-default bg-default p-0.5 text-xs shadow-2xs"
+                >
+                  <button
+                    type="button"
+                    class="px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors cursor-pointer"
+                    :class="
+                      emailPreviewTab === 'design'
+                        ? 'bg-primary text-inverted shadow-2xs'
+                        : 'text-muted hover:text-highlighted'
+                    "
+                    @click="emailPreviewTab = 'design'"
+                  >
+                    รูปแบบจดหมาย
+                  </button>
+                  <button
+                    type="button"
+                    class="px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors cursor-pointer"
+                    :class="
+                      emailPreviewTab === 'text'
+                        ? 'bg-primary text-inverted shadow-2xs'
+                        : 'text-muted hover:text-highlighted'
+                    "
+                    @click="emailPreviewTab = 'text'"
+                  >
+                    ข้อความธรรมดา
+                  </button>
                 </div>
+
+                <!-- Quick link to Settings -->
+                <UButton
+                  to="/app/settings/email"
+                  target="_blank"
+                  color="neutral"
+                  variant="outline"
+                  size="xs"
+                  icon="i-lucide-settings-2"
+                  title="ไปที่หน้าตั้งค่าจดหมาย"
+                >
+                  ตั้งค่า
+                </UButton>
               </div>
             </div>
 
-            <!-- Modal Bottom Actions -->
+            <!-- Subject Header Box -->
             <div
-              class="flex items-center justify-end gap-2.5 pt-3 border-t border-default"
+              class="rounded-xl border border-default bg-muted/20 p-2.5 text-xs flex items-start gap-2 shadow-2xs shrink-0"
             >
-              <UButton
-                color="neutral"
-                label="ยกเลิก"
-                variant="outline"
-                @click="isSendEmailModalOpen = false"
-              />
-              <UButton
-                color="primary"
-                icon="i-lucide-send"
-                label="ยืนยันและส่งอีเมล (Confirm & Send)"
-                :loading="isSendingEvaluationEmail"
-                :disabled="
-                  !selectedCompetencySet || !sendEmailForm.recipientEmail
-                "
-                @click="handleSendEvaluationEmailSubmit"
-              />
+              <span class="text-muted shrink-0 font-semibold">หัวข้อ:</span>
+              <span
+                class="text-highlighted font-bold line-clamp-2 break-words text-xs"
+              >
+                {{ previewSubject }}
+              </span>
             </div>
+
+            <!-- Email Container Frame (Generous full height) -->
+            <div
+              class="rounded-xl border border-default bg-default overflow-hidden flex flex-col flex-1 shadow-xs min-h-[380px] max-h-[520px]"
+            >
+              <div
+                v-if="isLoadingEmailTemplate"
+                class="text-center py-12 text-xs text-muted space-y-2 flex-1 flex flex-col items-center justify-center"
+              >
+                <UIcon
+                  name="i-lucide-loader-2"
+                  class="size-6 animate-spin text-primary"
+                />
+                <p>กำลังโหลดรูปแบบจดหมายจากระบบตั้งค่า...</p>
+              </div>
+
+              <!-- Visual HTML Preview -->
+              <div
+                v-else-if="emailPreviewTab === 'design' && previewHtml"
+                class="bg-white text-slate-800 p-4 shadow-inner flex-1 overflow-y-auto overflow-x-hidden text-[13px]"
+              >
+                <iframe
+                  :srcdoc="previewEmailDocument"
+                  title="ตัวอย่างอีเมลคำเชิญประเมิน"
+                  sandbox=""
+                  referrerpolicy="no-referrer"
+                  class="block min-h-[380px] w-full border-0 bg-white"
+                />
+              </div>
+
+              <!-- Plain Text Preview -->
+              <div
+                v-else-if="emailPreviewTab === 'text' && previewText"
+                class="bg-muted/15 p-4 font-mono text-[11px] text-muted flex-1 overflow-y-auto whitespace-pre-wrap"
+              >
+                {{ previewText }}
+              </div>
+
+              <!-- Fallback Preview -->
+              <div
+                v-else
+                class="p-4 text-xs space-y-2 flex-1 flex flex-col justify-center"
+              >
+                <p class="text-muted leading-relaxed text-[11px]">
+                  เรียน
+                  {{
+                    (sendEmailModalMode === 'bulk' && sendModalStudent
+                      ? bulkStudentEvaluators[sendModalStudent.id]?.name
+                      : sendEmailForm.evaluatorName) ||
+                    '[ไม่ระบุชื่อผู้ประเมิน]'
+                  }},<br />
+                  มหาวิทยาลัยแม่ฟ้าหลวงขอความอนุเคราะห์ให้ท่านทำแบบประเมินผลการฝึกงานของ
+                  <strong>{{ sendModalStudent?.name.th }}</strong> ({{
+                    getProgramDisplay(sendModalStudent?.programId || '')
+                  }})
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Bottom Actions (Unified Footer) -->
+        <div
+          v-if="
+            !sendEmailSuccessData &&
+            !bulkSendSuccessData &&
+            !(isSendingEvaluationEmail && sendEmailModalMode === 'single')
+          "
+          class="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-default bg-muted/20 shrink-0"
+        >
+          <div class="text-xs text-muted flex items-center gap-2">
+            <UIcon
+              name="i-lucide-shield-check"
+              class="size-4 text-emerald-600"
+            />
+            <span v-if="sendEmailModalMode === 'bulk'">
+              ระบบจะส่งอีเมลแบบประเมินพร้อมรหัส PIN ให้ผู้รับของนักศึกษาทั้งหมด
+              {{ bulkModalStudents.length }} คนแยกเป็นรายบุคคล
+            </span>
+            <span v-else>
+              ระบบจะแนบลิงก์และรหัส PIN
+              สำหรับเข้าทำแบบประเมินให้สถานประกอบการโดยอัตโนมัติ
+            </span>
+          </div>
+
+          <div class="flex items-center gap-2.5 self-end sm:self-auto">
+            <!-- Progress Indicator when bulk sending -->
+            <div
+              v-if="isSendingEvaluationEmail && sendEmailModalMode === 'bulk'"
+              class="flex items-center gap-2 mr-2"
+            >
+              <UIcon
+                name="i-lucide-loader-2"
+                class="size-4 animate-spin text-primary"
+              />
+              <span class="text-xs font-medium text-highlighted">
+                กำลังส่ง {{ bulkSendProgress.current }}/{{
+                  bulkSendProgress.total
+                }}:
+                <span
+                  class="text-primary truncate max-w-[140px] inline-block align-bottom"
+                >
+                  {{ bulkSendProgress.currentStudentName }}
+                </span>
+              </span>
+            </div>
+
+            <UButton
+              color="neutral"
+              label="ยกเลิก"
+              variant="outline"
+              size="md"
+              :disabled="isSendingEvaluationEmail"
+              @click="finishAndCloseSendModal"
+            />
+
+            <!-- Single Mode Submit Button -->
+            <UButton
+              v-if="sendEmailModalMode === 'single'"
+              color="primary"
+              icon="i-lucide-send"
+              label="ยืนยันและส่งอีเมล (Confirm & Send)"
+              size="md"
+              :loading="isSendingEvaluationEmail"
+              :disabled="
+                !selectedCompetencySet ||
+                !selectedCompetencyVersion ||
+                !sendEmailForm.recipientEmail
+              "
+              @click="handleSendEvaluationEmailSubmit"
+            />
+
+            <!-- Bulk Mode Submit Button -->
+            <UButton
+              v-else
+              color="primary"
+              icon="i-lucide-send"
+              :label="`ยืนยันและส่งทั้งหมด (${bulkModalStudents.length} คน)`"
+              size="md"
+              :loading="isSendingEvaluationEmail"
+              :disabled="
+                !selectedCompetencySet ||
+                !selectedCompetencyVersion ||
+                bulkModalStudents.length === 0
+              "
+              @click="handleBulkSendEvaluationEmailSubmit"
+            />
           </div>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
-import type { Model, QueryFilter } from 'mongoose'
+import type { ClientSession, Model, QueryFilter } from 'mongoose'
 
 import { AuditLogRecord } from './audit.schema.js'
 
@@ -22,11 +22,16 @@ export class AuditService {
     private readonly auditLogs: Model<AuditLogRecord>
   ) {}
 
-  public async record(input: AuditInput): Promise<void> {
-    await this.auditLogs.create({
-      ...input,
-      outcome: input.outcome ?? 'success'
-    })
+  public async record(
+    input: AuditInput,
+    session?: ClientSession
+  ): Promise<void> {
+    const entry = { ...input, outcome: input.outcome ?? 'success' }
+    if (session) {
+      await this.auditLogs.create([entry], { session })
+      return
+    }
+    await this.auditLogs.create(entry)
   }
 
   public async recordSafely(input: AuditInput): Promise<void> {

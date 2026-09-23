@@ -56,6 +56,19 @@ describe('authorization policy', () => {
     expect(actorHasPermission(['evaluator'], 'students.manage')).toBe(false)
   })
 
+  it('keeps reopen unavailable to every production role in the MVP', () => {
+    for (const role of [
+      'systemAdmin',
+      'internshipStaff',
+      'coordinator',
+      'student',
+      'evaluator',
+      'auditor'
+    ] as const) {
+      expect(actorHasPermission([role], 'evaluations.reopen')).toBe(false)
+    }
+  })
+
   it('permits evaluator Draft and submit actions', () => {
     expect(actorHasPermission(['evaluator'], 'evaluations.draft')).toBe(true)
     expect(actorHasPermission(['evaluator'], 'evaluations.submit')).toBe(true)

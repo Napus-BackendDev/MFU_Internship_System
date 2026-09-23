@@ -10,6 +10,7 @@ export const ROLE_PERMISSIONS: Readonly<
   systemAdmin: without(
     'evaluations.draft',
     'evaluations.submit',
+    'evaluations.reopen',
     'documents.generateOwn',
     'documents.readOwn'
   ),
@@ -32,7 +33,6 @@ export const ROLE_PERMISSIONS: Readonly<
     'cycles.read',
     'cycles.manage',
     'evaluations.read',
-    'evaluations.reopen',
     'emailTemplates.read',
     'emailTemplates.manage',
     'emailTemplates.publish',

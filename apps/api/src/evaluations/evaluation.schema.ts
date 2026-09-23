@@ -179,11 +179,23 @@ export class EvaluationAssignmentRecord {
 
   @Prop({
     default: 'pending',
-    enum: ['pending', 'inProgress', 'submitted', 'expired', 'reopened'],
+    enum: [
+      'pending',
+      'inProgress',
+      'submitted',
+      'expired',
+      'reopened',
+      'email_error'
+    ],
     index: true
   })
   public status!:
-    'pending' | 'inProgress' | 'submitted' | 'expired' | 'reopened'
+    | 'pending'
+    | 'inProgress'
+    | 'submitted'
+    | 'expired'
+    | 'reopened'
+    | 'email_error'
 
   @Prop({ default: 1, min: 1 })
   public evaluationVersion!: number
@@ -205,7 +217,7 @@ export const EvaluationAssignmentSchema = SchemaFactory.createForClass(
   EvaluationAssignmentRecord
 )
 EvaluationAssignmentSchema.index(
-  { cycleId: 1, placementId: 1, evaluatorId: 1 },
+  { cycleId: 1, placementId: 1 },
   { unique: true }
 )
 
@@ -244,6 +256,26 @@ export class EvaluationRecord {
 
   @Prop({ default: null, type: Number })
   public aggregateScore!: number | null
+
+  @Prop({ type: Object })
+  public categoryScores?: {
+    hardSkill: {
+      average: number | null
+      answeredCount: number
+      scaleMin: number | null
+      scaleMax: number | null
+    }
+    softSkill: {
+      average: number | null
+      answeredCount: number
+      scaleMin: number | null
+      scaleMax: number | null
+    }
+    scoringPolicyVersion: string
+  }
+
+  @Prop()
+  public scoringPolicyVersion?: string
 
   @Prop({ required: true })
   public evaluatorId!: string

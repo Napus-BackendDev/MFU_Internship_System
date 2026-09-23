@@ -25,6 +25,15 @@ function isDuplicateKeyError(exception: unknown): boolean {
   )
 }
 
+function isUploadLimitError(exception: unknown): boolean {
+  return (
+    typeof exception === 'object' &&
+    exception !== null &&
+    'code' in exception &&
+    exception.code === 'LIMIT_FILE_SIZE'
+  )
+}
+
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
   public catch(exception: unknown, host: ArgumentsHost): void {
@@ -70,6 +79,10 @@ export class ApiExceptionFilter implements ExceptionFilter {
           message: issue.message
         }))
       }
+    } else if (isUploadLimitError(exception)) {
+      status = HttpStatus.PAYLOAD_TOO_LARGE
+      code = 'PAYLOAD_TOO_LARGE'
+      message = 'Uploaded file exceeds the allowed size.'
     } else if (isDuplicateKeyError(exception)) {
       status = HttpStatus.CONFLICT
       code = 'DUPLICATE_RESOURCE'

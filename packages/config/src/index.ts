@@ -32,6 +32,7 @@ const environmentSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65_535).default(8081),
   MONGODB_URI: z.url(),
   REDIS_URL: z.url(),
+  TRUSTED_PROXY_CIDRS: z.string().default(''),
   PUBLIC_WEB_URL: z.url(),
   NUXT_PUBLIC_API_BASE_URL: z.url(),
   AUTH_MODE: z.enum(['development', 'oidc']),

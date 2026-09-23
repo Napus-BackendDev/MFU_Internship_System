@@ -1,6 +1,6 @@
 import type { RoleKey } from '@internship/shared-types'
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
-import type { HydratedDocument } from 'mongoose'
+import { Types, type HydratedDocument } from 'mongoose'
 
 @Schema({ _id: false })
 export class RoleAssignmentRecord {
@@ -22,7 +22,18 @@ export class RoleAssignmentRecord {
 
 const RoleAssignmentSchema = SchemaFactory.createForClass(RoleAssignmentRecord)
 
-@Schema({ collection: 'users', timestamps: true })
+@Schema({
+  collection: 'users',
+  timestamps: true,
+  toJSON: {
+    virtuals: true,
+    transform: (_doc: unknown, ret: Record<string, unknown>) => {
+      ret.id =
+        ret._id instanceof Types.ObjectId ? ret._id.toHexString() : ret.id
+      return ret
+    }
+  }
+})
 export class UserRecord {
   @Prop({ index: true, required: true, unique: true })
   public oidcSubject!: string

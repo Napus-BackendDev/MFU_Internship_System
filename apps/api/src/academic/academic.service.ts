@@ -28,9 +28,10 @@ export class AcademicService {
     actor: AuthenticatedActor,
     page: PaginationInput
   ): Promise<unknown> {
-    const filter: QueryFilter<SchoolRecord> = actor.scope.tenant
-      ? {}
-      : { _id: { $in: actor.scope.schoolIds } }
+    const filter: QueryFilter<SchoolRecord> =
+      actor.scope.tenant || actor.scope.schoolIds.length === 0
+        ? {}
+        : { _id: { $in: actor.scope.schoolIds } }
     return paginate(this.schools, filter, page, { schoolCode: 1, _id: 1 })
   }
 
@@ -58,14 +59,16 @@ export class AcademicService {
     page: PaginationInput,
     schoolId?: string
   ): Promise<unknown> {
-    const baseFilter: QueryFilter<ProgramRecord> = actor.scope.tenant
-      ? {}
-      : {
-          $or: [
-            { schoolId: { $in: actor.scope.schoolIds } },
-            { _id: { $in: actor.scope.programIds } }
-          ]
-        }
+    const clauses: QueryFilter<ProgramRecord>[] = []
+    if (actor.scope.schoolIds.length > 0) {
+      clauses.push({ schoolId: { $in: actor.scope.schoolIds } })
+    }
+    if (actor.scope.programIds.length > 0) {
+      clauses.push({ _id: { $in: actor.scope.programIds } })
+    }
+
+    const baseFilter: QueryFilter<ProgramRecord> =
+      actor.scope.tenant || clauses.length === 0 ? {} : { $or: clauses }
     const filter: QueryFilter<ProgramRecord> = schoolId
       ? { ...baseFilter, schoolId }
       : baseFilter

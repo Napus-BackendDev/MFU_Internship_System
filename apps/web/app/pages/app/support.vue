@@ -217,6 +217,8 @@ const handleSubmitFeedback = () => {
               </label>
               <UInput
                 v-model="feedback.subject"
+                class="w-full"
+                :ui="{ root: 'w-full', base: 'w-full' }"
                 placeholder="ระบุหัวข้อเรื่องที่ต้องการติดต่อ..."
                 size="md"
               />

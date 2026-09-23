@@ -99,8 +99,8 @@ Trace: `FR-AUTH-003`
 **Then** the system returns `401 INVITATION_INVALID`  
 **And** no Draft or final evaluation is changed  
 **And** the token value is absent from logs.
-
-Status: expiration duration remains `TBD`.
+**And** expiration is no later than the assignment deadline or cycle close, whichever comes first.
+**And** a reminder reuses the invitation without extending its deadline; revocation invalidates existing evaluator access.
 
 ### AC-AUTH-008 — Mock authentication is absent in Production
 
@@ -249,12 +249,11 @@ Trace: `FR-EVL-001`, `FR-EVL-002`
 
 Trace: `FR-EVL-004`
 
-**Given** the approved uniqueness key identifies one cycle/placement/evaluator responsibility  
+**Given** one Student has one workplace Evaluator per internship cycle
 **When** two requests concurrently create that assignment  
 **Then** exactly one active assignment exists  
+**And** the uniqueness key is Placement plus Cycle, independent of Evaluator ID
 **And** both requests resolve to a safe success/conflict result without duplicate evaluation instances.
-
-Status: final uniqueness key remains `TBD` if multiple evaluators are approved.
 
 ### AC-EVL-007 — Assignment snapshots questions and scoring
 
@@ -265,7 +264,7 @@ Trace: `FR-EVL-005`
 **Then** the instance stores immutable question, ordering, locale, required flag, and scoring-rule snapshots  
 **And** publishing version 2 later does not alter the open instance.
 
-## 6. Evaluation Draft, submit, and reopen
+## 6. Evaluation Draft, submit, and immutable result
 
 ### AC-EVL-008 — Evaluator saves and resumes Draft
 
@@ -295,7 +294,7 @@ Trace: `FR-EVL-006`
 **And** assignment remains editable/open  
 **And** no final evaluation exists.
 
-Score range and required-question policy: `TBD`; tests must derive from assignment snapshot, not hard-coded UI values.
+Required-question and valid score-range checks derive from the immutable assignment snapshot, not hard-coded UI values.
 
 ### AC-EVL-011 — Submit creates one immutable final result
 
@@ -326,17 +325,29 @@ Trace: `FR-EVL-004`, TOR `AT-02`
 **Then** the API returns `409 INVALID_STATE_TRANSITION` or `401 INVITATION_INVALID` as applicable  
 **And** no answer changes.
 
-### AC-EVL-014 — Reopen preserves prior final version
+### AC-EVL-014 — Reopen is disabled in the MVP
 
-Trace: `FR-EVL-007`
+Trace: MVP decision — reopen is not included.
 
-**Given** an authorized role reopens a Submitted evaluation with a required reason  
-**When** reopen succeeds  
-**Then** the original final result remains immutable and addressable for audit  
-**And** a new controlled editable version/window is created  
-**And** actor, reason, time, affected assignment, and notification are audited.
+**Given** an assignment has a Submitted final result
+**When** any user attempts to reopen it or mutate its answers
+**Then** authorization/state validation rejects the request
+**And** no new editable version is created
+**And** the original result remains immutable.
 
-Status: role and time window remain `TBD`.
+Future reopen work requires a new owner-approved policy and release scope.
+
+### AC-EVL-016 — Category scores follow the MVP scoring policy
+
+Trace: MVP decision — category means, no cross-category total.
+
+**Given** a submitted assignment snapshot contains Hard Skill, Soft Skill, and Situation/comment questions
+**When** the final result is calculated
+**Then** Hard Skill and Soft Skill use separate arithmetic means of answered rating questions
+**And** each category reports its answered count and scale; a category without answered ratings is `null`
+**And** Situation/comment answers are excluded from scoring
+**And** no cross-category aggregate, weighting, or pass/fail decision is invented
+**And** UI, API, reports, and PDFs use the same versioned scoring result.
 
 ### AC-EVL-015 — Evaluator form is accessible and responsive
 

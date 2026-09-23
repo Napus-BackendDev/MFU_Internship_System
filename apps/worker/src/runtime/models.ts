@@ -15,10 +15,14 @@ const deliverySchema = new Schema(
     attempts: { type: Number, default: 0 },
     providerMessageId: String,
     lastErrorCode: String,
-    processingStartedAt: Date
+    processingStartedAt: Date,
+    processingLeaseUntil: Date,
+    processingToken: String,
+    providerAttemptStartedAt: Date
   },
   { collection: 'deliveries', timestamps: true }
 )
+deliverySchema.index({ status: 1, processingLeaseUntil: 1 })
 
 const invitationSchema = new Schema(
   {
@@ -67,7 +71,9 @@ const studentSchema = new Schema(
   {
     studentId: { type: String, required: true },
     name: { th: String, en: String },
-    email: String
+    email: String,
+    company: String,
+    evaluationStatus: String
   },
   { collection: 'students', timestamps: true }
 )
@@ -108,11 +114,13 @@ const evaluationSchema = new Schema(
 
 const campaignSchema = new Schema(
   {
+    type: { type: String, enum: ['invitation', 'reminder'], required: true },
     status: {
       type: String,
       enum: ['queued', 'processing', 'completed', 'partial'],
       required: true
-    }
+    },
+    total: { type: Number, default: 0 }
   },
   { collection: 'campaigns', timestamps: true }
 )

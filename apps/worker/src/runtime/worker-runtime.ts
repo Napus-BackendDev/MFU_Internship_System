@@ -1,5 +1,5 @@
 import type { AppEnvironment } from '@internship/config'
-import { Worker } from 'bullmq'
+import { Queue, Worker } from 'bullmq'
 import type { Connection } from 'mongoose'
 import { createConnection } from 'mongoose'
 import type { Logger } from 'pino'
@@ -20,6 +20,8 @@ interface RedisOptions {
 export class WorkerRuntime {
   private connection?: Connection
   private workers: Worker[] = []
+  private emailQueue?: Queue<EmailJob>
+  private recoveryTimer?: NodeJS.Timeout
   private closing = false
 
   public constructor(
@@ -36,13 +38,23 @@ export class WorkerRuntime {
     })
     await this.connection.asPromise()
     const models = createModels(this.connection)
-    const email = new EmailProcessor(this.environment, models, this.logger)
     const documents = new DocumentProcessor(
       this.environment,
       models,
       this.logger
     )
     const connection = redisOptions(this.environment.REDIS_URL)
+    this.emailQueue = new Queue<EmailJob>('email', {
+      connection,
+      prefix: 'internship-transcript-v2'
+    })
+    await this.emailQueue.waitUntilReady()
+    const email = new EmailProcessor(
+      this.environment,
+      models,
+      this.logger,
+      this.emailQueue
+    )
 
     this.workers = [
       new Worker<EmailJob, void>('email', (job) => email.process(job), {
@@ -77,12 +89,24 @@ export class WorkerRuntime {
     }
 
     await Promise.all(this.workers.map((worker) => worker.waitUntilReady()))
+    await email.recoverExpiredDeliveries()
+    this.recoveryTimer = setInterval(() => {
+      void email.recoverExpiredDeliveries().catch((error: unknown) => {
+        this.logger.error(
+          { error: error instanceof Error ? error.message : 'RECOVERY_FAILED' },
+          'email delivery recovery pass failed'
+        )
+      })
+    }, 60_000)
+    this.recoveryTimer.unref?.()
   }
 
   public async close(): Promise<void> {
     if (this.closing) return
     this.closing = true
+    if (this.recoveryTimer) clearInterval(this.recoveryTimer)
     await Promise.all(this.workers.map((worker) => worker.close()))
+    await this.emailQueue?.close()
     if (this.connection) await this.connection.close()
     this.logger.info('worker shutdown complete')
   }

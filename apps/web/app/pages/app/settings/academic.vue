@@ -148,7 +148,7 @@ const {
 // Fetch Terms
 const {
   data: termsData,
-  error: _termsError,
+  error: termsError,
   pending: termsPending,
   refresh: refreshTerms
 } = await useAsyncData(
@@ -291,53 +291,6 @@ watch([courseStatusFilter, courseSearch, coursePageSize], () => {
   coursePage.value = 1
 })
 
-function getTermStatusBadgeColor(
-  status: string
-): 'success' | 'info' | 'warning' | 'neutral' {
-  switch (status) {
-    case 'open':
-      return 'success'
-    case 'planned':
-      return 'info'
-    case 'closed':
-      return 'warning'
-    default:
-      return 'neutral'
-  }
-}
-
-function getTermStatusLabel(status: string): string {
-  switch (status) {
-    case 'open':
-      return 'เปิดรับลงทะเบียน (Open)'
-    case 'planned':
-      return 'ตามแผนงาน (Planned)'
-    case 'closed':
-      return 'ปิดรับแล้ว (Closed)'
-    default:
-      return status
-  }
-}
-
-function formatDateRange(startsAt?: string, endsAt?: string): string {
-  if (!startsAt || !endsAt) return '-'
-  try {
-    const s = new Date(startsAt).toLocaleDateString('th-TH', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    })
-    const e = new Date(endsAt).toLocaleDateString('th-TH', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    })
-    return `${s} – ${e}`
-  } catch {
-    return `${startsAt} – ${endsAt}`
-  }
-}
-
 // Modal states
 const isSchoolModalOpen = ref(false)
 const isProgramModalOpen = ref(false)
@@ -374,7 +327,7 @@ const schoolForm = reactive({
   schoolCode: '',
   nameTh: '',
   nameEn: '',
-  status: 'active' as 'active'
+  status: 'active' as const
 })
 
 const programForm = reactive({
@@ -382,7 +335,7 @@ const programForm = reactive({
   programCode: '',
   nameTh: '',
   nameEn: '',
-  status: 'active' as 'active'
+  status: 'active' as const
 })
 
 const schoolFormErrors = ref<Record<string, string>>({})
@@ -573,7 +526,7 @@ const courseFormSchema = z.object({
 const courseForm = reactive({
   nameTh: '',
   nameEn: '',
-  status: 'active' as 'active'
+  status: 'active' as const
 })
 
 const courseFormErrors = ref<Record<string, string>>({})
@@ -865,149 +818,16 @@ function handleResetSlotsToDefault() {
   })
 }
 
-// Operational Academic Year
-const selectedOpYear = ref<number>(2026)
-
-const selectableAcademicYears = computed(() => {
-  const yrs = new Set<number>([2026, 2025, 2024, 2027])
-  for (const t of termsData.value?.items ?? []) {
-    if (t.academicYear) yrs.add(t.academicYear)
-  }
-  return Array.from(yrs).sort((a, b) => b - a)
-})
-
-interface ActiveTermViewItem {
-  slot: MasterTermSlot
-  dbRecord: AcademicTerm | null
-  code: string
-  academicYear: number
-  semester: string
-  startsAt: string
-  endsAt: string
-  status: 'planned' | 'open' | 'closed'
-  isCreatedInDb: boolean
-}
-
-const activeTermsForSelectedYear = computed<ActiveTermViewItem[]>(() => {
-  const year = selectedOpYear.value
-  const dbTerms = (termsData.value?.items ?? []).filter(
-    (t) => t.academicYear === year
-  )
-
-  return masterTermStructure.value.map((slot) => {
-    const match = dbTerms.find(
-      (t) =>
-        t.semester === String(slot.termNumber) ||
-        t.semester === slot.codeSuffix ||
-        (slot.type === 'summer' &&
-          (t.semester === 'summer' ||
-            t.semester.toLowerCase() === 's' ||
-            t.semester.includes('ฤดู')))
-    )
-
-    const expectedCode = `${year}-${slot.codeSuffix}`
-    const startYear = slot.startMonth >= 8 ? year : year + 1
-    const endYear = slot.endMonth >= 8 ? year : year + 1
-    const defaultStartsAt = `${startYear}-${String(slot.startMonth || 8).padStart(2, '0')}-${String(slot.startDay || 1).padStart(2, '0')}`
-    const defaultEndsAt = `${endYear}-${String(slot.endMonth || 12).padStart(2, '0')}-${String(slot.endDay || 31).padStart(2, '0')}`
-
-    return {
-      slot,
-      dbRecord: match || null,
-      code: match?.code || expectedCode,
-      academicYear: year,
-      semester: String(slot.termNumber),
-      startsAt: match?.startsAt
-        ? match.startsAt.split('T')[0]!
-        : defaultStartsAt,
-      endsAt: match?.endsAt ? match.endsAt.split('T')[0]! : defaultEndsAt,
-      status: match?.status || 'planned',
-      isCreatedInDb: !!match
-    }
-  })
-})
-
-async function handleQuickToggleTermForYear(termInfo: ActiveTermViewItem) {
-  if (termInfo.dbRecord) {
-    await handleToggleTermStatus(termInfo.dbRecord)
-  } else {
-    modalSaving.value = true
-    try {
-      const payload = {
-        code: termInfo.code,
-        academicYear: termInfo.academicYear,
-        semester: termInfo.semester,
-        startsAt: new Date(termInfo.startsAt).toISOString(),
-        endsAt: new Date(termInfo.endsAt).toISOString(),
-        status: 'open' as const
-      }
-      await api('/academic/terms', {
-        method: 'POST',
-        body: payload
-      })
-      toast.add({
-        title: 'เปิดรับลงทะเบียนสำเร็จ',
-        description: `เปิดภาคการศึกษา ${payload.code} สำหรับปี ${termInfo.academicYear} เรียบร้อยแล้ว`,
-        color: 'success'
-      })
-      await refreshTerms()
-    } catch {
-      toast.add({
-        title: 'ดำเนินการไม่สำเร็จ',
-        description: 'ไม่สามารถสร้างหรือเปิดภาคการศึกษาได้',
-        color: 'error'
-      })
-    } finally {
-      modalSaving.value = false
-    }
-  }
-}
-
-async function handleActivateAllTermsForSelectedYear() {
-  const year = selectedOpYear.value
-  modalSaving.value = true
-  let count = 0
-  for (const item of activeTermsForSelectedYear.value) {
-    if (!item.dbRecord && item.slot.isActive) {
-      try {
-        await api('/academic/terms', {
-          method: 'POST',
-          body: {
-            code: item.code,
-            academicYear: year,
-            semester: item.semester,
-            startsAt: new Date(item.startsAt).toISOString(),
-            endsAt: new Date(item.endsAt).toISOString(),
-            status: item.slot.termNumber === 1 ? 'open' : 'planned'
-          }
-        })
-        count++
-      } catch {
-        // ignore duplicate
-      }
-    }
-  }
-  await refreshTerms()
-  modalSaving.value = false
-  toast.add({
-    title: `ซิงค์ภาคการศึกษาปี ${year} เรียบร้อย`,
-    description: `เชื่อมโยงโครงสร้าง ${masterTermStructure.value.length} เทอมเข้าสู่ฐานข้อมูลระบบแล้ว (${count} รายการใหม่)`,
-    color: 'success'
-  })
-}
-
-// =========================================================================
-// ACADEMIC TERM MODAL & ACTIONS (FOR SPECIFIC DATABASE DATES)
-// =========================================================================
+// Academic Term Modal & Actions
 const isTermModalOpen = ref(false)
 const editingTermId = ref<string | null>(null)
 
 const termForm = reactive({
   code: '',
-  academicYear: 2026,
+  academicYear: new Date().getFullYear(),
   semester: '1',
-  startsAt: '2026-08-01',
-  endsAt: '2026-12-31',
+  startsAt: '',
+  endsAt: '',
   status: 'planned' as 'planned' | 'open' | 'closed'
 })
 
@@ -1015,8 +835,8 @@ const termFormErrors = ref<Record<string, string>>({})
 
 function openCreateTermModal(prefillYear?: number, prefillSemester?: string) {
   editingTermId.value = null
-  const currentYear = prefillYear || selectedOpYear.value || 2026
-  const sem = prefillSemester || '1'
+  const currentYear = prefillYear ?? new Date().getFullYear()
+  const sem = prefillSemester ?? '1'
 
   termForm.academicYear = currentYear
   termForm.semester = sem
@@ -1199,9 +1019,9 @@ async function handleToggleTermStatus(term: AcademicTerm) {
           v-if="canManage && activeTab === 'terms'"
           color="primary"
           icon="i-lucide-plus"
-          label="เพิ่มรอบภาคการศึกษา"
+          label="เพิ่มภาคการศึกษา"
           size="md"
-          @click="openCreateSlotModal"
+          @click="openCreateTermModal()"
         />
       </div>
     </header>
@@ -1282,7 +1102,7 @@ async function handleToggleTermStatus(term: AcademicTerm) {
         <span>โครงสร้างภาคการศึกษา (Academic Terms)</span>
         <UBadge
           :color="activeTab === 'terms' ? 'primary' : 'neutral'"
-          :label="`${masterTermStructure.length} รอบเทอม`"
+          :label="`${termsData?.meta.total ?? 0} ภาคการศึกษา`"
           size="sm"
           variant="subtle"
         />
@@ -1893,6 +1713,13 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                   และสามารถเพิ่มรอบภาคเรียนที่ 4 หรือ 5
                   ได้ตามเงื่อนไขของหลักสูตร
                 </p>
+                <p
+                  class="mt-2 text-xs font-medium text-warning-700 dark:text-warning-300"
+                >
+                  การ์ดด้านล่างเป็นแม่แบบแสดงผลที่เก็บเฉพาะในเบราว์เซอร์นี้
+                  ไม่ได้สร้างหรือแก้ภาคการศึกษาจริงในระบบ
+                  ให้จัดการข้อมูลที่ใช้กับนักศึกษาในรายการภาคการศึกษาจริงด้านล่าง
+                </p>
               </div>
             </div>
 
@@ -2075,155 +1902,148 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- SECTION 2: จัดการสถานะและการเปิดรับสมัครตามปีการศึกษา (Academic Year Operations) -->
-      <div
-        class="rounded-2xl border border-default bg-default p-6 shadow-sm space-y-6"
-      >
-        <div
-          class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-default pb-4"
+        <section
+          class="rounded-2xl border border-default bg-default p-5 shadow-sm"
         >
-          <div class="flex items-center gap-3">
-            <span
-              class="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"
-            >
-              <UIcon name="i-lucide-sliders" class="size-5" />
-            </span>
+          <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 class="text-lg font-bold text-highlighted">
-                สถานะการเปิดรับสมัครตามปีการศึกษา (Academic Year Operations)
-              </h3>
-              <p class="text-xs text-muted">
-                เลือกปีการศึกษาเพื่อดูและเปิด/ปิดรับสมัครในแต่ละเทอม
-                โดยโครงสร้างเทอมจะเชื่อมโยงจากด้านบนอัตโนมัติ
+              <h2 class="text-lg font-bold text-highlighted">
+                ภาคการศึกษาที่ใช้งานจริง
+              </h2>
+              <p class="mt-1 text-sm text-muted">
+                ข้อมูลจากระบบ ใช้ผูกนักศึกษา รอบฝึกงาน และรายงาน
               </p>
             </div>
           </div>
 
-          <!-- Year Selector & Batch Activate Button -->
-          <div class="flex items-center gap-3 flex-wrap">
-            <div class="flex items-center gap-2">
-              <label class="text-xs font-semibold text-muted"
-                >ปีการศึกษา:</label
-              >
-              <select
-                v-model.number="selectedOpYear"
-                class="h-10 rounded-xl border border-default bg-default px-3.5 text-sm font-bold text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              >
-                <option
-                  v-for="yr in selectableAcademicYears"
-                  :key="yr"
-                  :value="yr"
-                >
-                  ปี {{ yr }} (พ.ศ. {{ yr > 2500 ? yr : yr + 543 }})
-                  {{ yr === 2026 ? '— ปีปัจจุบัน' : '' }}
-                </option>
-              </select>
-            </div>
-
+          <div
+            v-if="termsPending"
+            class="py-8 text-center text-sm text-muted"
+            role="status"
+          >
+            กำลังโหลดข้อมูลภาคการศึกษา…
+          </div>
+          <div
+            v-else-if="termsError"
+            class="mt-4 rounded-xl border border-error/30 bg-error/5 p-4 text-sm text-error"
+            role="alert"
+          >
+            โหลดข้อมูลภาคการศึกษาไม่สำเร็จ
             <UButton
-              v-if="canManage"
-              color="primary"
-              icon="i-lucide-zap"
-              label="เปิดรับสมัครทุกเทอมในปีนี้"
-              size="sm"
-              variant="soft"
-              :loading="modalSaving"
-              @click="handleActivateAllTermsForSelectedYear"
+              color="error"
+              label="ลองอีกครั้ง"
+              size="xs"
+              variant="ghost"
+              @click="refreshTerms()"
             />
           </div>
-        </div>
-
-        <!-- Terms for Selected Year Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-4">
-          <div
-            v-for="item in activeTermsForSelectedYear"
-            :key="item.code"
-            class="rounded-xl border p-4.5 transition-all flex flex-col justify-between space-y-4"
-            :class="[
-              item.status === 'open'
-                ? 'border-emerald-500/40 bg-emerald-500/5'
-                : item.status === 'closed'
-                  ? 'border-rose-500/30 bg-rose-500/5'
-                  : 'border-default bg-muted/10'
-            ]"
-          >
-            <div>
-              <div class="flex items-start justify-between gap-2">
-                <div>
-                  <span
-                    class="text-xs font-bold text-primary uppercase tracking-wider"
-                  >
-                    {{ item.slot.nameTh }}
-                  </span>
-                  <h4
-                    class="mt-1 font-mono text-base font-bold text-highlighted flex items-center gap-2"
-                  >
-                    <span>{{ item.code }}</span>
-                    <span class="text-xs font-normal text-muted font-sans"
-                      >(ปี {{ item.academicYear }})</span
-                    >
-                  </h4>
-                </div>
-
-                <UBadge
-                  :color="getTermStatusBadgeColor(item.status)"
-                  :label="getTermStatusLabel(item.status)"
+          <div v-else-if="termsData?.items.length" class="mt-4 overflow-x-auto">
+            <table class="w-full min-w-[720px] text-left text-sm">
+              <thead class="border-b border-default text-xs text-muted">
+                <tr>
+                  <th class="px-3 py-2 font-medium">รหัส / ปีการศึกษา</th>
+                  <th class="px-3 py-2 font-medium">ภาคเรียน</th>
+                  <th class="px-3 py-2 font-medium">ช่วงวันที่</th>
+                  <th class="px-3 py-2 font-medium">สถานะ</th>
+                  <th class="px-3 py-2 text-right font-medium">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="term in termsData.items"
+                  :key="term.id"
+                  class="border-b border-default/70 last:border-0"
+                >
+                  <td class="px-3 py-3">
+                    <div class="font-mono font-semibold text-highlighted">
+                      {{ term.code }}
+                    </div>
+                    <div class="text-xs text-muted">
+                      ปี {{ term.academicYear }}
+                    </div>
+                  </td>
+                  <td class="px-3 py-3">ภาค {{ term.semester }}</td>
+                  <td class="px-3 py-3 text-muted">
+                    {{ new Date(term.startsAt).toLocaleDateString('th-TH') }}
+                    –
+                    {{ new Date(term.endsAt).toLocaleDateString('th-TH') }}
+                  </td>
+                  <td class="px-3 py-3">
+                    <UBadge
+                      :color="
+                        term.status === 'open'
+                          ? 'success'
+                          : term.status === 'planned'
+                            ? 'warning'
+                            : 'neutral'
+                      "
+                      :label="
+                        term.status === 'open'
+                          ? 'เปิด'
+                          : term.status === 'planned'
+                            ? 'ตามแผน'
+                            : 'ปิด'
+                      "
+                      variant="subtle"
+                    />
+                  </td>
+                  <td class="px-3 py-3">
+                    <div v-if="canManage" class="flex justify-end gap-1">
+                      <UButton
+                        color="neutral"
+                        icon="i-lucide-pencil"
+                        size="xs"
+                        title="แก้ไขภาคการศึกษา"
+                        variant="ghost"
+                        @click="openEditTermModal(term)"
+                      />
+                      <UButton
+                        :color="term.status === 'open' ? 'warning' : 'success'"
+                        :icon="
+                          term.status === 'open'
+                            ? 'i-lucide-lock-keyhole'
+                            : 'i-lucide-lock-keyhole-open'
+                        "
+                        :label="term.status === 'open' ? 'ปิด' : 'เปิด'"
+                        size="xs"
+                        variant="ghost"
+                        @click="handleToggleTermStatus(term)"
+                      />
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div
+              class="mt-3 flex items-center justify-between text-xs text-muted"
+            >
+              <span>{{ termsData.meta.total }} ภาคการศึกษา</span>
+              <div class="flex items-center gap-2">
+                <UButton
+                  color="neutral"
+                  label="ก่อนหน้า"
                   size="xs"
-                  variant="subtle"
+                  variant="outline"
+                  :disabled="termPage <= 1"
+                  @click="termPage -= 1"
+                />
+                <span>หน้า {{ termPage }}</span>
+                <UButton
+                  color="neutral"
+                  label="ถัดไป"
+                  size="xs"
+                  variant="outline"
+                  :disabled="termPage * 50 >= termsData.meta.total"
+                  @click="termPage += 1"
                 />
               </div>
-
-              <div class="mt-3 text-xs text-muted space-y-1">
-                <div class="flex items-center gap-1.5">
-                  <UIcon
-                    name="i-lucide-calendar-days"
-                    class="size-3.5 text-primary shrink-0"
-                  />
-                  <span>{{ formatDateRange(item.startsAt, item.endsAt) }}</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Action buttons per term for selected year -->
-            <div
-              v-if="canManage"
-              class="pt-3 border-t border-default/60 flex items-center justify-between gap-2"
-            >
-              <UButton
-                color="neutral"
-                icon="i-lucide-calendar"
-                label="กำหนดวัน"
-                size="xs"
-                variant="ghost"
-                @click="
-                  () => {
-                    if (item.dbRecord) {
-                      openEditTermModal(item.dbRecord)
-                    } else {
-                      openCreateTermModal(item.academicYear, item.semester)
-                    }
-                  }
-                "
-              />
-
-              <UButton
-                :color="item.status === 'open' ? 'warning' : 'success'"
-                :icon="
-                  item.status === 'open'
-                    ? 'i-lucide-lock'
-                    : 'i-lucide-check-circle'
-                "
-                :label="item.status === 'open' ? 'ปิดรับสมัคร' : 'เปิดรับสมัคร'"
-                size="xs"
-                :variant="item.status === 'open' ? 'soft' : 'solid'"
-                :loading="modalSaving"
-                @click="handleQuickToggleTermForYear(item)"
-              />
             </div>
           </div>
-        </div>
+          <p v-else class="py-8 text-center text-sm text-muted">
+            ยังไม่มีภาคการศึกษาที่บันทึกในระบบ
+          </p>
+        </section>
       </div>
     </div>
 

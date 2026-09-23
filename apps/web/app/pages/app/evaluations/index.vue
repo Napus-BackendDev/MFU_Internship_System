@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { createSandboxedEmailPreviewDocument } from '~/utils/email-preview'
+
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
 interface LocalizedText {
@@ -11,9 +13,13 @@ interface Assignment {
   readonly studentId: string
   readonly evaluatorId: string
   readonly deadlineAt: string
-  readonly accessPin?: string
   readonly status:
-    'pending' | 'inProgress' | 'submitted' | 'expired' | 'reopened'
+    | 'pending'
+    | 'inProgress'
+    | 'submitted'
+    | 'expired'
+    | 'reopened'
+    | 'email_error'
 }
 
 interface StudentItem {
@@ -27,6 +33,7 @@ interface StudentItem {
   readonly schoolId?: string
   readonly programId?: string
   readonly courseId?: string
+  readonly evaluationStatus?: string
 }
 
 interface EvaluatorItem {
@@ -176,7 +183,7 @@ function getCompany(studentId: string, evaluatorId: string): string {
     if (org?.name?.th) return org.name.th
     if (org?.name?.en) return org.name.en
   }
-  return 'สถานประกอบการฝึกงาน'
+  return '[ไม่พบสถานประกอบการ]'
 }
 
 function getProvince(studentId: string, evaluatorId: string): string {
@@ -187,28 +194,7 @@ function getProvince(studentId: string, evaluatorId: string): string {
     const org = getOrganization(e.organizationId)
     if (org?.address?.province) return org.address.province
   }
-  return 'เชียงใหม่'
-}
-
-function copyPin(pin: string): void {
-  if (import.meta.client) {
-    navigator.clipboard.writeText(pin)
-    toast.add({
-      title: 'คัดลอกรหัส PIN สำเร็จ',
-      description: `PIN: ${pin} พร้อมใช้งานแล้ว`,
-      color: 'success',
-      icon: 'i-lucide-check'
-    })
-  }
-}
-
-function getPin(item: Assignment): string {
-  if (item.accessPin) return item.accessPin
-  const student = getStudent(item.studentId)
-  if (student?.studentId) {
-    return `2026${student.studentId.slice(-6).padStart(12, '0')}`
-  }
-  return '-'
+  return ''
 }
 
 const statusColor = (value: Assignment['status']) =>
@@ -218,9 +204,50 @@ const statusColor = (value: Assignment['status']) =>
       inProgress: 'info',
       submitted: 'success',
       expired: 'error',
-      reopened: 'warning'
+      reopened: 'warning',
+      email_error: 'error'
     }) as const
   )[value]
+
+function getAssignmentStatusBadge(item: Assignment) {
+  const student = getStudent(item.studentId)
+  if (
+    item.status === 'email_error' ||
+    student?.evaluationStatus === 'email_error'
+  ) {
+    return {
+      color: 'error' as const,
+      label: 'ส่งอีเมลผิดพลาด (Email Error)',
+      icon: 'i-lucide-mail-warning'
+    }
+  }
+  if (item.status === 'submitted') {
+    return {
+      color: 'success' as const,
+      label: 'ส่งผลแล้ว (Submitted)',
+      icon: 'i-lucide-check-circle'
+    }
+  }
+  if (item.status === 'inProgress') {
+    return {
+      color: 'info' as const,
+      label: 'กำลังทำแบบฟอร์ม (In Progress)',
+      icon: 'i-lucide-loader'
+    }
+  }
+  if (item.status === 'expired') {
+    return {
+      color: 'error' as const,
+      label: 'หมดอายุ (Expired)',
+      icon: 'i-lucide-alert-circle'
+    }
+  }
+  return {
+    color: 'warning' as const,
+    label: 'รอการประเมิน (Pending)',
+    icon: 'i-lucide-clock'
+  }
+}
 
 const statusOptions = [
   { value: undefined, label: 'ทั้งหมด (All)', icon: 'i-lucide-list-filter' },
@@ -243,6 +270,12 @@ const statusOptions = [
     color: 'success'
   },
   {
+    value: 'email_error',
+    label: 'ส่งอีเมลผิดพลาด (Email Error)',
+    icon: 'i-lucide-mail-warning',
+    color: 'error'
+  },
+  {
     value: 'expired',
     label: 'หมดอายุ (Expired)',
     icon: 'i-lucide-alert-circle',
@@ -261,6 +294,15 @@ const setStatus = (value?: string) => {
 
 const filteredItems = computed(() => {
   let items = data.value?.items ?? []
+  if (status.value === 'email_error') {
+    items = items.filter((item) => {
+      const student = getStudent(item.studentId)
+      return (
+        item.status === 'email_error' ||
+        student?.evaluationStatus === 'email_error'
+      )
+    })
+  }
   if (selectedOrg.value !== 'all') {
     items = items.filter((item) => {
       const e = getEvaluator(item.evaluatorId)
@@ -272,7 +314,6 @@ const filteredItems = computed(() => {
     items = items.filter((item) => {
       const student = getStudent(item.studentId)
       const evaluator = getEvaluator(item.evaluatorId)
-      const pin = getPin(item)
       const company = getCompany(item.studentId, item.evaluatorId)
       return (
         (student?.studentId && student.studentId.toLowerCase().includes(q)) ||
@@ -282,15 +323,12 @@ const filteredItems = computed(() => {
         (evaluator?.name?.th && evaluator.name.th.toLowerCase().includes(q)) ||
         (evaluator?.name?.en && evaluator.name.en.toLowerCase().includes(q)) ||
         (evaluator?.email && evaluator.email.toLowerCase().includes(q)) ||
-        company.toLowerCase().includes(q) ||
-        pin.toLowerCase().includes(q)
+        company.toLowerCase().includes(q)
       )
     })
   }
   return items
 })
-
-const runtimeConfig = useRuntimeConfig()
 
 function resetFilters(): void {
   status.value = undefined
@@ -314,7 +352,10 @@ interface SystemEmailTemplateItem {
 }
 
 const systemEmailTemplates = ref<
-  Record<'evaluation_request' | 'evaluation_reminder', SystemEmailTemplateItem | null>
+  Record<
+    'evaluation_request' | 'evaluation_reminder',
+    SystemEmailTemplateItem | null
+  >
 >({
   evaluation_request: null,
   evaluation_reminder: null
@@ -325,7 +366,10 @@ async function fetchSystemEmailTemplates() {
     const res = await api<SystemEmailTemplateItem[]>('/email-templates/system')
     if (Array.isArray(res)) {
       for (const t of res) {
-        if (t.code === 'evaluation_request' || t.code === 'evaluation_reminder') {
+        if (
+          t.code === 'evaluation_request' ||
+          t.code === 'evaluation_reminder'
+        ) {
           systemEmailTemplates.value[t.code] = t
         }
       }
@@ -339,12 +383,16 @@ const sendEmailModalOpen = ref(false)
 const selectedAssignmentForEmail = ref<Assignment | null>(null)
 const emailTargetStudent = ref<StudentItem | null>(null)
 const emailTargetEvaluator = ref<EvaluatorItem | null>(null)
-const selectedEmailTemplateCode = ref<'evaluation_request' | 'evaluation_reminder'>('evaluation_request')
+const selectedEmailTemplateCode = ref<
+  'evaluation_request' | 'evaluation_reminder'
+>('evaluation_request')
 const recipientEmailInput = ref('')
 const evaluatorNameInput = ref('')
 const sendingEmail = ref(false)
+const targetedEmailIdempotencyKey = ref('')
 
 function openSendEmailModal(item: Assignment): void {
+  targetedEmailIdempotencyKey.value = crypto.randomUUID()
   selectedAssignmentForEmail.value = item
   const student = getStudent(item.studentId) || null
   const evaluator = getEvaluator(item.evaluatorId) || null
@@ -356,12 +404,14 @@ function openSendEmailModal(item: Assignment): void {
   // If item.status === 'pending' || student?.evaluationStatus === 'awaiting_evaluator' -> Request
   const isAlreadySent =
     item.status === 'inProgress' ||
-    (student as unknown as { evaluationStatus?: string })?.evaluationStatus === 'awaiting_response'
-  selectedEmailTemplateCode.value = isAlreadySent ? 'evaluation_reminder' : 'evaluation_request'
+    (student as unknown as { evaluationStatus?: string })?.evaluationStatus ===
+      'awaiting_response'
+  selectedEmailTemplateCode.value = isAlreadySent
+    ? 'evaluation_reminder'
+    : 'evaluation_request'
 
-  recipientEmailInput.value = evaluator?.email || 'evaluator@workplace.co.th'
-  evaluatorNameInput.value =
-    evaluator?.name?.th || evaluator?.name?.en || student?.company || 'ผู้ดูแลการฝึกงาน'
+  recipientEmailInput.value = evaluator?.email || ''
+  evaluatorNameInput.value = evaluator?.name?.th || evaluator?.name?.en || ''
 
   void fetchSystemEmailTemplates()
   sendEmailModalOpen.value = true
@@ -369,11 +419,7 @@ function openSendEmailModal(item: Assignment): void {
 
 const previewEmailSubject = computed(() => {
   const t = systemEmailTemplates.value[selectedEmailTemplateCode.value]
-  let sub =
-    t?.subject ||
-    (selectedEmailTemplateCode.value === 'evaluation_reminder'
-      ? '[แจ้งเตือน] ขอความอนุเคราะห์กรอกแบบประเมินการฝึกงานของนักศึกษา ({{student_name}})'
-      : '[มหาวิทยาลัยแม่ฟ้าหลวง] ขอความอนุเคราะห์ประเมินผลการฝึกงานของนักศึกษา ({{student_name}})')
+  const sub = t?.subject || '[เทมเพลตอีเมลยังโหลดไม่สำเร็จ]'
 
   const sName =
     emailTargetStudent.value?.name?.th ||
@@ -384,31 +430,26 @@ const previewEmailSubject = computed(() => {
 
 const previewEmailHtml = computed(() => {
   const t = systemEmailTemplates.value[selectedEmailTemplateCode.value]
-  let body = t?.html || '<p>ระบบประเมินผลการฝึกงาน มหาวิทยาลัยแม่ฟ้าหลวง</p>'
+  const body = t?.html || '<p>[เทมเพลตอีเมลยังโหลดไม่สำเร็จ]</p>'
 
   const sName =
     emailTargetStudent.value?.name?.th ||
     emailTargetStudent.value?.name?.en ||
     'นักศึกษา'
-  const sId = emailTargetStudent.value?.studentId || '-'
+  const sId = emailTargetStudent.value?.studentId || '[ไม่พบรหัสนักศึกษา]'
   const cName = getCompany(
     selectedAssignmentForEmail.value?.studentId || '',
     selectedAssignmentForEmail.value?.evaluatorId || ''
   )
-  const eName = evaluatorNameInput.value || 'ผู้ดูแลการฝึกงาน'
-  const pin = selectedAssignmentForEmail.value
-    ? getPin(selectedAssignmentForEmail.value)
-    : '-'
+  const eName = evaluatorNameInput.value || '[ไม่พบชื่อผู้ประเมิน]'
+  const pin = '[PIN ส่งผ่านอีเมลคำเชิญและไม่แสดงซ้ำที่นี่]'
   const deadline = selectedAssignmentForEmail.value?.deadlineAt
     ? new Date(selectedAssignmentForEmail.value.deadlineAt).toLocaleDateString(
         'th-TH',
         { year: 'numeric', month: 'long', day: 'numeric' }
       )
     : '-'
-  const url = `${
-    (runtimeConfig.public as unknown as { webUrl?: string })?.webUrl ||
-    'http://localhost:8180'
-  }/evaluate?assignment=${selectedAssignmentForEmail.value?.id || ''}`
+  const url = '[ลิงก์คำเชิญสร้างโดยระบบเมื่อเข้าคิวส่ง]'
 
   return body
     .replaceAll('{{student_name}}', sName)
@@ -420,13 +461,31 @@ const previewEmailHtml = computed(() => {
     .replaceAll('{{invitation_url}}', url)
 })
 
+const previewEmailDocument = computed(() =>
+  createSandboxedEmailPreviewDocument(previewEmailHtml.value)
+)
+
 async function confirmSendEmail(): Promise<void> {
   if (!selectedAssignmentForEmail.value) return
+  if (
+    !recipientEmailInput.value.trim() ||
+    !systemEmailTemplates.value[selectedEmailTemplateCode.value]
+  ) {
+    toast.add({
+      title: 'ยังส่งคำเชิญไม่ได้',
+      description:
+        'ต้องมีอีเมลผู้ประเมินและเทมเพลตที่โหลดจากระบบก่อน จึงจะเข้าคิวส่งได้',
+      color: 'warning'
+    })
+    return
+  }
   sendingEmail.value = true
   try {
     await api('/campaigns/send-targeted', {
       method: 'POST',
+      headers: { 'idempotency-key': targetedEmailIdempotencyKey.value },
       body: {
+        assignmentId: selectedAssignmentForEmail.value.id,
         studentId: selectedAssignmentForEmail.value.studentId,
         templateCode: selectedEmailTemplateCode.value,
         recipientEmail: recipientEmailInput.value,
@@ -435,13 +494,13 @@ async function confirmSendEmail(): Promise<void> {
     })
 
     toast.add({
-      title: 'ส่งอีเมลสำเร็จ',
+      title: 'คิวส่งอีเมลแล้ว',
       description: `ส่งอีเมล (${
         selectedEmailTemplateCode.value === 'evaluation_reminder'
           ? 'แจ้งเตือนการประเมิน'
           : 'ขอความอนุเคราะห์ประเมิน'
-      }) ไปยัง ${recipientEmailInput.value} เรียบร้อยแล้ว`,
-      color: 'success',
+      }) ไปยัง ${recipientEmailInput.value} แล้ว ติดตามผลจากสถานะ Delivery`,
+      color: 'info',
       icon: 'i-lucide-check-circle'
     })
 
@@ -450,10 +509,11 @@ async function confirmSendEmail(): Promise<void> {
   } catch (err: unknown) {
     console.error('Failed to send targeted email:', err)
     toast.add({
-      title: 'ส่งอีเมลไม่สำเร็จ',
-      description: 'เกิดข้อผิดพลาดในการส่ง กรุณาลองใหม่อีกครั้ง',
+      title: 'ส่งอีเมลไม่สำเร็จ (Email Error)',
+      description: 'เข้าคิวส่งอีเมลไม่สำเร็จ ตรวจสอบ Delivery ก่อนลองซ้ำ',
       color: 'error'
     })
+    await refresh()
   } finally {
     sendingEmail.value = false
   }
@@ -540,13 +600,13 @@ async function confirmSendEmail(): Promise<void> {
             class="text-xs font-semibold text-muted flex items-center gap-1.5"
           >
             <UIcon name="i-lucide-search" class="size-3.5 text-primary" />
-            ค้นหาแบบประเมิน (รหัส, ชื่อ, ผู้ประเมิน, PIN)
+            ค้นหาแบบประเมิน (รหัส, ชื่อ, ผู้ประเมิน)
           </label>
           <div class="relative">
             <input
               v-model="searchQuery"
               type="text"
-              placeholder="รหัสนักศึกษา, ชื่อ, ผู้ประเมิน, บริษัท, PIN..."
+              placeholder="รหัสนักศึกษา, ชื่อ, ผู้ประเมิน, บริษัท..."
               class="w-full rounded-lg border border-default bg-default pl-8 pr-8 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary"
             />
             <UIcon
@@ -601,7 +661,6 @@ async function confirmSendEmail(): Promise<void> {
             <tr>
               <th class="min-w-[200px] whitespace-nowrap">ข้อมูลนักศึกษา</th>
               <th class="min-w-[280px]">ผู้ประเมิน & สถานประกอบการ</th>
-              <th class="min-w-[170px]">รหัส PIN</th>
               <th class="min-w-[140px]">กำหนดส่ง</th>
               <th class="min-w-[110px]">สถานะ</th>
               <th class="w-24 text-right">การจัดการ</th>
@@ -624,7 +683,9 @@ async function confirmSendEmail(): Promise<void> {
                       type="button"
                       title="คัดลอกรหัสนักศึกษา"
                       class="text-muted hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                      @click.stop="copyStudentId(getStudent(item.studentId)!.studentId)"
+                      @click.stop="
+                        copyStudentId(getStudent(item.studentId)!.studentId)
+                      "
                     >
                       <UIcon name="i-lucide-copy" class="size-3" />
                     </button>
@@ -669,7 +730,7 @@ async function confirmSendEmail(): Promise<void> {
                     <span class="font-mono font-semibold text-primary">
                       {{
                         getEvaluator(item.evaluatorId)?.email ||
-                        'evaluator@workplace.co.th'
+                        '[ไม่พบอีเมลผู้ประเมิน]'
                       }}
                     </span>
                   </div>
@@ -708,29 +769,6 @@ async function confirmSendEmail(): Promise<void> {
                 </div>
               </td>
 
-              <!-- 3. คอลัมน์รหัส PIN: เพิ่มแถว/คอลัมน์ PIN แล้ววาง PIN เอาไว้ -->
-              <td class="py-3 px-4">
-                <div
-                  v-if="getPin(item) !== '-'"
-                  class="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-muted font-mono text-xs font-bold text-amber-700 dark:text-amber-300 border border-default"
-                >
-                  <UIcon
-                    name="i-lucide-key-round"
-                    class="size-3.5 text-amber-600 dark:text-amber-400 shrink-0"
-                  />
-                  <span>{{ getPin(item) }}</span>
-                  <button
-                    type="button"
-                    title="คัดลอกรหัส PIN"
-                    class="text-muted hover:text-primary transition-colors p-0.5 ml-0.5 rounded hover:bg-default"
-                    @click="copyPin(getPin(item))"
-                  >
-                    <UIcon name="i-lucide-copy" class="size-3.5" />
-                  </button>
-                </div>
-                <span v-else class="text-xs text-muted font-mono">-</span>
-              </td>
-
               <!-- 4. กำหนดส่ง -->
               <td class="py-3 px-4 text-xs">
                 {{ new Date(item.deadlineAt).toLocaleString('th-TH') }}
@@ -739,10 +777,10 @@ async function confirmSendEmail(): Promise<void> {
               <!-- 5. สถานะ -->
               <td class="py-3 px-4">
                 <UBadge
-                  :color="statusColor(item.status)"
-                  :label="item.status"
+                  :color="getAssignmentStatusBadge(item).color"
+                  :label="getAssignmentStatusBadge(item).label"
                   size="xs"
-                  variant="soft"
+                  variant="subtle"
                 />
               </td>
 
@@ -773,24 +811,7 @@ async function confirmSendEmail(): Promise<void> {
                               : 'ส่งอีเมลขอความอนุเคราะห์ (Request)',
                           icon: 'i-lucide-mail',
                           onSelect: () => openSendEmailModal(item)
-                        },
-                        {
-                          label: 'ตรวจสอบการประเมิน',
-                          icon: 'i-lucide-eye',
-                          to:
-                            getPin(item) !== '-'
-                              ? `/evaluate?pin=${getPin(item)}`
-                              : `/evaluate?assignment=${item.id}`
-                        },
-                        ...(getPin(item) !== '-'
-                          ? [
-                              {
-                                label: 'คัดลอกรหัส PIN',
-                                icon: 'i-lucide-copy',
-                                onSelect: () => copyPin(getPin(item))
-                              }
-                            ]
-                          : [])
+                        }
                       ]
                     ]"
                     :content="{ align: 'end' }"
@@ -830,245 +851,327 @@ async function confirmSendEmail(): Promise<void> {
     <!-- ================================================================= -->
     <div
       v-if="sendEmailModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 sm:p-6 backdrop-blur-sm"
       @click="sendEmailModalOpen = false"
     >
       <div
-        class="w-full max-w-2xl rounded-2xl border border-default bg-default p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto"
+        class="w-full max-w-5xl xl:max-w-6xl rounded-2xl border border-default bg-elevated shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
         @click.stop
       >
         <!-- Modal Header -->
         <div
-          class="flex items-center justify-between border-b border-default pb-3"
+          class="flex items-center justify-between border-b border-default px-6 py-4 bg-muted/20 shrink-0"
         >
-          <div class="flex items-center gap-2.5">
-            <div class="p-2 rounded-xl bg-primary/10 text-primary">
+          <div class="flex items-center gap-3">
+            <div class="p-2.5 rounded-xl bg-primary/10 text-primary">
               <UIcon name="i-lucide-mail" class="size-5" />
             </div>
             <div>
-              <h3 class="font-bold text-highlighted text-base">
-                ส่งอีเมลการประเมิน
-              </h3>
+              <div class="flex items-center gap-2">
+                <h3 class="font-bold text-highlighted text-base sm:text-lg">
+                  ส่งอีเมลการประเมิน
+                </h3>
+                <UBadge
+                  color="primary"
+                  variant="subtle"
+                  size="xs"
+                  label="Targeted Email"
+                />
+              </div>
               <p class="text-xs text-muted">
                 ระบบจะเลือกแม่แบบอีเมลตามสถานะของนักศึกษาโดยอัตโนมัติ
+                พร้อมแสดงตัวอย่างจริงแบบเรียลไทม์
               </p>
             </div>
           </div>
           <button
             type="button"
-            class="rounded-lg p-1 text-muted hover:text-highlighted hover:bg-muted/40 transition-colors"
+            class="rounded-lg p-1.5 text-muted hover:text-highlighted hover:bg-muted/40 transition-colors"
             @click="sendEmailModalOpen = false"
           >
             <UIcon name="i-lucide-x" class="size-5" />
           </button>
         </div>
 
-        <!-- Student Info Card -->
+        <!-- Modal Body: 2 Columns Grid -->
         <div
-          class="rounded-xl border border-default bg-muted/20 p-4 space-y-2 text-xs"
+          class="grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto flex-1 items-stretch"
         >
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <div>
-              <span class="text-muted block">นักศึกษา:</span>
-              <span class="font-bold text-highlighted">
-                {{ emailTargetStudent?.name?.th || '-' }} ({{
-                  emailTargetStudent?.studentId
-                }})
-              </span>
+          <!-- LEFT COLUMN: Information & Configuration (5 cols on lg) -->
+          <div class="lg:col-span-5 flex flex-col space-y-4">
+            <!-- Student Info Card -->
+            <div
+              class="rounded-xl border border-default bg-muted/20 p-4 space-y-2.5 text-xs shadow-xs"
+            >
+              <div
+                class="flex items-center justify-between border-b border-default/60 pb-2"
+              >
+                <span
+                  class="font-semibold text-highlighted flex items-center gap-1.5"
+                >
+                  <UIcon name="i-lucide-user" class="size-3.5 text-primary" />
+                  ข้อมูลนักศึกษา
+                </span>
+                <UBadge
+                  :color="
+                    statusColor(selectedAssignmentForEmail?.status || 'pending')
+                  "
+                  :label="selectedAssignmentForEmail?.status || 'pending'"
+                  size="xs"
+                  variant="subtle"
+                />
+              </div>
+
+              <div class="space-y-2">
+                <div>
+                  <span class="text-muted text-[11px] block"
+                    >ชื่อ-นามสกุล / รหัสนักศึกษา:</span
+                  >
+                  <span class="font-bold text-highlighted text-xs">
+                    {{ emailTargetStudent?.name?.th || '-' }}
+                    <span class="text-muted font-normal"
+                      >({{ emailTargetStudent?.studentId }})</span
+                    >
+                  </span>
+                </div>
+                <div>
+                  <span class="text-muted text-[11px] block"
+                    >สถานประกอบการ:</span
+                  >
+                  <span class="font-medium text-highlighted text-xs">
+                    {{
+                      getCompany(
+                        selectedAssignmentForEmail?.studentId || '',
+                        selectedAssignmentForEmail?.evaluatorId || ''
+                      )
+                    }}
+                  </span>
+                </div>
+                <div
+                  class="pt-1.5 border-t border-default/40 text-[11px] text-muted"
+                >
+                  PIN จะถูกสร้างและส่งโดยระบบเมื่อออกคำเชิญ
+                  ไม่สามารถดูหรือคัดลอกจากหน้าจัดการได้
+                </div>
+              </div>
             </div>
-            <div>
-              <span class="text-muted block">สถานประกอบการ:</span>
-              <span class="font-bold text-highlighted">
-                {{
-                  getCompany(
-                    selectedAssignmentForEmail?.studentId || '',
-                    selectedAssignmentForEmail?.evaluatorId || ''
-                  )
-                }}
-              </span>
+
+            <!-- Email Type Selector -->
+            <div class="space-y-2">
+              <label
+                class="text-xs font-semibold text-highlighted flex items-center justify-between"
+              >
+                <span>เลือกประเภทของอีเมล:</span>
+                <span class="text-[11px] text-primary font-normal">
+                  * คัดเลือกอัตโนมัติตามสถานะ
+                </span>
+              </label>
+              <div class="grid grid-cols-1 gap-2">
+                <!-- Type 1 -->
+                <button
+                  type="button"
+                  :class="[
+                    'p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1',
+                    selectedEmailTemplateCode === 'evaluation_request'
+                      ? 'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-xs'
+                      : 'border-default bg-default hover:border-default/80 hover:bg-muted/30'
+                  ]"
+                  @click="selectedEmailTemplateCode = 'evaluation_request'"
+                >
+                  <div class="flex items-center justify-between">
+                    <span
+                      class="font-bold text-xs text-highlighted flex items-center gap-1.5"
+                    >
+                      <UIcon
+                        name="i-lucide-send"
+                        class="size-4 text-emerald-600"
+                      />
+                      1. ขอความอนุเคราะห์ประเมิน
+                    </span>
+                    <span
+                      v-if="selectedAssignmentForEmail?.status === 'pending'"
+                      class="rounded-full bg-emerald-500/20 text-emerald-600 text-[10px] px-2 py-0.5 font-semibold"
+                    >
+                      แนะนำ
+                    </span>
+                  </div>
+                  <p class="text-[11px] text-muted leading-tight">
+                    สำหรับนักศึกษาที่ยังไม่ได้ส่งแบบประเมิน
+                    หรือเริ่มต้นขอให้ระบุผู้ประเมิน
+                  </p>
+                </button>
+
+                <!-- Type 2 -->
+                <button
+                  type="button"
+                  :class="[
+                    'p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1',
+                    selectedEmailTemplateCode === 'evaluation_reminder'
+                      ? 'border-amber-500 bg-amber-500/10 ring-2 ring-amber-500/20 shadow-xs'
+                      : 'border-default bg-default hover:border-default/80 hover:bg-muted/30'
+                  ]"
+                  @click="selectedEmailTemplateCode = 'evaluation_reminder'"
+                >
+                  <div class="flex items-center justify-between">
+                    <span
+                      class="font-bold text-xs text-highlighted flex items-center gap-1.5"
+                    >
+                      <UIcon
+                        name="i-lucide-bell-ring"
+                        class="size-4 text-amber-600"
+                      />
+                      2. แจ้งเตือนการประเมิน
+                    </span>
+                    <span
+                      v-if="selectedAssignmentForEmail?.status === 'inProgress'"
+                      class="rounded-full bg-amber-500/20 text-amber-600 text-[10px] px-2 py-0.5 font-semibold"
+                    >
+                      แนะนำ
+                    </span>
+                  </div>
+                  <p class="text-[11px] text-muted leading-tight">
+                    สำหรับกรณีส่งไปแล้วแต่ผู้ประเมินยังไม่ได้ตอบหรือยังไม่เสร็จสิ้น
+                  </p>
+                </button>
+              </div>
             </div>
-            <div>
-              <span class="text-muted block">สถานะปัจจุบัน:</span>
+
+            <!-- Recipient Fields Card -->
+            <div
+              class="rounded-xl border border-default bg-muted/10 p-3.5 space-y-3 shadow-xs"
+            >
+              <span
+                class="font-semibold text-highlighted text-xs flex items-center gap-1.5"
+              >
+                <UIcon name="i-lucide-at-sign" class="size-3.5 text-primary" />
+                ข้อมูลผู้รับอีเมล
+              </span>
+
+              <div class="space-y-1">
+                <label class="text-[11px] font-medium text-muted"
+                  >อีเมลผู้รับ *</label
+                >
+                <input
+                  v-model="recipientEmailInput"
+                  type="email"
+                  class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs font-mono text-highlighted focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all"
+                  placeholder="evaluator@company.co.th"
+                  required
+                />
+              </div>
+
+              <div class="space-y-1">
+                <label class="text-[11px] font-medium text-muted"
+                  >ชื่อผู้รับ / ผู้ประเมิน</label
+                >
+                <input
+                  v-model="evaluatorNameInput"
+                  type="text"
+                  class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all"
+                  placeholder="คุณสมชาย ใจดี"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT COLUMN: Live Email Preview (7 cols on lg) -->
+          <div class="lg:col-span-7 flex flex-col h-full space-y-2 min-w-0">
+            <div class="flex items-center justify-between">
+              <label
+                class="text-xs font-semibold text-highlighted flex items-center gap-1.5"
+              >
+                <UIcon name="i-lucide-eye" class="size-4 text-primary" />
+                ตัวอย่างอีเมลจริงที่จะถูกส่งออก
+              </label>
               <UBadge
-                :color="
-                  statusColor(
-                    selectedAssignmentForEmail?.status || 'pending'
-                  )
-                "
-                :label="selectedAssignmentForEmail?.status || 'pending'"
-                size="xs"
+                color="neutral"
                 variant="subtle"
+                size="xs"
+                label="ดึงจากแม่แบบที่ตั้งค่าไว้"
+                icon="i-lucide-layers"
               />
             </div>
-            <div>
-              <span class="text-muted block">รหัส PIN:</span>
-              <span class="font-mono font-bold text-amber-600">
-                {{
-                  selectedAssignmentForEmail
-                    ? getPin(selectedAssignmentForEmail)
-                    : '-'
-                }}
-              </span>
-            </div>
-          </div>
-        </div>
 
-        <!-- Email Type Selector (2 Types) -->
-        <div class="space-y-2">
-          <label
-            class="text-xs font-semibold text-highlighted flex items-center justify-between"
-          >
-            <span>เลือกประเภทของอีเมล:</span>
-            <span class="text-[11px] text-primary font-normal">
-              * คัดเลือกอัตโนมัติตามสถานะนักศึกษา
-            </span>
-          </label>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <!-- Type 1 -->
-            <button
-              type="button"
-              :class="[
-                'p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1',
-                selectedEmailTemplateCode === 'evaluation_request'
-                  ? 'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/20'
-                  : 'border-default bg-default hover:border-default/80 hover:bg-muted/30'
-              ]"
-              @click="selectedEmailTemplateCode = 'evaluation_request'"
-            >
-              <div class="flex items-center justify-between">
-                <span
-                  class="font-bold text-xs text-highlighted flex items-center gap-1.5"
-                >
-                  <UIcon name="i-lucide-send" class="size-4 text-emerald-600" />
-                  1. ขอความอนุเคราะห์ประเมิน
-                </span>
-                <span
-                  v-if="selectedAssignmentForEmail?.status === 'pending'"
-                  class="rounded-full bg-emerald-500/20 text-emerald-600 text-[10px] px-2 py-0.2 font-semibold"
-                >
-                  แนะนำ
-                </span>
-              </div>
-              <p class="text-[11px] text-muted leading-tight">
-                สำหรับนักศึกษาที่ยังไม่ได้ส่งแบบประเมิน หรือเริ่มต้นขอให้ระบุผู้ประเมิน
-              </p>
-            </button>
-
-            <!-- Type 2 -->
-            <button
-              type="button"
-              :class="[
-                'p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1',
-                selectedEmailTemplateCode === 'evaluation_reminder'
-                  ? 'border-amber-500 bg-amber-500/10 ring-2 ring-amber-500/20'
-                  : 'border-default bg-default hover:border-default/80 hover:bg-muted/30'
-              ]"
-              @click="selectedEmailTemplateCode = 'evaluation_reminder'"
-            >
-              <div class="flex items-center justify-between">
-                <span
-                  class="font-bold text-xs text-highlighted flex items-center gap-1.5"
-                >
-                  <UIcon
-                    name="i-lucide-bell-ring"
-                    class="size-4 text-amber-600"
-                  />
-                  2. แจ้งเตือนการประเมิน
-                </span>
-                <span
-                  v-if="selectedAssignmentForEmail?.status === 'inProgress'"
-                  class="rounded-full bg-amber-500/20 text-amber-600 text-[10px] px-2 py-0.2 font-semibold"
-                >
-                  แนะนำ
-                </span>
-              </div>
-              <p class="text-[11px] text-muted leading-tight">
-                สำหรับกรณีส่งไปแล้วแต่ผู้ประเมินยังไม่ได้ตอบหรือยังไม่เสร็จสิ้น
-              </p>
-            </button>
-          </div>
-        </div>
-
-        <!-- Recipient Fields -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div class="space-y-1">
-            <label class="text-xs font-semibold text-highlighted"
-              >อีเมลผู้รับ:</label
-            >
-            <input
-              v-model="recipientEmailInput"
-              type="email"
-              class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs font-mono text-highlighted focus:outline-none focus:ring-1 focus:ring-primary"
-              placeholder="evaluator@company.co.th"
-            />
-          </div>
-          <div class="space-y-1">
-            <label class="text-xs font-semibold text-highlighted"
-              >ชื่อผู้รับ / ผู้ประเมิน:</label
-            >
-            <input
-              v-model="evaluatorNameInput"
-              type="text"
-              class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary"
-              placeholder="คุณสมชาย ใจดี"
-            />
-          </div>
-        </div>
-
-        <!-- Live Preview of Email to be Sent -->
-        <div class="space-y-1.5">
-          <label
-            class="text-xs font-semibold text-highlighted flex items-center gap-1.5"
-          >
-            <UIcon name="i-lucide-eye" class="size-3.5 text-primary" />
-            ตัวอย่างอีเมลจริงที่จะถูกส่งออก (ดึงจากแม่แบบที่ตั้งค่าไว้):
-          </label>
-          <div
-            class="rounded-xl border border-default bg-default overflow-hidden text-xs"
-          >
-            <div class="bg-muted/30 border-b border-default p-3 space-y-1">
-              <p>
-                <strong class="text-muted">เรื่อง:</strong>
-                <span class="font-semibold text-highlighted">{{
-                  previewEmailSubject
-                }}</span>
-              </p>
-              <p>
-                <strong class="text-muted">ถึง:</strong>
-                {{ recipientEmailInput }}
-              </p>
-            </div>
+            <!-- Email Container Frame -->
             <div
-              class="p-4 bg-white dark:bg-neutral-900 max-h-48 overflow-y-auto"
+              class="rounded-xl border border-default bg-default overflow-hidden flex flex-col flex-1 shadow-sm min-h-[420px] max-h-[580px]"
             >
-              <div v-html="previewEmailHtml"></div>
+              <!-- Email Meta Header -->
+              <div
+                class="bg-muted/30 border-b border-default p-3.5 space-y-1.5 shrink-0 text-xs"
+              >
+                <div class="flex items-start gap-2">
+                  <span class="text-muted font-medium shrink-0">เรื่อง:</span>
+                  <span class="font-bold text-highlighted break-words">{{
+                    previewEmailSubject
+                  }}</span>
+                </div>
+                <div class="flex items-center gap-2 text-muted">
+                  <span class="font-medium shrink-0">ถึง:</span>
+                  <span
+                    class="font-mono text-highlighted bg-muted/40 px-2 py-0.5 rounded text-[11px]"
+                  >
+                    {{ recipientEmailInput || '-' }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Email HTML Body Canvas -->
+              <div
+                class="p-5 bg-white dark:bg-neutral-900 flex-1 overflow-y-auto"
+              >
+                <iframe
+                  :srcdoc="previewEmailDocument"
+                  title="ตัวอย่างอีเมลคำเชิญประเมิน"
+                  sandbox=""
+                  referrerpolicy="no-referrer"
+                  class="block min-h-[360px] w-full border-0 bg-white"
+                />
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- Modal Actions -->
+        <!-- Modal Footer -->
         <div
-          class="flex items-center justify-end gap-2 pt-2 border-t border-default"
+          class="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-default px-6 py-4 bg-muted/20 shrink-0"
         >
-          <UButton
-            color="neutral"
-            label="ยกเลิก"
-            size="sm"
-            variant="ghost"
-            @click="sendEmailModalOpen = false"
-          />
-          <UButton
-            color="primary"
-            icon="i-lucide-send"
-            :label="
-              selectedEmailTemplateCode === 'evaluation_reminder'
-                ? 'ส่งอีเมลแจ้งเตือน'
-                : 'ส่งอีเมลขอความอนุเคราะห์'
-            "
-            size="sm"
-            :loading="sendingEmail"
-            @click="confirmSendEmail"
-          />
+          <div class="text-xs text-muted flex items-center gap-1.5">
+            <UIcon
+              name="i-lucide-shield-check"
+              class="size-4 text-emerald-600"
+            />
+            <span
+              >ระบบจะแนบลิงก์และรหัส PIN
+              สำหรับเข้าประเมินให้นักศึกษาและสถานประกอบการโดยอัตโนมัติ</span
+            >
+          </div>
+
+          <div class="flex items-center gap-2 self-end sm:self-auto">
+            <UButton
+              color="neutral"
+              label="ยกเลิก"
+              size="md"
+              variant="ghost"
+              @click="sendEmailModalOpen = false"
+            />
+            <UButton
+              color="primary"
+              icon="i-lucide-send"
+              :label="
+                selectedEmailTemplateCode === 'evaluation_reminder'
+                  ? 'ส่งอีเมลแจ้งเตือน'
+                  : 'ส่งอีเมลขอความอนุเคราะห์'
+              "
+              size="md"
+              :loading="sendingEmail"
+              :disabled="
+                !recipientEmailInput.trim() ||
+                !systemEmailTemplates[selectedEmailTemplateCode]
+              "
+              @click="confirmSendEmail"
+            />
+          </div>
         </div>
       </div>
     </div>

@@ -65,13 +65,13 @@ const devPersonas: DevPersona[] = [
     role: 'student',
     title: 'นักศึกษา (Student)',
     roleLabel: 'Student',
-    displayName: 'นายสมชาย ใจดี (นักศึกษา)',
-    email: '6531501001@lamduan.mfu.ac.th',
+    displayName: 'ปลื้ม (Chayanuch Panyadee)',
+    email: '6631503016@lamduan.mfu.ac.th',
     description:
       'เข้าดูสถานะการฝึกงาน ตรวจสอบผลการประเมิน และดาวน์โหลดเอกสาร 2 ฉบับ',
     icon: 'i-lucide-graduation-cap',
     badgeColor: 'success',
-    studentId: '6531501001'
+    studentId: '6531501009'
   }
 ]
 

@@ -39,6 +39,16 @@ describe('runtime baseline', () => {
     ])
   })
 
+  it('loads trusted proxy CIDRs only from explicit configuration', () => {
+    expect(
+      loadEnvironment({
+        ...developmentEnvironment,
+        TRUSTED_PROXY_CIDRS: '10.0.0.0/8,192.0.2.10/32'
+      }).TRUSTED_PROXY_CIDRS
+    ).toBe('10.0.0.0/8,192.0.2.10/32')
+    expect(loadEnvironment(developmentEnvironment).TRUSTED_PROXY_CIDRS).toBe('')
+  })
+
   it('rejects a remote development MongoDB URI', () => {
     expect(() =>
       loadEnvironment({

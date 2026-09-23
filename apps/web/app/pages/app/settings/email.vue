@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { createSandboxedEmailPreviewDocument } from '~/utils/email-preview'
+
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
 interface SystemTemplateItem {
@@ -44,7 +46,9 @@ interface FriendlyForm {
 const api = useApi()
 const toast = useToast()
 
-const activeTab = ref<'evaluation_request' | 'evaluation_reminder'>('evaluation_request')
+const activeTab = ref<'evaluation_request' | 'evaluation_reminder'>(
+  'evaluation_request'
+)
 // Mode: 'friendly' (Easy form), 'preview' (Full preview), 'html' (Advanced code)
 const editorMode = ref<'friendly' | 'preview' | 'html'>('friendly')
 // Sub-tab inside friendly mode: 'content' | 'design'
@@ -54,12 +58,15 @@ const loading = ref(true)
 const saving = ref(false)
 const resetting = ref(false)
 
-const templates = ref<Record<'evaluation_request' | 'evaluation_reminder', SystemTemplateItem>>({
+const templates = ref<
+  Record<'evaluation_request' | 'evaluation_reminder', SystemTemplateItem>
+>({
   evaluation_request: {
     id: '',
     code: 'evaluation_request',
     name: 'ขอความอนุเคราะห์ประเมินผลการฝึกงาน / กรอกข้อมูลผู้ประเมิน',
-    description: 'ส่งไปยังสถานประกอบการหรือผู้ประสานงาน เพื่อขอความอนุเคราะห์กรอกข้อมูลผู้ประเมินหรือเริ่มการประเมินนักศึกษา',
+    description:
+      'ส่งไปยังสถานประกอบการหรือผู้ประสานงาน เพื่อขอความอนุเคราะห์กรอกข้อมูลผู้ประเมินหรือเริ่มการประเมินนักศึกษา',
     subject: '',
     html: '',
     text: '',
@@ -72,7 +79,8 @@ const templates = ref<Record<'evaluation_request' | 'evaluation_reminder', Syste
     id: '',
     code: 'evaluation_reminder',
     name: 'แจ้งเตือนการกรอกแบบประเมินผลการฝึกงาน',
-    description: 'ส่งไปยังผู้ประเมินเพื่อแจ้งเตือนว่ายังไม่ได้กรอกแบบประเมิน หรือแบบประเมินยังไม่เสร็จสมบูรณ์',
+    description:
+      'ส่งไปยังผู้ประเมินเพื่อแจ้งเตือนว่ายังไม่ได้กรอกแบบประเมิน หรือแบบประเมินยังไม่เสร็จสมบูรณ์',
     subject: '',
     html: '',
     text: '',
@@ -85,26 +93,60 @@ const templates = ref<Record<'evaluation_request' | 'evaluation_reminder', Syste
 
 // Palette presets
 const themePresets = [
-  { name: 'เขียว มฟล.', color: '#059669', bgName: 'bg-emerald-600', desc: 'ทางการ น่าเชื่อถือ (เอกสารทางการ)' },
-  { name: 'กรมท่าวิชาการ', color: '#1d4ed8', bgName: 'bg-blue-700', desc: 'สุขุม สุภาพ ภูมิฐาน' },
-  { name: 'ส้ม-ทอง เตือนด่วน', color: '#d97706', bgName: 'bg-amber-600', desc: 'กระตุ้นความสนใจ แจ้งเตือนด่วน' },
-  { name: 'ม่วงสง่างาม', color: '#7c3aed', bgName: 'bg-purple-600', desc: 'โดดเด่น สวยงาม ทันสมัย' },
-  { name: 'แดงสุภาพ', color: '#be123c', bgName: 'bg-rose-700', desc: 'หนักแน่น ชัดเจน' },
-  { name: 'เทาโมเดิร์น', color: '#334155', bgName: 'bg-slate-700', desc: 'มินิมอล เรียบง่าย' }
+  {
+    name: 'เขียว มฟล.',
+    color: '#059669',
+    bgName: 'bg-emerald-600',
+    desc: 'ทางการ น่าเชื่อถือ (เอกสารทางการ)'
+  },
+  {
+    name: 'กรมท่าวิชาการ',
+    color: '#1d4ed8',
+    bgName: 'bg-blue-700',
+    desc: 'สุขุม สุภาพ ภูมิฐาน'
+  },
+  {
+    name: 'ส้ม-ทอง เตือนด่วน',
+    color: '#d97706',
+    bgName: 'bg-amber-600',
+    desc: 'กระตุ้นความสนใจ แจ้งเตือนด่วน'
+  },
+  {
+    name: 'ม่วงสง่างาม',
+    color: '#7c3aed',
+    bgName: 'bg-purple-600',
+    desc: 'โดดเด่น สวยงาม ทันสมัย'
+  },
+  {
+    name: 'แดงสุภาพ',
+    color: '#be123c',
+    bgName: 'bg-rose-700',
+    desc: 'หนักแน่น ชัดเจน'
+  },
+  {
+    name: 'เทาโมเดิร์น',
+    color: '#334155',
+    bgName: 'bg-slate-700',
+    desc: 'มินิมอล เรียบง่าย'
+  }
 ]
 
 // Friendly form state for each template
-const friendlyForms = ref<Record<'evaluation_request' | 'evaluation_reminder', FriendlyForm>>({
+const friendlyForms = ref<
+  Record<'evaluation_request' | 'evaluation_reminder', FriendlyForm>
+>({
   evaluation_request: {
     subject: '',
     headerTitle: 'มหาวิทยาลัยแม่ฟ้าหลวง',
     headerSubtitle: 'ระบบประเมินผลการฝึกงานและสหกิจศึกษา',
     greeting: 'เรียน {{evaluator_name}} (สถานประกอบการ: {{company_name}}),',
-    mainMessage: 'เนื่องด้วยนักศึกษา {{student_name}} (รหัสนักศึกษา: {{student_id}}) ได้เข้าปฏิบัติการฝึกงาน ณ สถานประกอบการของท่าน ทางมหาวิทยาลัยแม่ฟ้าหลวงใคร่ขอความอนุเคราะห์ท่านในการประเมินผลการปฏิบัติงานของนักศึกษา หรือมอบหมายผู้ประเมินเพื่อดำเนินการตามขั้นตอน',
+    mainMessage:
+      'เนื่องด้วยนักศึกษา {{student_name}} (รหัสนักศึกษา: {{student_id}}) ได้เข้าปฏิบัติการฝึกงาน ณ สถานประกอบการของท่าน ทางมหาวิทยาลัยแม่ฟ้าหลวงใคร่ขอความอนุเคราะห์ท่านในการประเมินผลการปฏิบัติงานของนักศึกษา หรือมอบหมายผู้ประเมินเพื่อดำเนินการตามขั้นตอน',
     secondMessage: '',
     showInfoBox: true,
     buttonText: 'เข้าสู่แบบประเมินออนไลน์',
-    footerNote: 'หากท่านดำเนินการเรียบร้อยแล้ว หรือมีข้อสงสัยประการใด สามารถติดต่อสอบถามศูนย์บริการฝึกงานฯ',
+    footerNote:
+      'หากท่านดำเนินการเรียบร้อยแล้ว หรือมีข้อสงสัยประการใด สามารถติดต่อสอบถามศูนย์บริการฝึกงานฯ',
     footerOrg: 'ศูนย์บริการฝึกงานและสหกิจศึกษา มหาวิทยาลัยแม่ฟ้าหลวง',
     design: {
       themeColor: '#059669',
@@ -123,8 +165,10 @@ const friendlyForms = ref<Record<'evaluation_request' | 'evaluation_reminder', F
     headerTitle: 'มหาวิทยาลัยแม่ฟ้าหลวง',
     headerSubtitle: 'แจ้งเตือน: แบบประเมินผลการฝึกงานรอการดำเนินการ',
     greeting: 'เรียน {{evaluator_name}} (สถานประกอบการ: {{company_name}}),',
-    mainMessage: 'ตามที่ทางมหาวิทยาลัยแม่ฟ้าหลวงได้ส่งแบบประเมินผลการฝึกงานของนักศึกษา {{student_name}} (รหัสนักศึกษา: {{student_id}}) ไปยังท่านแล้วนั้น ปัจจุบันระบบพบว่าแบบประเมินดังกล่าวยังไม่ได้ดำเนินการให้เสร็จสิ้นสมบูรณ์',
-    secondMessage: 'ทางมหาวิทยาลัยจึงขอความกรุณาท่านช่วยสละเวลาเข้ามาบันทึกผลการประเมินให้แก่นักศึกษา ก่อนครบกำหนดส่งในวันที่ {{deadline}} เพื่อให้นักศึกษาสามารถนำผลไปประกอบการสำเร็จการศึกษาตามกำหนดการ',
+    mainMessage:
+      'ตามที่ทางมหาวิทยาลัยแม่ฟ้าหลวงได้ส่งแบบประเมินผลการฝึกงานของนักศึกษา {{student_name}} (รหัสนักศึกษา: {{student_id}}) ไปยังท่านแล้วนั้น ปัจจุบันระบบพบว่าแบบประเมินดังกล่าวยังไม่ได้ดำเนินการให้เสร็จสิ้นสมบูรณ์',
+    secondMessage:
+      'ทางมหาวิทยาลัยจึงขอความกรุณาท่านช่วยสละเวลาเข้ามาบันทึกผลการประเมินให้แก่นักศึกษา ก่อนครบกำหนดส่งในวันที่ {{deadline}} เพื่อให้นักศึกษาสามารถนำผลไปประกอบการสำเร็จการศึกษาตามกำหนดการ',
     showInfoBox: true,
     buttonText: 'คลิกที่นี่เพื่อดำเนินการต่อ',
     footerNote: 'หากท่านดำเนินการเรียบร้อยแล้ว ขออภัยในอีเมลแจ้งเตือนฉบับนี้',
@@ -144,7 +188,12 @@ const friendlyForms = ref<Record<'evaluation_request' | 'evaluation_reminder', F
 })
 
 // Raw drafts for HTML mode
-const rawDrafts = ref<Record<'evaluation_request' | 'evaluation_reminder', { html: string; text: string }>>({
+const rawDrafts = ref<
+  Record<
+    'evaluation_request' | 'evaluation_reminder',
+    { html: string; text: string }
+  >
+>({
   evaluation_request: { html: '', text: '' },
   evaluation_reminder: { html: '', text: '' }
 })
@@ -154,33 +203,79 @@ const currentFriendly = computed(() => friendlyForms.value[activeTab.value])
 const currentRaw = computed(() => rawDrafts.value[activeTab.value])
 
 const availablePlaceholders = [
-  { tag: '{{student_name}}', label: 'ชื่อนักศึกษา', example: 'นายกิตติภูมิ พงษ์ศิริ', icon: 'i-lucide-user' },
-  { tag: '{{student_id}}', label: 'รหัสนักศึกษา', example: '6531501001', icon: 'i-lucide-id-card' },
-  { tag: '{{company_name}}', label: 'สถานประกอบการ', example: 'บริษัท โบวองค์ แบบบอนวาเทอร์ลี่ จำกัด', icon: 'i-lucide-building-2' },
-  { tag: '{{evaluator_name}}', label: 'ชื่อผู้ประเมิน', example: 'คุณสมชาย ใจดี', icon: 'i-lucide-user-check' },
-  { tag: '{{deadline}}', label: 'กำหนดส่ง', example: '12 พฤศจิกายน 2569', icon: 'i-lucide-calendar' },
-  { tag: '{{pin}}', label: 'รหัส PIN', example: '2026501001', icon: 'i-lucide-key' },
-  { tag: '{{invitation_url}}', label: 'ลิงก์ทำแบบประเมิน', example: 'http://localhost:8180/evaluate?token=sample...', icon: 'i-lucide-link' }
+  {
+    tag: '{{student_name}}',
+    label: 'ชื่อนักศึกษา',
+    example: 'นายกิตติภูมิ พงษ์ศิริ',
+    icon: 'i-lucide-user'
+  },
+  {
+    tag: '{{student_id}}',
+    label: 'รหัสนักศึกษา',
+    example: '6531501001',
+    icon: 'i-lucide-id-card'
+  },
+  {
+    tag: '{{company_name}}',
+    label: 'สถานประกอบการ',
+    example: 'บริษัท โบวองค์ แบบบอนวาเทอร์ลี่ จำกัด',
+    icon: 'i-lucide-building-2'
+  },
+  {
+    tag: '{{evaluator_name}}',
+    label: 'ชื่อผู้ประเมิน',
+    example: 'คุณสมชาย ใจดี',
+    icon: 'i-lucide-user-check'
+  },
+  {
+    tag: '{{deadline}}',
+    label: 'กำหนดส่ง',
+    example: '12 พฤศจิกายน 2569',
+    icon: 'i-lucide-calendar'
+  },
+  {
+    tag: '{{pin}}',
+    label: 'รหัส PIN',
+    example: '[สร้างเมื่อส่งจริง]',
+    icon: 'i-lucide-key'
+  },
+  {
+    tag: '{{invitation_url}}',
+    label: 'ลิงก์ทำแบบประเมิน',
+    example: '[ลิงก์ลงนามสร้างเมื่อส่งจริง]',
+    icon: 'i-lucide-link'
+  }
 ]
 
 function getPastelColors(color: string) {
-  if (color === '#059669') return { bg: '#ecfdf5', border: '#a7f3d0', text: '#065f46' }
-  if (color === '#1d4ed8') return { bg: '#eff6ff', border: '#bfdbfe', text: '#1e40af' }
-  if (color === '#d97706') return { bg: '#fffbeb', border: '#fde68a', text: '#92400e' }
-  if (color === '#7c3aed') return { bg: '#f5f3ff', border: '#ddd6fe', text: '#5b21b6' }
-  if (color === '#be123c') return { bg: '#fff1f2', border: '#fecdd3', text: '#9f1239' }
-  if (color === '#334155') return { bg: '#f8fafc', border: '#cbd5e1', text: '#1e293b' }
+  if (color === '#059669')
+    return { bg: '#ecfdf5', border: '#a7f3d0', text: '#065f46' }
+  if (color === '#1d4ed8')
+    return { bg: '#eff6ff', border: '#bfdbfe', text: '#1e40af' }
+  if (color === '#d97706')
+    return { bg: '#fffbeb', border: '#fde68a', text: '#92400e' }
+  if (color === '#7c3aed')
+    return { bg: '#f5f3ff', border: '#ddd6fe', text: '#5b21b6' }
+  if (color === '#be123c')
+    return { bg: '#fff1f2', border: '#fecdd3', text: '#9f1239' }
+  if (color === '#334155')
+    return { bg: '#f8fafc', border: '#cbd5e1', text: '#1e293b' }
   return { bg: '#f8fafc', border: '#e2e8f0', text: color }
 }
 
-function parseHtmlToFriendly(html: string, code: 'evaluation_request' | 'evaluation_reminder'): FriendlyForm {
+function parseHtmlToFriendly(
+  html: string,
+  code: 'evaluation_request' | 'evaluation_reminder'
+): FriendlyForm {
   const isReminder = code === 'evaluation_reminder'
   const defaultTheme = isReminder ? '#d97706' : '#059669'
 
   const def: FriendlyForm = {
     subject: '',
     headerTitle: 'มหาวิทยาลัยแม่ฟ้าหลวง',
-    headerSubtitle: isReminder ? 'แจ้งเตือน: แบบประเมินผลการฝึกงานรอการดำเนินการ' : 'ระบบประเมินผลการฝึกงานและสหกิจศึกษา',
+    headerSubtitle: isReminder
+      ? 'แจ้งเตือน: แบบประเมินผลการฝึกงานรอการดำเนินการ'
+      : 'ระบบประเมินผลการฝึกงานและสหกิจศึกษา',
     greeting: 'เรียน {{evaluator_name}} (สถานประกอบการ: {{company_name}}),',
     mainMessage: isReminder
       ? 'ตามที่ทางมหาวิทยาลัยแม่ฟ้าหลวงได้ส่งแบบประเมินผลการฝึกงานของนักศึกษา {{student_name}} (รหัสนักศึกษา: {{student_id}}) ไปยังท่านแล้วนั้น ปัจจุบันระบบพบว่าแบบประเมินดังกล่าวยังไม่ได้ดำเนินการให้เสร็จสิ้นสมบูรณ์'
@@ -189,7 +284,9 @@ function parseHtmlToFriendly(html: string, code: 'evaluation_request' | 'evaluat
       ? 'ทางมหาวิทยาลัยจึงขอความกรุณาท่านช่วยสละเวลาเข้ามาบันทึกผลการประเมินให้แก่นักศึกษา ก่อนครบกำหนดส่งในวันที่ {{deadline}} เพื่อให้นักศึกษาสามารถนำผลไปประกอบการสำเร็จการศึกษาตามกำหนดการ'
       : '',
     showInfoBox: true,
-    buttonText: isReminder ? 'คลิกที่นี่เพื่อดำเนินการต่อ' : 'เข้าสู่แบบประเมินออนไลน์',
+    buttonText: isReminder
+      ? 'คลิกที่นี่เพื่อดำเนินการต่อ'
+      : 'เข้าสู่แบบประเมินออนไลน์',
     footerNote: isReminder
       ? 'หากท่านดำเนินการเรียบร้อยแล้ว ขออภัยในอีเมลแจ้งเตือนฉบับนี้'
       : 'หากท่านดำเนินการเรียบร้อยแล้ว หรือมีข้อสงสัยประการใด สามารถติดต่อศูนย์บริการฝึกงานฯ',
@@ -211,24 +308,35 @@ function parseHtmlToFriendly(html: string, code: 'evaluation_request' | 'evaluat
 
   try {
     const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i)
-    if (h2Match?.[1]) def.headerTitle = h2Match[1].replace(/<[^>]+>/g, '').trim()
+    if (h2Match?.[1])
+      def.headerTitle = h2Match[1].replace(/<[^>]+>/g, '').trim()
 
     const subtitleMatch = html.match(/<h2[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/i)
-    if (subtitleMatch?.[1]) def.headerSubtitle = subtitleMatch[1].replace(/<[^>]+>/g, '').trim()
+    if (subtitleMatch?.[1])
+      def.headerSubtitle = subtitleMatch[1].replace(/<[^>]+>/g, '').trim()
 
-    const greetingMatch = html.match(/<p style="[^"]*font-size:\s*15px[^"]*">([\s\S]*?)<\/p>/i)
+    const greetingMatch = html.match(
+      /<p style="[^"]*font-size:\s*15px[^"]*">([\s\S]*?)<\/p>/i
+    )
     if (greetingMatch?.[1]) {
       def.greeting = greetingMatch[1].replace(/<\/?strong>/gi, '').trim()
     }
 
-    const btnMatch = html.match(/<a href="{{invitation_url}}"[^>]*>([\s\S]*?)<\/a>/i)
+    const btnMatch = html.match(
+      /<a href="{{invitation_url}}"[^>]*>([\s\S]*?)<\/a>/i
+    )
     if (btnMatch?.[1]) {
       def.buttonText = btnMatch[1].replace(/<[^>]+>/g, '').trim()
     }
 
-    const footerMatch = html.match(/<div style="[^"]*margin-top:\s*32px[^"]*">([\s\S]*?)<\/div>/i)
+    const footerMatch = html.match(
+      /<div style="[^"]*margin-top:\s*32px[^"]*">([\s\S]*?)<\/div>/i
+    )
     if (footerMatch?.[1]) {
-      const parts = footerMatch[1].split(/<br\s*\/?>/i).map(l => l.replace(/<[^>]+>/g, '').trim()).filter(Boolean)
+      const parts = footerMatch[1]
+        .split(/<br\s*\/?>/i)
+        .map((l) => l.replace(/<[^>]+>/g, '').trim())
+        .filter(Boolean)
       if (parts.length > 1 && parts[0]) {
         def.footerNote = parts[0]
         def.footerOrg = parts.slice(1).join(' ')
@@ -237,7 +345,10 @@ function parseHtmlToFriendly(html: string, code: 'evaluation_request' | 'evaluat
       }
     }
 
-    def.showInfoBox = html.includes('{{pin}}') || html.includes('ข้อมูลการเข้าทำแบบประเมิน') || html.includes('ข้อมูลแบบประเมินที่ค้างอยู่')
+    def.showInfoBox =
+      html.includes('{{pin}}') ||
+      html.includes('ข้อมูลการเข้าทำแบบประเมิน') ||
+      html.includes('ข้อมูลแบบประเมินที่ค้างอยู่')
 
     // Detect theme color from button or border
     const colorMatch = html.match(/background-color:\s*(#[0-9a-fA-F]{6})/i)
@@ -245,7 +356,11 @@ function parseHtmlToFriendly(html: string, code: 'evaluation_request' | 'evaluat
       def.design.themeColor = colorMatch[1]
     }
 
-    const pMatches = [...html.matchAll(/<p style="[^"]*font-size:\s*1[346]px[^"]*">([\s\S]*?)<\/p>/gi)]
+    const pMatches = [
+      ...html.matchAll(
+        /<p style="[^"]*font-size:\s*1[346]px[^"]*">([\s\S]*?)<\/p>/gi
+      )
+    ]
     if (pMatches.length >= 2 && pMatches[0]?.[1] && pMatches[1]?.[1]) {
       def.mainMessage = pMatches[0][1].replace(/<\/?strong>/gi, '').trim()
       def.secondMessage = pMatches[1][1].replace(/<\/?strong>/gi, '').trim()
@@ -336,7 +451,10 @@ function generateHtmlFromFriendly(form: FriendlyForm): string {
 
   let formattedSecond = form.secondMessage || ''
   if (!formattedSecond.includes('<strong>')) {
-    formattedSecond = formattedSecond.replace('{{deadline}}', '<strong>{{deadline}}</strong>')
+    formattedSecond = formattedSecond.replace(
+      '{{deadline}}',
+      '<strong>{{deadline}}</strong>'
+    )
   }
 
   let infoBoxHtml = ''
@@ -411,7 +529,10 @@ async function loadTemplates(): Promise<void> {
     const res = await api<SystemTemplateItem[]>('/email-templates/system')
     if (Array.isArray(res)) {
       for (const item of res) {
-        if (item.code === 'evaluation_request' || item.code === 'evaluation_reminder') {
+        if (
+          item.code === 'evaluation_request' ||
+          item.code === 'evaluation_reminder'
+        ) {
           templates.value[item.code] = item
           const parsed = parseHtmlToFriendly(item.html, item.code)
           parsed.subject = item.subject
@@ -479,9 +600,10 @@ function selectTheme(color: string): void {
 // Compute live preview
 const previewSubject = computed(() => {
   const code = activeTab.value
-  let sub = editorMode.value === 'html'
-    ? currentTemplate.value.subject
-    : friendlyForms.value[code].subject || ''
+  let sub =
+    editorMode.value === 'html'
+      ? currentTemplate.value.subject
+      : friendlyForms.value[code].subject || ''
 
   for (const p of availablePlaceholders) {
     sub = sub.replaceAll(p.tag, p.example)
@@ -502,6 +624,10 @@ const previewHtml = computed(() => {
   }
   return body
 })
+
+const previewEmailDocument = computed(() =>
+  createSandboxedEmailPreviewDocument(previewHtml.value)
+)
 
 async function saveTemplate(): Promise<void> {
   saving.value = true
@@ -524,14 +650,17 @@ async function saveTemplate(): Promise<void> {
       rawDrafts.value[code].text = text
     }
 
-    const updated = await api<SystemTemplateItem>(`/email-templates/system/${code}`, {
-      method: 'PUT',
-      body: {
-        subject,
-        html,
-        text
+    const updated = await api<SystemTemplateItem>(
+      `/email-templates/system/${code}`,
+      {
+        method: 'PUT',
+        body: {
+          subject,
+          html,
+          text
+        }
       }
-    })
+    )
 
     if (updated) {
       templates.value[code] = updated
@@ -555,16 +684,23 @@ async function saveTemplate(): Promise<void> {
 }
 
 async function resetTemplate(): Promise<void> {
-  if (!confirm(`คุณต้องการคืนค่าเริ่มต้นของแม่แบบ "${currentTemplate.value.name}" หรือไม่?`)) {
+  if (
+    !confirm(
+      `คุณต้องการคืนค่าเริ่มต้นของแม่แบบ "${currentTemplate.value.name}" หรือไม่?`
+    )
+  ) {
     return
   }
 
   resetting.value = true
   try {
     const code = activeTab.value
-    const reset = await api<SystemTemplateItem>(`/email-templates/system/${code}/reset`, {
-      method: 'POST'
-    })
+    const reset = await api<SystemTemplateItem>(
+      `/email-templates/system/${code}/reset`,
+      {
+        method: 'POST'
+      }
+    )
 
     if (reset) {
       templates.value[code] = reset
@@ -597,8 +733,12 @@ async function resetTemplate(): Promise<void> {
 watch(editorMode, (newMode) => {
   if (newMode === 'html') {
     const code = activeTab.value
-    rawDrafts.value[code].html = generateHtmlFromFriendly(friendlyForms.value[code])
-    rawDrafts.value[code].text = generateTextFromFriendly(friendlyForms.value[code])
+    rawDrafts.value[code].html = generateHtmlFromFriendly(
+      friendlyForms.value[code]
+    )
+    rawDrafts.value[code].text = generateTextFromFriendly(
+      friendlyForms.value[code]
+    )
   } else if (newMode === 'friendly') {
     const code = activeTab.value
     if (rawDrafts.value[code].html) {
@@ -615,10 +755,13 @@ watch(editorMode, (newMode) => {
     <!-- Header -->
     <header class="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <p class="mfu-eyebrow">ระบบแม่แบบและการตกแต่งจดหมาย (Letter Design Studio)</p>
+        <p class="mfu-eyebrow">
+          ระบบแม่แบบและการตกแต่งจดหมาย (Letter Design Studio)
+        </p>
         <h1 class="mt-2 text-3xl font-bold text-highlighted">ตั้งค่าจดหมาย</h1>
         <p class="mt-1 text-sm text-muted">
-          ปรับแต่งข้อความ สีสัน และความสวยงามของจดหมายได้ตามต้องการ โดยไม่ต้องมีความรู้เรื่องโค้ด
+          ปรับแต่งข้อความ สีสัน และความสวยงามของจดหมายได้ตามต้องการ
+          โดยไม่ต้องมีความรู้เรื่องโค้ด
         </p>
       </div>
 
@@ -634,9 +777,13 @@ watch(editorMode, (newMode) => {
     </header>
 
     <!-- Main Card -->
-    <div class="rounded-2xl border border-default bg-default shadow-sm overflow-hidden">
+    <div
+      class="rounded-2xl border border-default bg-default shadow-sm overflow-hidden"
+    >
       <!-- 2 Main Email Category Tabs -->
-      <div class="flex border-b border-default bg-muted/20 px-4 pt-3 gap-2 overflow-x-auto">
+      <div
+        class="flex border-b border-default bg-muted/20 px-4 pt-3 gap-2 overflow-x-auto"
+      >
         <button
           type="button"
           :class="[
@@ -647,11 +794,15 @@ watch(editorMode, (newMode) => {
           ]"
           @click="activeTab = 'evaluation_request'"
         >
-          <div class="size-6 rounded-full bg-emerald-500/15 flex items-center justify-center text-emerald-600 font-bold text-xs">
+          <div
+            class="size-6 rounded-full bg-emerald-500/15 flex items-center justify-center text-emerald-600 font-bold text-xs"
+          >
             1
           </div>
           <span>ขอความอนุเคราะห์ประเมินผล</span>
-          <span class="rounded-full bg-emerald-500/10 text-emerald-600 text-[11px] px-2 py-0.5 font-medium">
+          <span
+            class="rounded-full bg-emerald-500/10 text-emerald-600 text-[11px] px-2 py-0.5 font-medium"
+          >
             ส่งครั้งแรก
           </span>
         </button>
@@ -666,11 +817,15 @@ watch(editorMode, (newMode) => {
           ]"
           @click="activeTab = 'evaluation_reminder'"
         >
-          <div class="size-6 rounded-full bg-amber-500/15 flex items-center justify-center text-amber-600 font-bold text-xs">
+          <div
+            class="size-6 rounded-full bg-amber-500/15 flex items-center justify-center text-amber-600 font-bold text-xs"
+          >
             2
           </div>
           <span>แจ้งเตือนการประเมิน</span>
-          <span class="rounded-full bg-amber-500/10 text-amber-600 text-[11px] px-2 py-0.5 font-medium">
+          <span
+            class="rounded-full bg-amber-500/10 text-amber-600 text-[11px] px-2 py-0.5 font-medium"
+          >
             เตือนซ้ำ
           </span>
         </button>
@@ -678,15 +833,22 @@ watch(editorMode, (newMode) => {
 
       <!-- Loading State -->
       <div v-if="loading" class="p-16 text-center text-muted text-sm space-y-3">
-        <UIcon name="i-lucide-loader-2" class="size-8 animate-spin mx-auto text-primary" />
+        <UIcon
+          name="i-lucide-loader-2"
+          class="size-8 animate-spin mx-auto text-primary"
+        />
         <p class="font-medium">กำลังโหลดข้อมูลแม่แบบอีเมล...</p>
       </div>
 
       <!-- Tab Content Area -->
       <div v-else class="p-6 space-y-6">
         <!-- Mode Selector Bar (Top Bar) -->
-        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-default pb-4">
-          <div class="inline-flex p-1 rounded-xl border border-default bg-muted/30">
+        <div
+          class="flex flex-wrap items-center justify-between gap-3 border-b border-default pb-4"
+        >
+          <div
+            class="inline-flex p-1 rounded-xl border border-default bg-muted/30"
+          >
             <button
               type="button"
               :class="[
@@ -731,8 +893,13 @@ watch(editorMode, (newMode) => {
           </div>
 
           <div class="text-xs text-muted flex items-center gap-2">
-            <span class="inline-block size-2 rounded-full bg-emerald-500"></span>
-            <span>เวอร์ชันระบบ: <strong>{{ currentTemplate.versionNumber || 1 }}</strong></span>
+            <span
+              class="inline-block size-2 rounded-full bg-emerald-500"
+            ></span>
+            <span
+              >เวอร์ชันระบบ:
+              <strong>{{ currentTemplate.versionNumber || 1 }}</strong></span
+            >
           </div>
         </div>
 
@@ -743,7 +910,9 @@ watch(editorMode, (newMode) => {
             <!-- Left Side: Controls (7 cols) -->
             <div class="lg:col-span-7 space-y-5">
               <!-- Sub-Tabs Switcher: Content vs Design -->
-              <div class="flex items-center gap-2 p-1 rounded-xl bg-muted/40 border border-default">
+              <div
+                class="flex items-center gap-2 p-1 rounded-xl bg-muted/40 border border-default"
+              >
                 <button
                   type="button"
                   :class="[
@@ -754,7 +923,10 @@ watch(editorMode, (newMode) => {
                   ]"
                   @click="activeSubTab = 'content'"
                 >
-                  <UIcon name="i-lucide-file-text" class="size-4 text-primary" />
+                  <UIcon
+                    name="i-lucide-file-text"
+                    class="size-4 text-primary"
+                  />
                   <span>1. ข้อความและเนื้อหา (Content)</span>
                 </button>
 
@@ -768,18 +940,27 @@ watch(editorMode, (newMode) => {
                   ]"
                   @click="activeSubTab = 'design'"
                 >
-                  <UIcon name="i-lucide-palette" class="size-4 text-emerald-600" />
+                  <UIcon
+                    name="i-lucide-palette"
+                    class="size-4 text-emerald-600"
+                  />
                   <span>2. ตกแต่งความสวยงาม (Design Studio)</span>
-                  <span class="size-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span
+                    class="size-2 rounded-full bg-emerald-500 animate-pulse"
+                  ></span>
                 </button>
               </div>
 
               <!-- SUB-TAB 1: CONTENT EDITING -->
               <div v-show="activeSubTab === 'content'" class="space-y-4">
                 <!-- Subject Box -->
-                <div class="rounded-xl border border-default bg-default p-4 space-y-2">
+                <div
+                  class="rounded-xl border border-default bg-default p-4 space-y-2"
+                >
                   <div class="flex items-center justify-between">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
                       <UIcon name="i-lucide-mail" class="size-4 text-primary" />
                       หัวข้ออีเมล (Subject)
                     </label>
@@ -801,9 +982,16 @@ watch(editorMode, (newMode) => {
                 </div>
 
                 <!-- Salutation Box -->
-                <div class="rounded-xl border border-default bg-default p-4 space-y-2">
-                  <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                    <UIcon name="i-lucide-user-check" class="size-4 text-primary" />
+                <div
+                  class="rounded-xl border border-default bg-default p-4 space-y-2"
+                >
+                  <label
+                    class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                  >
+                    <UIcon
+                      name="i-lucide-user-check"
+                      class="size-4 text-primary"
+                    />
                     คำขึ้นต้นจดหมาย (ถึงผู้รับ)
                   </label>
                   <input
@@ -815,17 +1003,28 @@ watch(editorMode, (newMode) => {
                 </div>
 
                 <!-- Main Message with Rich Text Quick Toolbar -->
-                <div class="rounded-xl border border-default bg-default p-4 space-y-3">
+                <div
+                  class="rounded-xl border border-default bg-default p-4 space-y-3"
+                >
                   <div class="flex items-center justify-between">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                      <UIcon name="i-lucide-message-square-text" class="size-4 text-primary" />
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
+                      <UIcon
+                        name="i-lucide-message-square-text"
+                        class="size-4 text-primary"
+                      />
                       เนื้อหาข้อความหลัก
                     </label>
-                    <span class="text-[11px] text-emerald-600 font-medium">พิมพ์ข้อความเหมือนพิมพ์เอกสารทั่วไป</span>
+                    <span class="text-[11px] text-emerald-600 font-medium"
+                      >พิมพ์ข้อความเหมือนพิมพ์เอกสารทั่วไป</span
+                    >
                   </div>
 
                   <!-- Quick Formatting Toolbar -->
-                  <div class="flex flex-wrap items-center gap-1.5 p-2 rounded-lg bg-muted/30 border border-default text-xs">
+                  <div
+                    class="flex flex-wrap items-center gap-1.5 p-2 rounded-lg bg-muted/30 border border-default text-xs"
+                  >
                     <button
                       type="button"
                       class="px-2 py-1 rounded bg-default hover:bg-muted font-bold text-xs border border-default"
@@ -854,7 +1053,12 @@ watch(editorMode, (newMode) => {
                       type="button"
                       class="px-2 py-1 rounded bg-yellow-100 hover:bg-yellow-200 text-yellow-800 text-xs border border-yellow-300 font-medium"
                       title="ไฮไลต์ข้อความสีเหลือง"
-                      @click="wrapSelection('<mark style=\'background-color: #fef08a; padding: 2px 4px; border-radius: 4px;\'>', '</mark>')"
+                      @click="
+                        wrapSelection(
+                          '<mark style=\'background-color: #fef08a; padding: 2px 4px; border-radius: 4px;\'>',
+                          '</mark>'
+                        )
+                      "
                     >
                       🖍️ ไฮไลต์
                     </button>
@@ -891,9 +1095,16 @@ watch(editorMode, (newMode) => {
                 </div>
 
                 <!-- Paragraph 2 -->
-                <div class="rounded-xl border border-default bg-default p-4 space-y-2">
-                  <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                    <UIcon name="i-lucide-align-left" class="size-4 text-primary" />
+                <div
+                  class="rounded-xl border border-default bg-default p-4 space-y-2"
+                >
+                  <label
+                    class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                  >
+                    <UIcon
+                      name="i-lucide-align-left"
+                      class="size-4 text-primary"
+                    />
                     ข้อความย่อหน้าที่ 2 (เพิ่มเติม / แจ้งกำหนดส่ง)
                   </label>
                   <textarea
@@ -906,9 +1117,16 @@ watch(editorMode, (newMode) => {
 
                 <!-- Button and Footer Text -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div class="rounded-xl border border-default bg-default p-4 space-y-2">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                      <UIcon name="i-lucide-mouse-pointer-click" class="size-4 text-primary" />
+                  <div
+                    class="rounded-xl border border-default bg-default p-4 space-y-2"
+                  >
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
+                      <UIcon
+                        name="i-lucide-mouse-pointer-click"
+                        class="size-4 text-primary"
+                      />
                       ข้อความบนปุ่มกด
                     </label>
                     <input
@@ -918,9 +1136,16 @@ watch(editorMode, (newMode) => {
                     />
                   </div>
 
-                  <div class="rounded-xl border border-default bg-default p-4 space-y-2">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                      <UIcon name="i-lucide-building" class="size-4 text-primary" />
+                  <div
+                    class="rounded-xl border border-default bg-default p-4 space-y-2"
+                  >
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
+                      <UIcon
+                        name="i-lucide-building"
+                        class="size-4 text-primary"
+                      />
                       ชื่อหน่วยงานส่วนท้าย
                     </label>
                     <input
@@ -935,13 +1160,22 @@ watch(editorMode, (newMode) => {
               <!-- SUB-TAB 2: DESIGN STUDIO (VISUAL CSS CONTROLS) -->
               <div v-show="activeSubTab === 'design'" class="space-y-4">
                 <!-- 1. Color Palette Presets -->
-                <div class="rounded-xl border border-default bg-default p-4 space-y-3">
+                <div
+                  class="rounded-xl border border-default bg-default p-4 space-y-3"
+                >
                   <div class="flex items-center justify-between">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                      <UIcon name="i-lucide-palette" class="size-4 text-emerald-600" />
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
+                      <UIcon
+                        name="i-lucide-palette"
+                        class="size-4 text-emerald-600"
+                      />
                       1. ธีมสีหลักของจดหมาย (Color Palette)
                     </label>
-                    <span class="text-[11px] text-muted">คลิกเดียวเปลี่ยนสีทั้งฉบับ</span>
+                    <span class="text-[11px] text-muted"
+                      >คลิกเดียวเปลี่ยนสีทั้งฉบับ</span
+                    >
                   </div>
 
                   <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
@@ -962,28 +1196,45 @@ watch(editorMode, (newMode) => {
                         :style="{ backgroundColor: item.color }"
                       ></span>
                       <div class="text-xs min-w-0">
-                        <p class="truncate leading-tight text-highlighted">{{ item.name }}</p>
-                        <p class="text-[10px] text-muted truncate">{{ item.desc }}</p>
+                        <p class="truncate leading-tight text-highlighted">
+                          {{ item.name }}
+                        </p>
+                        <p class="text-[10px] text-muted truncate">
+                          {{ item.desc }}
+                        </p>
                       </div>
                     </button>
                   </div>
 
                   <!-- Custom Color Input -->
-                  <div class="flex items-center gap-3 pt-2 border-t border-default text-xs">
-                    <span class="text-muted font-medium">หรือเลือกสีเองตามต้องการ:</span>
+                  <div
+                    class="flex items-center gap-3 pt-2 border-t border-default text-xs"
+                  >
+                    <span class="text-muted font-medium"
+                      >หรือเลือกสีเองตามต้องการ:</span
+                    >
                     <input
                       v-model="currentFriendly.design.themeColor"
                       type="color"
                       class="size-7 rounded-lg border border-default cursor-pointer p-0.5"
                     />
-                    <span class="font-mono text-xs text-highlighted">{{ currentFriendly.design.themeColor }}</span>
+                    <span class="font-mono text-xs text-highlighted">{{
+                      currentFriendly.design.themeColor
+                    }}</span>
                   </div>
                 </div>
 
                 <!-- 2. Header Style -->
-                <div class="rounded-xl border border-default bg-default p-4 space-y-3">
-                  <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                    <UIcon name="i-lucide-layout-template" class="size-4 text-primary" />
+                <div
+                  class="rounded-xl border border-default bg-default p-4 space-y-3"
+                >
+                  <label
+                    class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                  >
+                    <UIcon
+                      name="i-lucide-layout-template"
+                      class="size-4 text-primary"
+                    />
                     2. รูปแบบหัวจดหมาย (Header Style)
                   </label>
                   <div class="grid grid-cols-3 gap-2 text-xs">
@@ -1011,7 +1262,11 @@ watch(editorMode, (newMode) => {
                       ]"
                       @click="currentFriendly.design.headerStyle = 'banner'"
                     >
-                      <div class="w-full h-5 rounded-t bg-emerald-600 flex items-center justify-center text-[9px] text-white">มฟล.</div>
+                      <div
+                        class="w-full h-5 rounded-t bg-emerald-600 flex items-center justify-center text-[9px] text-white"
+                      >
+                        มฟล.
+                      </div>
                       <span>แถบสีเต็ม (Banner)</span>
                     </button>
 
@@ -1032,16 +1287,25 @@ watch(editorMode, (newMode) => {
                 </div>
 
                 <!-- 3. Button Styling -->
-                <div class="rounded-xl border border-default bg-default p-4 space-y-3">
-                  <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                    <UIcon name="i-lucide-mouse-pointer-click" class="size-4 text-primary" />
+                <div
+                  class="rounded-xl border border-default bg-default p-4 space-y-3"
+                >
+                  <label
+                    class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                  >
+                    <UIcon
+                      name="i-lucide-mouse-pointer-click"
+                      class="size-4 text-primary"
+                    />
                     3. ตกแต่งปุ่มกด (Button Styler)
                   </label>
 
                   <div class="grid grid-cols-2 gap-4">
                     <!-- Shape -->
                     <div class="space-y-1.5">
-                      <span class="text-[11px] text-muted font-medium">รูปทรงปุ่ม:</span>
+                      <span class="text-[11px] text-muted font-medium"
+                        >รูปทรงปุ่ม:</span
+                      >
                       <div class="grid grid-cols-3 gap-1.5 text-xs">
                         <button
                           type="button"
@@ -1051,7 +1315,9 @@ watch(editorMode, (newMode) => {
                               ? 'border-primary bg-primary/10 text-primary font-bold'
                               : 'border-default hover:bg-muted text-muted'
                           ]"
-                          @click="currentFriendly.design.buttonShape = 'rounded'"
+                          @click="
+                            currentFriendly.design.buttonShape = 'rounded'
+                          "
                         >
                           มนปกติ
                         </button>
@@ -1084,7 +1350,9 @@ watch(editorMode, (newMode) => {
 
                     <!-- Button Type -->
                     <div class="space-y-1.5">
-                      <span class="text-[11px] text-muted font-medium">สไตล์สีปุ่ม:</span>
+                      <span class="text-[11px] text-muted font-medium"
+                        >สไตล์สีปุ่ม:</span
+                      >
                       <div class="grid grid-cols-2 gap-1.5 text-xs">
                         <button
                           type="button"
@@ -1106,7 +1374,9 @@ watch(editorMode, (newMode) => {
                               ? 'border-primary bg-primary/10 text-primary font-bold'
                               : 'border-default hover:bg-muted text-muted'
                           ]"
-                          @click="currentFriendly.design.buttonStyle = 'outline'"
+                          @click="
+                            currentFriendly.design.buttonStyle = 'outline'
+                          "
                         >
                           ขอบเส้นโปร่ง
                         </button>
@@ -1118,8 +1388,12 @@ watch(editorMode, (newMode) => {
                 <!-- 4. Highlight Box & Typography -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <!-- Highlight Box Style -->
-                  <div class="rounded-xl border border-default bg-default p-4 space-y-2">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
+                  <div
+                    class="rounded-xl border border-default bg-default p-4 space-y-2"
+                  >
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
                       <UIcon name="i-lucide-box" class="size-4 text-primary" />
                       4. สไตล์กล่องข้อมูลสรุป
                     </label>
@@ -1164,8 +1438,12 @@ watch(editorMode, (newMode) => {
                   </div>
 
                   <!-- Typography Size -->
-                  <div class="rounded-xl border border-default bg-default p-4 space-y-2">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
+                  <div
+                    class="rounded-xl border border-default bg-default p-4 space-y-2"
+                  >
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
                       <UIcon name="i-lucide-type" class="size-4 text-primary" />
                       5. ขนาดตัวหนังสือ
                     </label>
@@ -1213,9 +1491,16 @@ watch(editorMode, (newMode) => {
                 <!-- 5. Card Background & Corner Radius -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <!-- Corner Radius -->
-                  <div class="rounded-xl border border-default bg-default p-4 space-y-2">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                      <UIcon name="i-lucide-square-dashed-mouse-pointer" class="size-4 text-primary" />
+                  <div
+                    class="rounded-xl border border-default bg-default p-4 space-y-2"
+                  >
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
+                      <UIcon
+                        name="i-lucide-square-dashed-mouse-pointer"
+                        class="size-4 text-primary"
+                      />
                       6. ความโค้งมนขอบจดหมาย
                     </label>
                     <div class="grid grid-cols-3 gap-1.5 text-xs">
@@ -1259,9 +1544,16 @@ watch(editorMode, (newMode) => {
                   </div>
 
                   <!-- Card Background Color -->
-                  <div class="rounded-xl border border-default bg-default p-4 space-y-2">
-                    <label class="text-xs font-bold text-highlighted flex items-center gap-1.5">
-                      <UIcon name="i-lucide-paint-bucket" class="size-4 text-primary" />
+                  <div
+                    class="rounded-xl border border-default bg-default p-4 space-y-2"
+                  >
+                    <label
+                      class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                    >
+                      <UIcon
+                        name="i-lucide-paint-bucket"
+                        class="size-4 text-primary"
+                      />
                       7. สีพื้นหลังจดหมาย
                     </label>
                     <div class="grid grid-cols-3 gap-1.5 text-xs">
@@ -1310,36 +1602,60 @@ watch(editorMode, (newMode) => {
             <!-- Right Side: Sticky Real-time Live Preview (5 cols) -->
             <div class="lg:col-span-5 sticky top-6 space-y-3">
               <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-highlighted flex items-center gap-1.5">
+                <span
+                  class="text-xs font-bold text-highlighted flex items-center gap-1.5"
+                >
                   <UIcon name="i-lucide-monitor" class="size-4 text-primary" />
                   ตัวอย่างจดหมายจริง (Live Preview)
                 </span>
-                <span class="text-[11px] rounded-full bg-emerald-500/10 text-emerald-600 px-2.5 py-0.5 font-bold">
+                <span
+                  class="text-[11px] rounded-full bg-emerald-500/10 text-emerald-600 px-2.5 py-0.5 font-bold"
+                >
                   อัปเดตสด Real-time
                 </span>
               </div>
 
               <!-- Preview Window Frame -->
-              <div class="rounded-2xl border border-default bg-default shadow-md overflow-hidden">
+              <div
+                class="rounded-2xl border border-default bg-default shadow-md overflow-hidden"
+              >
                 <!-- Window Titlebar -->
-                <div class="bg-muted/40 border-b border-default p-3.5 space-y-1.5 text-xs">
+                <div
+                  class="bg-muted/40 border-b border-default p-3.5 space-y-1.5 text-xs"
+                >
                   <div class="flex items-start gap-2">
-                    <span class="text-muted w-12 shrink-0 font-medium">เรื่อง:</span>
-                    <span class="font-bold text-highlighted leading-snug">{{ previewSubject }}</span>
+                    <span class="text-muted w-12 shrink-0 font-medium"
+                      >เรื่อง:</span
+                    >
+                    <span class="font-bold text-highlighted leading-snug">{{
+                      previewSubject
+                    }}</span>
                   </div>
                   <div class="flex items-center gap-2 text-muted text-[11px]">
                     <span class="w-12 shrink-0">จาก:</span>
-                    <span>มหาวิทยาลัยแม่ฟ้าหลวง &lt;internship@mfu.ac.th&gt;</span>
+                    <span
+                      >มหาวิทยาลัยแม่ฟ้าหลวง &lt;internship@mfu.ac.th&gt;</span
+                    >
                   </div>
                   <div class="flex items-center gap-2 text-muted text-[11px]">
                     <span class="w-12 shrink-0">ถึง:</span>
-                    <span class="text-highlighted font-medium">คุณสมชาย ใจดี (สถานประกอบการ)</span>
+                    <span class="text-highlighted font-medium"
+                      >คุณสมชาย ใจดี (สถานประกอบการ)</span
+                    >
                   </div>
                 </div>
 
                 <!-- Live Rendered HTML -->
-                <div class="p-4 bg-slate-100/80 dark:bg-neutral-900/80 overflow-y-auto max-h-[620px]">
-                  <div v-html="previewHtml"></div>
+                <div
+                  class="p-4 bg-slate-100/80 dark:bg-neutral-900/80 overflow-y-auto max-h-[620px]"
+                >
+                  <iframe
+                    :srcdoc="previewEmailDocument"
+                    title="ตัวอย่างรูปแบบอีเมล"
+                    sandbox=""
+                    referrerpolicy="no-referrer"
+                    class="block h-[620px] w-full border-0 bg-white"
+                  />
                 </div>
               </div>
             </div>
@@ -1348,37 +1664,67 @@ watch(editorMode, (newMode) => {
 
         <!-- VIEW 2: FULL PREVIEW MODE -->
         <div v-show="editorMode === 'preview'" class="space-y-4">
-          <div class="rounded-2xl border border-default bg-default shadow-md overflow-hidden max-w-2xl mx-auto">
-            <div class="bg-muted/30 border-b border-default p-4 space-y-2 text-xs">
+          <div
+            class="rounded-2xl border border-default bg-default shadow-md overflow-hidden max-w-2xl mx-auto"
+          >
+            <div
+              class="bg-muted/30 border-b border-default p-4 space-y-2 text-xs"
+            >
               <div class="flex items-center gap-2">
-                <span class="text-muted w-14 shrink-0 font-medium">เรื่อง:</span>
-                <span class="font-bold text-highlighted text-sm">{{ previewSubject }}</span>
+                <span class="text-muted w-14 shrink-0 font-medium"
+                  >เรื่อง:</span
+                >
+                <span class="font-bold text-highlighted text-sm">{{
+                  previewSubject
+                }}</span>
               </div>
               <div class="flex items-center gap-2 text-muted">
                 <span class="w-14 shrink-0">จาก:</span>
-                <span class="font-medium">มหาวิทยาลัยแม่ฟ้าหลวง &lt;internship@mfu.ac.th&gt;</span>
+                <span class="font-medium"
+                  >มหาวิทยาลัยแม่ฟ้าหลวง &lt;internship@mfu.ac.th&gt;</span
+                >
               </div>
               <div class="flex items-center gap-2 text-muted">
                 <span class="w-14 shrink-0">ถึง:</span>
-                <span class="font-medium text-highlighted">คุณสมชาย ใจดี &lt;evaluator.cos@milott.com&gt;</span>
+                <span class="font-medium text-highlighted"
+                  >คุณสมชาย ใจดี &lt;evaluator.cos@milott.com&gt;</span
+                >
               </div>
             </div>
 
-            <div class="p-8 bg-slate-100/60 dark:bg-neutral-900 overflow-x-auto min-h-[400px]">
-              <div v-html="previewHtml"></div>
+            <div
+              class="p-8 bg-slate-100/60 dark:bg-neutral-900 overflow-x-auto min-h-[400px]"
+            >
+              <iframe
+                :srcdoc="previewEmailDocument"
+                title="ตัวอย่างอีเมลแบบเต็ม"
+                sandbox=""
+                referrerpolicy="no-referrer"
+                class="block min-h-[400px] w-full border-0 bg-white"
+              />
             </div>
           </div>
         </div>
 
         <!-- VIEW 3: ADVANCED HTML CODE MODE -->
         <div v-show="editorMode === 'html'" class="space-y-4">
-          <div class="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
-            <UIcon name="i-lucide-info" class="size-4 shrink-0 text-amber-600" />
-            <span>โหมดสำหรับผู้ดูแลระบบหรือโปรแกรมเมอร์ที่ต้องการปรับแต่ง HTML Tag และ CSS โดยตรง</span>
+          <div
+            class="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300"
+          >
+            <UIcon
+              name="i-lucide-info"
+              class="size-4 shrink-0 text-amber-600"
+            />
+            <span
+              >โหมดสำหรับผู้ดูแลระบบหรือโปรแกรมเมอร์ที่ต้องการปรับแต่ง HTML Tag
+              และ CSS โดยตรง</span
+            >
           </div>
 
           <div class="space-y-1.5">
-            <label class="text-xs font-semibold text-highlighted">หัวข้ออีเมล (Subject):</label>
+            <label class="text-xs font-semibold text-highlighted"
+              >หัวข้ออีเมล (Subject):</label
+            >
             <input
               v-model="currentFriendly.subject"
               type="text"
@@ -1387,7 +1733,9 @@ watch(editorMode, (newMode) => {
           </div>
 
           <div class="space-y-1.5">
-            <label class="text-xs font-semibold text-highlighted">เนื้อหา HTML (HTML Body):</label>
+            <label class="text-xs font-semibold text-highlighted"
+              >เนื้อหา HTML (HTML Body):</label
+            >
             <textarea
               v-model="currentRaw.html"
               rows="16"
@@ -1395,8 +1743,12 @@ watch(editorMode, (newMode) => {
             ></textarea>
           </div>
 
-          <details class="text-xs text-muted rounded-lg border border-default p-3">
-            <summary class="cursor-pointer font-semibold text-highlighted flex items-center gap-1.5">
+          <details
+            class="text-xs text-muted rounded-lg border border-default p-3"
+          >
+            <summary
+              class="cursor-pointer font-semibold text-highlighted flex items-center gap-1.5"
+            >
               <UIcon name="i-lucide-align-left" class="size-3.5" />
               ข้อความสำรอง (Plain Text Fallback)
             </summary>
@@ -1411,7 +1763,9 @@ watch(editorMode, (newMode) => {
         </div>
 
         <!-- Action Footer -->
-        <div class="flex flex-wrap items-center justify-between gap-3 pt-5 border-t border-default">
+        <div
+          class="flex flex-wrap items-center justify-between gap-3 pt-5 border-t border-default"
+        >
           <UButton
             color="neutral"
             icon="i-lucide-rotate-ccw"

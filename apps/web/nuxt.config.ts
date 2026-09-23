@@ -1,3 +1,5 @@
+import { resolvePublicAppEnvironment } from './app/utils/app-environment'
+
 export default defineNuxtConfig({
   app: {
     head: {
@@ -182,7 +184,10 @@ export default defineNuxtConfig({
       process.env.API_INTERNAL_BASE_URL ?? 'http://127.0.0.1:8081/api/v2',
     public: {
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL ?? '/api/v2',
-      appEnvironment: process.env.NUXT_PUBLIC_APP_ENVIRONMENT ?? 'development'
+      appEnvironment: resolvePublicAppEnvironment(
+        process.env.NUXT_PUBLIC_APP_ENVIRONMENT,
+        process.env.NODE_ENV
+      )
     }
   },
   typescript: {

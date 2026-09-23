@@ -6,6 +6,7 @@ import {
 } from '@internship/config'
 import { ConfigService } from '@nestjs/config'
 import { NestFactory } from '@nestjs/core'
+import type { Express } from 'express'
 import helmet from 'helmet'
 import { Logger } from 'nestjs-pino'
 
@@ -26,9 +27,18 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks()
   app.setGlobalPrefix('api/v2')
   app.useGlobalFilters(new ApiExceptionFilter())
+  const trustedProxyCidrs = config
+    .get('TRUSTED_PROXY_CIDRS', { infer: true })
+    .split(',')
+    .map((cidr) => cidr.trim())
+    .filter(Boolean)
+  if (trustedProxyCidrs.length > 0) {
+    const expressApp = app.getHttpAdapter().getInstance() as Express
+    expressApp.set('trust proxy', trustedProxyCidrs)
+  }
   app.enableCors({
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     origin: config.get('corsOrigins', { infer: true })
   })
   app.use(

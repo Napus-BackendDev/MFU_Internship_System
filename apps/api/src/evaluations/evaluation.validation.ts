@@ -17,6 +17,10 @@ export function validateCompetencySections(
   }
 
   const ids = new Set<string>()
+  const ratingScales = new Map<
+    'general' | 'special',
+    { scaleMin: number; scaleMax: number }
+  >()
   for (const section of sections) {
     if (section.questions.length === 0) {
       throw new UnprocessableEntityException({
@@ -33,6 +37,29 @@ export function validateCompetencySections(
       }
       ids.add(question.id)
       validateQuestion(question)
+      if (question.type === 'rating' && section.category !== 'suggestion') {
+        if (question.weight !== undefined && question.weight !== 1) {
+          throw new UnprocessableEntityException({
+            code: 'SCORING_WEIGHT_NOT_SUPPORTED'
+          })
+        }
+        const category = section.category === 'special' ? 'special' : 'general'
+        const previous = ratingScales.get(category)
+        const scale = {
+          scaleMin: question.scaleMin!,
+          scaleMax: question.scaleMax!
+        }
+        if (
+          previous &&
+          (previous.scaleMin !== scale.scaleMin ||
+            previous.scaleMax !== scale.scaleMax)
+        ) {
+          throw new UnprocessableEntityException({
+            code: 'MIXED_RATING_SCALES'
+          })
+        }
+        ratingScales.set(category, scale)
+      }
     }
   }
 }
@@ -42,6 +69,19 @@ export function validateAnswers(
   answers: Readonly<Record<string, unknown>>
 ): void {
   assertAssignmentMutable(assignment)
+
+  const knownQuestionIds = new Set(
+    assignment.questionSnapshot
+      .flatMap((section) => section.questions)
+      .map((question) => question.id)
+  )
+  if (
+    Object.keys(answers).some((questionId) => !knownQuestionIds.has(questionId))
+  ) {
+    throw new UnprocessableEntityException({
+      code: 'EVALUATION_ANSWER_INVALID'
+    })
+  }
 
   for (const question of assignment.questionSnapshot.flatMap(
     (section) => section.questions
@@ -82,10 +122,10 @@ export function validateDraftAnswers(
 }
 
 function assertAssignmentMutable(assignment: EvaluationAssignmentRecord): void {
-  if (assignment.deadlineAt.getTime() < Date.now()) {
+  if (assignment.deadlineAt.getTime() <= Date.now()) {
     throw new ConflictException({ code: 'ASSIGNMENT_EXPIRED' })
   }
-  if (!['pending', 'inProgress', 'reopened'].includes(assignment.status)) {
+  if (!['pending', 'inProgress'].includes(assignment.status)) {
     throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' })
   }
 }

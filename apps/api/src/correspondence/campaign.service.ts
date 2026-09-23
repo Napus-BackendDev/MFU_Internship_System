@@ -1,5 +1,8 @@
 import type { AppEnvironment } from '@internship/config'
-import type { AuthenticatedActor } from '@internship/shared-types'
+import {
+  campaignStatusFromDeliveryCounts,
+  type AuthenticatedActor
+} from '@internship/shared-types'
 import { InjectQueue } from '@nestjs/bullmq'
 import {
   ConflictException,
@@ -8,10 +11,10 @@ import {
   UnprocessableEntityException
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { InjectModel } from '@nestjs/mongoose'
+import { InjectConnection, InjectModel } from '@nestjs/mongoose'
 import type { Queue } from 'bullmq'
 import { SignJWT } from 'jose'
-import type { Model } from 'mongoose'
+import type { Connection, HydratedDocument, Model } from 'mongoose'
 
 import { paginate, type PaginationInput } from '../common/pagination.js'
 import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
@@ -27,14 +30,28 @@ import {
   PlacementRecord,
   StudentRecord
 } from '../members/members.schema.js'
+import { studentReferenceFilter } from '../members/student-reference.js'
 import {
   CampaignRecord,
   DeliveryRecord,
   EmailTemplateVersionRecord,
   InvitationRecord
 } from './correspondence.schema.js'
+import {
+  campaignTargetIssue,
+  isDeliveryAutomaticallyRetryable
+} from './delivery-workflow.policy.js'
 
 import { TemplateService } from './template.service.js'
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 11000
+  )
+}
 
 export interface CampaignInput {
   readonly type: CampaignRecord['type']
@@ -53,18 +70,17 @@ export interface DirectStudentInvitationInput {
 }
 
 export interface TargetedEmailInput {
+  readonly assignmentId: string
   readonly studentId: string
   readonly templateCode: 'evaluation_request' | 'evaluation_reminder'
   readonly recipientEmail?: string
   readonly evaluatorName?: string
-  readonly deadlineDays?: number
-  readonly subject?: string
-  readonly notes?: string
 }
 
 @Injectable()
 export class CampaignService {
   public constructor(
+    @InjectConnection() private readonly connection: Connection,
     private readonly config: ConfigService<AppEnvironment, true>,
     private readonly templatesService: TemplateService,
     @InjectQueue('email') private readonly emailQueue: Queue,
@@ -143,59 +159,150 @@ export class CampaignService {
       })
     }
 
-    const campaign = await this.campaigns.create({
-      ...input,
-      assignmentIds: [...input.assignmentIds],
-      idempotencyKey: scopedKey,
-      idempotencyScopeKey: scopedKey,
-      requestHash: payloadHash,
-      createdBy: actor.id,
-      status: 'queued',
-      total: input.assignmentIds.length
-    })
-
-    for (const assignmentId of input.assignmentIds) {
-      const assignment = await this.assignments.findById(assignmentId).exec()
-      if (!assignment) continue
-      const evaluator = await this.evaluators
-        .findById(assignment.evaluatorId)
+    const now = new Date()
+    const assignments = await this.assignments
+      .find({
+        $and: [
+          { _id: { $in: input.assignmentIds } },
+          scopeFilter<EvaluationAssignmentRecord>(actor)
+        ]
+      })
+      .exec()
+    const targets: Array<{
+      assignment: HydratedDocument<EvaluationAssignmentRecord>
+      evaluator: HydratedDocument<EvaluatorRecord>
+      invitation?: HydratedDocument<InvitationRecord>
+    }> = []
+    for (const assignment of assignments) {
+      const cycle = await this.cycles
+        .findOne({
+          _id: assignment.cycleId,
+          status: 'active',
+          opensAt: { $lte: now },
+          closesAt: { $gt: now }
+        })
         .exec()
-      if (!evaluator) continue
-      const invitation = await this.invitations.findOneAndUpdate(
-        { assignmentId },
-        {
-          $set: {
-            evaluatorId: evaluator.id,
-            email: evaluator.email,
-            expiresAt: assignment.deadlineAt,
-            status: 'active'
-          }
-        },
-        { new: true, upsert: true }
-      )
-      const delivery = await this.deliveries.findOneAndUpdate(
-        { campaignId: campaign.id, assignmentId },
-        {
-          $setOnInsert: {
-            recipientEmail: evaluator.email,
+      const evaluator = await this.evaluators
+        .findOne({ _id: assignment.evaluatorId, status: 'active' })
+        .exec()
+      const existingInvitation = await this.invitations
+        .findOne({ assignmentId: assignment.id })
+        .exec()
+      const issue = campaignTargetIssue({
+        type: input.type,
+        assignmentStatus: assignment.status,
+        assignmentDeadlineAt: assignment.deadlineAt,
+        cycleStatus: cycle?.status ?? 'missing',
+        cycleOpensAt: cycle?.opensAt ?? new Date(0),
+        cycleClosesAt: cycle?.closesAt ?? new Date(0),
+        evaluatorActive: Boolean(evaluator),
+        assignmentEvaluatorId: assignment.evaluatorId,
+        now,
+        ...(existingInvitation
+          ? {
+              invitation: {
+                status: existingInvitation.status,
+                evaluatorId: existingInvitation.evaluatorId,
+                expiresAt: existingInvitation.expiresAt
+              }
+            }
+          : {})
+      })
+      if (issue === 'ACTIVE_EVALUATOR_REQUIRED') {
+        throw new UnprocessableEntityException({ code: issue })
+      }
+      if (issue) throw new ConflictException({ code: issue })
+      if (!evaluator) {
+        throw new UnprocessableEntityException({
+          code: 'ACTIVE_EVALUATOR_REQUIRED'
+        })
+      }
+      if (input.type === 'invitation') {
+        targets.push({ assignment, evaluator })
+      } else {
+        if (!existingInvitation) {
+          throw new ConflictException({ code: 'ACTIVE_INVITATION_REQUIRED' })
+        }
+        targets.push({ assignment, evaluator, invitation: existingInvitation })
+      }
+    }
+    if (targets.length !== input.assignmentIds.length) {
+      throw new UnprocessableEntityException({
+        code: 'CAMPAIGN_PREVIEW_INVALID'
+      })
+    }
+
+    let outbox
+    try {
+      outbox = await this.connection.transaction(async (session) => {
+        const campaign = await new this.campaigns({
+          ...input,
+          assignmentIds: [...input.assignmentIds],
+          idempotencyKey: scopedKey,
+          idempotencyScopeKey: scopedKey,
+          requestHash: payloadHash,
+          createdBy: actor.id,
+          status: 'queued',
+          total: input.assignmentIds.length
+        }).save({ session })
+        const deliveries: Array<{
+          deliveryId: string
+          invitationId: string
+        }> = []
+
+        for (const target of targets) {
+          const invitation =
+            target.invitation ??
+            (await new this.invitations({
+              assignmentId: target.assignment.id,
+              evaluatorId: target.evaluator.id,
+              email: target.evaluator.email,
+              expiresAt: target.assignment.deadlineAt,
+              status: 'active'
+            }).save({ session }))
+          const delivery = await new this.deliveries({
+            campaignId: campaign.id,
+            assignmentId: target.assignment.id,
+            recipientEmail: invitation.email,
             templateVersionId: input.templateVersionId,
             status: 'queued',
             attempts: 0
-          }
-        },
-        { new: true, upsert: true }
-      )
-      try {
-        await this.enqueueDelivery(delivery.id, invitation.id)
-      } catch {
-        await this.deliveries.updateOne(
-          { _id: delivery.id },
-          { $set: { status: 'failed', lastErrorCode: 'QUEUE_ENQUEUE_FAILED' } }
-        )
+          }).save({ session })
+          deliveries.push({
+            deliveryId: delivery.id,
+            invitationId: invitation.id
+          })
+        }
+
+        return { campaign, deliveries }
+      })
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error
+      const concurrentCampaign = await this.campaigns
+        .findOne({ idempotencyScopeKey: scopedKey })
+        .exec()
+      if (!concurrentCampaign) {
+        throw new ConflictException({ code: 'CAMPAIGN_TARGET_CONFLICT' })
       }
+      await this.assertAssignmentsInScope(
+        actor,
+        concurrentCampaign.assignmentIds
+      )
+      if (concurrentCampaign.requestHash !== payloadHash) {
+        throw new ConflictException({ code: 'IDEMPOTENCY_KEY_REUSED' })
+      }
+      return concurrentCampaign.toJSON()
     }
-    await this.reconcileCampaign(campaign.id)
-    return (await this.campaigns.findById(campaign.id).exec())!.toJSON()
+
+    // Delivery rows are the durable outbox. Queue insertion is best-effort;
+    // the Worker reconciles persisted queued rows after startup and periodically.
+    await Promise.all(
+      outbox.deliveries.map(({ deliveryId, invitationId }) =>
+        this.enqueueDelivery(deliveryId, invitationId).catch(() => undefined)
+      )
+    )
+    await this.reconcileCampaign(outbox.campaign.id, outbox.campaign.total)
+    return (await this.campaigns.findById(outbox.campaign.id).exec())!.toJSON()
   }
 
   public async get(actor: AuthenticatedActor, id: string): Promise<unknown> {
@@ -252,7 +359,7 @@ export class CampaignService {
     const delivery = await this.deliveries.findById(deliveryId).exec()
     if (!delivery) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
     await this.assertAssignmentsInScope(actor, [delivery.assignmentId])
-    if (!['failed', 'uncertain'].includes(delivery.status)) {
+    if (!isDeliveryAutomaticallyRetryable(delivery.status)) {
       throw new ConflictException({ code: 'DELIVERY_NOT_RETRYABLE' })
     }
     const invitation = await this.invitations.findOne({
@@ -284,8 +391,11 @@ export class CampaignService {
     idempotencyKey: string
   ): Promise<{
     success: boolean
+    status: CampaignRecord['status']
     assignmentId: string
     invitationId: string
+    campaignId: string
+    deliveryId: string
     invitationUrl: string
     recipientEmail: string
     studentName: string
@@ -312,19 +422,15 @@ export class CampaignService {
         .findOne({ assignmentId: existingAssignment?.id })
         .exec()
       const existingStudent = existingAssignment
-        ? await this.students.findOne({
-            $or: [
-              { _id: existingAssignment.studentId },
-              { studentId: existingAssignment.studentId }
-            ]
-          })
+        ? await this.students
+            .findOne(studentReferenceFilter(existingAssignment.studentId))
+            .exec()
         : null
       if (!existingAssignment || !existingInvitation || !existingStudent) {
         throw new ConflictException({
           code: 'INVITATION_RECONCILIATION_REQUIRED'
         })
       }
-      let recovered = existingCampaign.status !== 'partial'
       let existingDelivery = await this.deliveries
         .findOne({ campaignId: existingCampaign.id })
         .exec()
@@ -337,7 +443,6 @@ export class CampaignService {
           status: 'queued',
           attempts: 0
         })
-        recovered = false
       }
       if (
         existingDelivery.status === 'queued' ||
@@ -357,17 +462,17 @@ export class CampaignService {
             { _id: existingCampaign.id },
             { $set: { status: 'queued' } }
           )
-          recovered = true
         } catch {
-          existingDelivery.status = 'failed'
-          existingDelivery.lastErrorCode = 'QUEUE_ENQUEUE_FAILED'
-          await existingDelivery.save()
+          // Keep the durable delivery intent queued for Worker reconciliation.
         }
       }
       return {
-        success: recovered,
+        success: true,
+        status: existingCampaign.status,
         assignmentId: existingAssignment.id,
         invitationId: existingInvitation.id,
+        campaignId: existingCampaign.id,
+        deliveryId: existingDelivery.id,
         invitationUrl: await this.buildInvitationUrl(
           existingInvitation.id,
           existingAssignment.id,
@@ -401,87 +506,127 @@ export class CampaignService {
     }
 
     // 2. Find published competency set version (or latest version)
-    let version = await this.competencyVersions
+    const isCompSetObjectId = input.competencySetId.match(/^[0-9a-fA-F]{24}$/)
+    const matchedCompSet = await this.competencySets
       .findOne({
-        competencySetId: input.competencySetId,
+        $or: [
+          ...(isCompSetObjectId ? [{ _id: input.competencySetId }] : []),
+          { code: input.competencySetId }
+        ]
+      })
+      .exec()
+    if (!matchedCompSet) {
+      throw new NotFoundException({ code: 'COMPETENCY_SET_NOT_FOUND' })
+    }
+
+    const version = await this.competencyVersions
+      .findOne({
+        competencySetId: matchedCompSet.id,
         status: 'published'
       })
       .sort({ versionNumber: -1 })
       .exec()
 
     if (!version) {
-      version = await this.competencyVersions
-        .findOne({
-          competencySetId: input.competencySetId
-        })
-        .sort({ versionNumber: -1 })
-        .exec()
-    }
-
-    if (!version) {
-      throw new NotFoundException({
-        code: 'COMPETENCY_SET_VERSION_NOT_FOUND'
+      throw new UnprocessableEntityException({
+        code: 'PUBLISHED_VERSION_REQUIRED'
       })
     }
 
-    // 3. Find or create Evaluator
+    // Evaluator must be explicitly maintained under the placement's organization.
     const email = input.recipientEmail.trim().toLowerCase()
-    let evaluator = await this.evaluators.findOne({ email }).exec()
+    const evaluator = await this.evaluators
+      .findOne({ email, status: 'active' })
+      .exec()
     if (!evaluator) {
-      const name = input.evaluatorName?.trim() || 'ผู้ประเมินภายนอก'
-      evaluator = await this.evaluators.create({
-        email,
-        name: { th: name, en: name },
-        position: { th: 'ผู้ดูแลการฝึกงาน', en: 'Supervisor' },
-        organizationId: 'default-org',
-        status: 'active'
+      throw new UnprocessableEntityException({
+        code: 'ACTIVE_EVALUATOR_REQUIRED'
       })
     }
 
-    // 4. Find or create active cycle for this version
+    // Use only a real, currently active cycle for this student's term and scope.
     const now = new Date()
     const days = input.deadlineDays ?? 30
-    const deadlineAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000)
-
-    let cycle = await this.cycles
-      .findOne({
-        competencySetVersionId: version.id,
-        status: 'active'
-      })
-      .exec()
-
-    if (!cycle) {
-      cycle = await this.cycles.create({
-        code: `CYCLE-${Date.now().toString(36).toUpperCase()}`,
-        name: {
-          th: 'รอบประเมินผลการฝึกงาน',
-          en: 'Internship Evaluation Cycle'
-        },
-        competencySetVersionId: version.id,
-        academicTermId: student.academicTermId || 'term-default',
-        schoolId: student.schoolId,
-        programId: student.programId,
-        opensAt: now,
-        closesAt: deadlineAt,
-        status: 'active'
+    if (!student.academicTermId) {
+      throw new UnprocessableEntityException({
+        code: 'STUDENT_TERM_REQUIRED'
       })
     }
-
-    // 5. Find or create placement for student
-    let placement = await this.placements
-      .findOne({ studentId: student.studentId })
+    const cycles = await this.cycles
+      .find({
+        competencySetVersionId: version.id,
+        academicTermId: student.academicTermId,
+        status: 'active',
+        opensAt: { $lte: now },
+        closesAt: { $gt: now },
+        $and: [
+          {
+            $or: [
+              { schoolId: { $exists: false } },
+              { schoolId: null },
+              { schoolId: student.schoolId }
+            ]
+          },
+          {
+            $or: [
+              { programId: { $exists: false } },
+              { programId: null },
+              { programId: student.programId }
+            ]
+          }
+        ]
+      })
+      .limit(2)
       .exec()
+    if (cycles.length === 0) {
+      throw new UnprocessableEntityException({
+        code: 'ACTIVE_CYCLE_REQUIRED'
+      })
+    }
+    if (cycles.length > 1) {
+      throw new ConflictException({ code: 'CYCLE_SELECTION_REQUIRED' })
+    }
+    const cycle = cycles[0]
+    if (!cycle)
+      throw new ConflictException({ code: 'CYCLE_SELECTION_REQUIRED' })
+    const deadlineAt = new Date(
+      Math.min(
+        now.getTime() + days * 24 * 60 * 60 * 1000,
+        cycle.closesAt.getTime()
+      )
+    )
+
+    // Placement and evaluator must agree on the organization before assignment.
+    const placements = await this.placements
+      .find({
+        studentId: { $in: [student.id, student.studentId] },
+        academicTermId: student.academicTermId,
+        status: 'active',
+        startsAt: { $lte: now },
+        endsAt: { $gt: now }
+      })
+      .limit(2)
+      .exec()
+    if (placements.length === 0) {
+      throw new UnprocessableEntityException({
+        code: 'PLACEMENT_REQUIRED'
+      })
+    }
+    if (placements.length > 1) {
+      throw new ConflictException({ code: 'PLACEMENT_SELECTION_REQUIRED' })
+    }
+    const placement = placements[0]
     if (!placement) {
-      placement = await this.placements.create({
-        studentId: student.studentId,
-        organizationId: evaluator.organizationId || 'default-org',
-        academicTermId: student.academicTermId || 'term-default',
-        schoolId: student.schoolId,
-        programId: student.programId,
-        positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
-        startsAt: now,
-        endsAt: deadlineAt,
-        status: 'active'
+      throw new ConflictException({ code: 'PLACEMENT_SELECTION_REQUIRED' })
+    }
+    if (
+      placement.organizationId !== evaluator.organizationId ||
+      placement.schoolId !== student.schoolId ||
+      placement.programId !== student.programId ||
+      placement.endsAt <= now
+    ) {
+      throw new UnprocessableEntityException({
+        code: 'PLACEMENT_EVALUATOR_MISMATCH'
       })
     }
 
@@ -508,114 +653,131 @@ export class CampaignService {
       }
       return true
     })
-
-    const assignment = await this.assignments.findOneAndUpdate(
-      {
-        cycleId: cycle.id,
-        placementId: placement.id,
-        evaluatorId: evaluator.id
-      },
-      {
-        $setOnInsert: {
-          studentId: student.id,
-          schoolId: student.schoolId,
-          programId: student.programId,
-          questionSnapshot:
-            questionSnapshot.length > 0 ? questionSnapshot : version.sections,
-          competencySetVersionId: version.id,
-          deadlineAt,
-          status: 'pending',
-          evaluationVersion: 1
-        }
-      },
-      { new: true, upsert: true }
-    )
-
-    // Update student evaluation status to awaiting_response
-    await this.students.updateOne(
-      { _id: student._id },
-      { $set: { evaluationStatus: 'awaiting_response' } }
-    )
-
-    // 6. Create InvitationRecord
-    const invitation = await this.invitations.findOneAndUpdate(
-      { assignmentId: assignment.id },
-      {
-        $set: {
-          evaluatorId: evaluator.id,
-          email: evaluator.email,
-          expiresAt: deadlineAt,
-          status: 'active'
-        }
-      },
-      { new: true, upsert: true }
-    )
-
-    // 7. Generate JWT Token for invitation
-    const invitationUrl = await this.buildInvitationUrl(
-      invitation.id,
-      assignment.id,
-      deadlineAt
-    )
-
-    // 8. Find or create Email Template & Delivery
-    let template = await this.templateVersions
-      .findOne({ status: 'published' })
-      .exec()
-    if (!template) {
-      template = await this.templateVersions.findOne().exec()
+    if (questionSnapshot.length === 0) {
+      throw new UnprocessableEntityException({
+        code: 'QUESTIONS_NOT_APPLICABLE'
+      })
     }
 
-    const campaign = await this.campaigns.create({
-      type: 'invitation',
-      templateVersionId: template?.id || 'default-template',
-      assignmentIds: [assignment.id],
-      idempotencyKey: scopedKey,
-      idempotencyScopeKey: scopedKey,
-      requestHash: payloadHash,
-      createdBy: actor.id,
-      status: 'queued',
-      total: 1
-    })
+    const systemTemplates =
+      (await this.templatesService.getSystemTemplates()) as Array<{
+        code: string
+        versionId: string
+      }>
+    const matchedTemplate = systemTemplates.find(
+      (template) => template.code === 'evaluation_request'
+    )
+    const templateVersionId = matchedTemplate?.versionId
+    if (!templateVersionId) {
+      throw new UnprocessableEntityException({
+        code: 'PUBLISHED_TEMPLATE_REQUIRED'
+      })
+    }
+    await this.requirePublishedTemplate(templateVersionId)
 
-    const delivery = await this.deliveries.create({
-      campaignId: campaign.id,
-      assignmentId: assignment.id,
-      recipientEmail: evaluator.email,
-      templateVersionId: template?.id || 'default-template',
-      status: 'queued',
-      attempts: 0
-    })
+    let outbox
+    try {
+      outbox = await this.connection.transaction(async (session) => {
+        const assignment = await this.assignments.findOneAndUpdate(
+          { cycleId: cycle.id, placementId: placement.id },
+          {
+            $setOnInsert: {
+              studentId: student.id,
+              schoolId: student.schoolId,
+              programId: student.programId,
+              evaluatorId: evaluator.id,
+              questionSnapshot,
+              competencySetVersionId: version.id,
+              deadlineAt,
+              status: 'pending',
+              evaluationVersion: 1
+            }
+          },
+          { returnDocument: 'after', upsert: true, session }
+        )
+        if (!assignment || assignment.evaluatorId !== evaluator.id) {
+          throw new ConflictException({ code: 'EVALUATOR_CHANGE_REQUIRED' })
+        }
+        if (
+          !['pending', 'inProgress'].includes(assignment.status) ||
+          assignment.deadlineAt <= now
+        ) {
+          throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
+        }
+        const previousInvitation = await this.invitations
+          .findOne({ assignmentId: assignment.id })
+          .session(session)
+          .exec()
+        if (previousInvitation) {
+          throw new ConflictException({ code: 'INVITATION_REISSUE_REQUIRED' })
+        }
+        const invitation = await new this.invitations({
+          assignmentId: assignment.id,
+          evaluatorId: evaluator.id,
+          email: evaluator.email,
+          expiresAt: assignment.deadlineAt,
+          status: 'active'
+        }).save({ session })
+        const campaign = await new this.campaigns({
+          type: 'invitation',
+          templateVersionId,
+          assignmentIds: [assignment.id],
+          idempotencyKey: scopedKey,
+          idempotencyScopeKey: scopedKey,
+          requestHash: payloadHash,
+          createdBy: actor.id,
+          status: 'queued',
+          total: 1
+        }).save({ session })
+        const delivery = await new this.deliveries({
+          campaignId: campaign.id,
+          assignmentId: assignment.id,
+          recipientEmail: evaluator.email,
+          templateVersionId,
+          status: 'queued',
+          attempts: 0
+        }).save({ session })
+        const invitationUrl = await this.buildInvitationUrl(
+          invitation.id,
+          assignment.id,
+          assignment.deadlineAt
+        )
+
+        return { assignment, invitation, campaign, delivery, invitationUrl }
+      })
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error
+      const concurrentCampaign = await this.campaigns
+        .findOne({ idempotencyScopeKey: scopedKey })
+        .exec()
+      if (!concurrentCampaign) {
+        throw new ConflictException({
+          code: 'INVITATION_OR_ASSIGNMENT_CONFLICT'
+        })
+      }
+      if (concurrentCampaign.requestHash !== payloadHash) {
+        throw new ConflictException({ code: 'IDEMPOTENCY_KEY_REUSED' })
+      }
+      return this.sendStudentInvitation(actor, input, idempotencyKey)
+    }
 
     try {
-      await this.enqueueDelivery(delivery.id, invitation.id)
+      await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
     } catch {
-      await Promise.all([
-        this.deliveries.updateOne(
-          { _id: delivery.id },
-          {
-            $set: { status: 'failed', lastErrorCode: 'QUEUE_ENQUEUE_FAILED' }
-          }
-        ),
-        this.campaigns.updateOne(
-          { _id: campaign.id },
-          { $set: { status: 'partial' } }
-        )
-      ])
-      throw new ConflictException({
-        code: 'QUEUE_UNAVAILABLE',
-        details: { deliveryId: delivery.id }
-      })
+      // The committed delivery row remains queued and is recovered by the Worker.
     }
 
     return {
       success: true,
-      assignmentId: assignment.id,
-      invitationId: invitation.id,
-      invitationUrl,
+      status: 'queued',
+      assignmentId: outbox.assignment.id,
+      invitationId: outbox.invitation.id,
+      campaignId: outbox.campaign.id,
+      deliveryId: outbox.delivery.id,
+      invitationUrl: outbox.invitationUrl,
       recipientEmail: evaluator.email,
       studentName: student.name.th || student.name.en || student.studentId,
-      deadlineAt: deadlineAt.toISOString()
+      deadlineAt: outbox.assignment.deadlineAt.toISOString()
     }
   }
 
@@ -688,7 +850,10 @@ export class CampaignService {
     )
   }
 
-  private async reconcileCampaign(campaignId: string): Promise<void> {
+  private async reconcileCampaign(
+    campaignId: string,
+    expectedTotal: number
+  ): Promise<void> {
     const summary = await this.deliveries.aggregate<{
       _id: DeliveryRecord['status']
       count: number
@@ -699,282 +864,211 @@ export class CampaignService {
     const counts = Object.fromEntries(
       summary.map((item) => [item._id, item.count])
     )
-    const pending = (counts.queued ?? 0) + (counts.sending ?? 0)
-    const failures = (counts.failed ?? 0) + (counts.uncertain ?? 0)
-    const status =
-      pending > 0
-        ? counts.sending
-          ? 'processing'
-          : 'queued'
-        : failures > 0
-          ? 'partial'
-          : 'completed'
+    const status = campaignStatusFromDeliveryCounts(expectedTotal, counts)
     await this.campaigns.updateOne({ _id: campaignId }, { $set: { status } })
   }
 
   public async sendTargetedEmail(
     actor: AuthenticatedActor,
     input: TargetedEmailInput,
-    idempotencyKey?: string
+    idempotencyKey: string
   ): Promise<unknown> {
-    const key =
-      idempotencyKey ||
-      `targeted-${input.studentId}-${input.templateCode}-${Date.now()}`
-    const scopedKey = idempotencyScopeKey(actor.id, 'campaign', key)
+    const scopedKey = idempotencyScopeKey(
+      actor.id,
+      'targeted-email',
+      idempotencyKey
+    )
     const payloadHash = requestHash(input)
+    const existing = await this.campaigns
+      .findOne({ idempotencyScopeKey: scopedKey })
+      .exec()
+    if (existing) {
+      if (existing.requestHash !== payloadHash) {
+        throw new ConflictException({ code: 'IDEMPOTENCY_KEY_REUSED' })
+      }
+      if (existing.assignmentIds.length !== 1) {
+        throw new ConflictException({
+          code: 'CAMPAIGN_RECONCILIATION_REQUIRED'
+        })
+      }
+      await this.assertAssignmentsInScope(actor, existing.assignmentIds)
+      const delivery = await this.deliveries
+        .findOne({ campaignId: existing.id })
+        .exec()
+      return {
+        status: existing.status,
+        campaignId: existing.id,
+        ...(delivery ? { deliveryId: delivery.id } : {}),
+        assignmentId: existing.assignmentIds[0]
+      }
+    }
 
-    // 1. Locate student
+    const assignment = await this.assignments
+      .findOne({
+        $and: [
+          { _id: input.assignmentId },
+          scopeFilter<EvaluationAssignmentRecord>(actor)
+        ]
+      })
+      .exec()
+    if (!assignment) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    const now = new Date()
+    if (
+      !['pending', 'inProgress'].includes(assignment.status) ||
+      assignment.deadlineAt <= now
+    ) {
+      throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
+    }
+    await this.assertAssignmentsInScope(actor, [assignment.id])
+
+    const cycle = await this.cycles
+      .findOne({
+        _id: assignment.cycleId,
+        status: 'active',
+        opensAt: { $lte: now },
+        closesAt: { $gt: now }
+      })
+      .exec()
+    if (!cycle || assignment.deadlineAt > cycle.closesAt) {
+      throw new ConflictException({ code: 'CYCLE_CLOSED' })
+    }
+
     const student = await this.students
       .findOne({
-        $or: [{ _id: input.studentId }, { studentId: input.studentId }]
-      })
-      .exec()
-    if (!student) {
-      throw new NotFoundException({
-        code: 'STUDENT_NOT_FOUND',
-        message: 'Student not found'
-      })
-    }
-
-    // 2. Locate or resolve assignment
-    let assignment = await this.assignments
-      .findOne({
-        $or: [{ studentId: student.id }, { studentId: student.studentId }]
-      })
-      .exec()
-
-    const now = new Date()
-    const days = input.deadlineDays ?? 30
-    const deadlineAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000)
-
-    // 3. Resolve Evaluator
-    let evaluator: (EvaluatorRecord & { id: string; _id: unknown }) | null =
-      null
-    const recipientEmail =
-      input.recipientEmail?.trim().toLowerCase() ||
-      'evaluator@workplace.co.th'
-    const recipientName =
-      input.evaluatorName?.trim() || student.company || 'ผู้ดูแลการฝึกงาน'
-
-    if (assignment?.evaluatorId) {
-      evaluator = (await this.evaluators
-        .findById(assignment.evaluatorId)
-        .exec()) as unknown as (EvaluatorRecord & {
-        id: string
-        _id: unknown
-      }) | null
-    }
-
-    if (!evaluator) {
-      evaluator = (await this.evaluators
-        .findOne({ email: recipientEmail })
-        .exec()) as unknown as (EvaluatorRecord & {
-        id: string
-        _id: unknown
-      }) | null
-    }
-
-    if (!evaluator) {
-      evaluator = (await this.evaluators.create({
-        email: recipientEmail,
-        name: { th: recipientName, en: recipientName },
-        position: { th: 'ผู้ดูแลการฝึกงาน', en: 'Supervisor' },
-        organizationId: 'default-org',
+        ...studentReferenceFilter(assignment.studentId),
         status: 'active'
-      })) as unknown as EvaluatorRecord & { id: string; _id: unknown }
-    } else if (input.recipientEmail && evaluator.email !== recipientEmail) {
-      evaluator.email = recipientEmail
-      await this.evaluators.updateOne(
-        { _id: evaluator._id },
-        { $set: { email: recipientEmail } }
-      )
-    }
-
-    // If assignment doesn't exist, create it
-    if (!assignment) {
-      let version = await this.competencyVersions
-        .findOne({ status: 'published' })
-        .sort({ versionNumber: -1 })
-        .exec()
-
-      if (!version) {
-        version = await this.competencyVersions
-          .findOne()
-          .sort({ versionNumber: -1 })
-          .exec()
-      }
-
-      if (!version) {
-        throw new NotFoundException({
-          code: 'COMPETENCY_VERSION_NOT_FOUND',
-          message: 'No competency version available'
-        })
-      }
-
-      let cycle = await this.cycles
-        .findOne({
-          competencySetVersionId: version.id,
-          status: 'active'
-        })
-        .exec()
-
-      if (!cycle) {
-        cycle = await this.cycles.create({
-          code: `CYCLE-${Date.now().toString(36).toUpperCase()}`,
-          name: {
-            th: 'รอบประเมินผลการฝึกงาน',
-            en: 'Internship Evaluation Cycle'
-          },
-          competencySetVersionId: version.id,
-          academicTermId: student.academicTermId || 'term-default',
-          schoolId: student.schoolId,
-          programId: student.programId,
-          opensAt: now,
-          closesAt: deadlineAt,
-          status: 'active'
-        })
-      }
-
-      let placement = await this.placements
-        .findOne({ studentId: student.studentId })
-        .exec()
-      if (!placement) {
-        placement = await this.placements.create({
-          studentId: student.studentId,
-          organizationId: evaluator.organizationId || 'default-org',
-          academicTermId: student.academicTermId || 'term-default',
-          schoolId: student.schoolId,
-          programId: student.programId,
-          positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
-          startsAt: now,
-          endsAt: deadlineAt,
-          status: 'active'
-        })
-      }
-
-      const questionSnapshot = (version.sections || []).filter((sec) => {
-        if (
-          sec.category === 'general' ||
-          sec.category === 'suggestion' ||
-          (!sec.category && !sec.schoolId)
-        ) {
-          return true
-        }
-        if (sec.schoolId && sec.schoolId !== student.schoolId) {
-          return false
-        }
-        if (
-          sec.programId &&
-          student.programId &&
-          sec.programId !== student.programId
-        ) {
-          return false
-        }
-        return true
       })
-
-      assignment = await this.assignments.create({
-        studentId: student.id,
-        schoolId: student.schoolId,
-        programId: student.programId,
-        cycleId: cycle.id,
-        placementId: placement.id,
-        evaluatorId: evaluator.id,
-        questionSnapshot:
-          questionSnapshot.length > 0 ? questionSnapshot : version.sections,
-        competencySetVersionId: version.id,
-        deadlineAt,
-        status: 'pending',
-        evaluationVersion: 1
+      .exec()
+    if (
+      !student ||
+      ![student.id, student.studentId].includes(input.studentId)
+    ) {
+      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    }
+    const evaluator = await this.evaluators
+      .findOne({ _id: assignment.evaluatorId, status: 'active' })
+      .exec()
+    if (!evaluator) {
+      throw new UnprocessableEntityException({
+        code: 'ACTIVE_EVALUATOR_REQUIRED'
       })
     }
 
-    // Update student evaluationStatus based on template
-    if (input.templateCode === 'evaluation_request') {
-      await this.students.updateOne(
-        { _id: student._id },
-        { $set: { evaluationStatus: 'awaiting_response' } }
-      )
-    }
-
-    // 4. Create or update invitation
-    const invitation = await this.invitations.findOneAndUpdate(
-      { assignmentId: assignment.id },
-      {
-        $set: {
-          evaluatorId: evaluator.id,
-          email: evaluator.email,
-          expiresAt: assignment.deadlineAt || deadlineAt,
-          status: 'active'
-        }
-      },
-      { new: true, upsert: true }
-    )
-
-    const invitationUrl = await this.buildInvitationUrl(
-      invitation.id,
-      assignment.id,
-      assignment.deadlineAt || deadlineAt
-    )
-
-    // 5. Find system template version corresponding to templateCode
-    const systemTemplates =
+    const templateList =
       (await this.templatesService.getSystemTemplates()) as Array<{
         code: string
         versionId: string
       }>
-    const matchedTemplate = systemTemplates.find(
-      (t) => t.code === input.templateCode
-    )
-    const templateVersionId =
-      matchedTemplate?.versionId || 'default-template'
+    const templateVersionId = templateList.find(
+      (template) => template.code === input.templateCode
+    )?.versionId
+    if (!templateVersionId) {
+      throw new UnprocessableEntityException({
+        code: 'PUBLISHED_TEMPLATE_REQUIRED'
+      })
+    }
+    await this.requirePublishedTemplate(templateVersionId)
 
-    // 6. Create campaign & delivery
-    const campaignType =
-      input.templateCode === 'evaluation_reminder' ? 'reminder' : 'invitation'
+    const existingInvitation = await this.invitations
+      .findOne({ assignmentId: assignment.id })
+      .exec()
+    if (input.templateCode === 'evaluation_reminder') {
+      if (
+        assignment.status !== 'inProgress' ||
+        !existingInvitation ||
+        existingInvitation.status !== 'active' ||
+        existingInvitation.expiresAt <= now
+      ) {
+        throw new ConflictException({ code: 'ACTIVE_INVITATION_REQUIRED' })
+      }
+    } else if (existingInvitation) {
+      throw new ConflictException({ code: 'INVITATION_REISSUE_REQUIRED' })
+    }
 
-    const campaign = await this.campaigns.create({
-      type: campaignType,
-      templateVersionId,
-      assignmentIds: [assignment.id],
-      idempotencyKey: scopedKey,
-      idempotencyScopeKey: scopedKey,
-      requestHash: payloadHash,
-      createdBy: actor.id,
-      status: 'queued',
-      total: 1
-    })
-
-    const delivery = await this.deliveries.create({
-      campaignId: campaign.id,
-      assignmentId: assignment.id,
-      recipientEmail: evaluator.email,
-      templateVersionId,
-      status: 'queued',
-      attempts: 0
-    })
+    const recipientEmail = (input.recipientEmail || evaluator.email)
+      .trim()
+      .toLowerCase()
+    let outbox
+    try {
+      outbox = await this.connection.transaction(async (session) => {
+        let invitation = await this.invitations
+          .findOne({ assignmentId: assignment.id })
+          .session(session)
+          .exec()
+        if (input.templateCode === 'evaluation_reminder') {
+          if (
+            assignment.status !== 'inProgress' ||
+            !invitation ||
+            invitation.status !== 'active' ||
+            invitation.expiresAt <= now
+          ) {
+            throw new ConflictException({ code: 'ACTIVE_INVITATION_REQUIRED' })
+          }
+        } else {
+          if (invitation) {
+            throw new ConflictException({ code: 'INVITATION_REISSUE_REQUIRED' })
+          }
+          invitation = await new this.invitations({
+            assignmentId: assignment.id,
+            evaluatorId: assignment.evaluatorId,
+            email: recipientEmail,
+            expiresAt: assignment.deadlineAt,
+            status: 'active'
+          }).save({ session })
+        }
+        const campaign = await new this.campaigns({
+          type:
+            input.templateCode === 'evaluation_reminder'
+              ? 'reminder'
+              : 'invitation',
+          templateVersionId,
+          assignmentIds: [assignment.id],
+          idempotencyKey,
+          idempotencyScopeKey: scopedKey,
+          requestHash: payloadHash,
+          createdBy: actor.id,
+          status: 'queued',
+          total: 1
+        }).save({ session })
+        const delivery = await new this.deliveries({
+          campaignId: campaign.id,
+          assignmentId: assignment.id,
+          recipientEmail,
+          templateVersionId,
+          status: 'queued',
+          attempts: 0
+        }).save({ session })
+        return { invitation, campaign, delivery }
+      })
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error
+      const concurrentCampaign = await this.campaigns
+        .findOne({ idempotencyScopeKey: scopedKey })
+        .exec()
+      if (!concurrentCampaign) {
+        throw new ConflictException({
+          code: 'INVITATION_OR_ASSIGNMENT_CONFLICT'
+        })
+      }
+      if (concurrentCampaign.requestHash !== payloadHash) {
+        throw new ConflictException({ code: 'IDEMPOTENCY_KEY_REUSED' })
+      }
+      return this.sendTargetedEmail(actor, input, idempotencyKey)
+    }
 
     try {
-      await this.enqueueDelivery(delivery.id, invitation.id)
+      await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
     } catch {
-      await this.deliveries.updateOne(
-        { _id: delivery.id },
-        { $set: { status: 'sent', providerMessageId: `mock-${Date.now()}` } }
-      )
-      await this.campaigns.updateOne(
-        { _id: campaign.id },
-        { $set: { status: 'completed' } }
-      )
+      // The committed delivery row remains queued and is recovered by the Worker.
     }
 
     return {
-      success: true,
+      status: 'queued',
+      campaignId: outbox.campaign.id,
+      deliveryId: outbox.delivery.id,
       assignmentId: assignment.id,
-      deliveryId: delivery.id,
-      campaignId: campaign.id,
-      invitationUrl,
-      recipientEmail: evaluator.email,
-      templateCode: input.templateCode
+      invitationId: outbox.invitation.id,
+      recipientEmail
     }
   }
 }

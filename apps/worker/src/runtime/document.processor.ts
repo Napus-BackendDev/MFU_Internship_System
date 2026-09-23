@@ -12,6 +12,7 @@ import { PDFDocument, rgb } from 'pdf-lib'
 import type { Logger } from 'pino'
 
 import type { WorkerModels } from './models.js'
+import { studentReferenceFilter } from './student-reference.js'
 
 export interface DocumentJob {
   readonly documentId: string
@@ -70,9 +71,7 @@ export class DocumentProcessor {
           _id: document.templateVersionId,
           status: 'published'
         }),
-        this.models.Student.findOne({
-          $or: [{ _id: document.studentId }, { studentId: document.studentId }]
-        }),
+        this.models.Student.findOne(studentReferenceFilter(document.studentId)),
         this.models.Evaluation.find({ _id: { $in: document.evaluationIds } })
           .sort({ version: 1 })
           .lean()

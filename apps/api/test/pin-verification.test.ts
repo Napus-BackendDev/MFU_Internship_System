@@ -2,6 +2,7 @@ import type { ExecutionContext } from '@nestjs/common'
 import { describe, expect, it } from 'vitest'
 
 import { AuthRateLimitGuard } from '../src/auth/auth-rate-limit.guard.js'
+import type { RateLimitStore } from '../src/auth/auth-rate-limit.store.js'
 import {
   generatePin,
   hashPin,
@@ -29,109 +30,203 @@ describe('secure PIN contract', () => {
     expect(hashPin(generatePin(), secret)).not.toBe(digest)
   })
 
-  it('returns 429 after the public PIN attempt threshold', () => {
-    const guard = new AuthRateLimitGuard()
-    const request = {
-      body: { pin: '0000000000000000' },
-      headers: {},
-      method: 'POST',
-      path: '/api/v2/public/evaluations/verify-pin',
-      socket: { remoteAddress: '127.0.0.1' }
-    }
-    const context = {
-      switchToHttp: () => ({ getRequest: () => request })
-    } as unknown as ExecutionContext
+  it('shares attempt buckets across guard instances and blocks the 11th PIN attempt', async () => {
+    const store = new MemoryRateLimitStore()
+    const guards = [
+      new AuthRateLimitGuard(store),
+      new AuthRateLimitGuard(store)
+    ]
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
-      expect(guard.canActivate(context)).toBe(true)
-    }
-    expect(() => guard.canActivate(context)).toThrowError(
-      expect.objectContaining({ status: 429 })
-    )
-  })
-
-  it('blocks brute-force attack from the same IP when trying different random PINs', () => {
-    const guard = new AuthRateLimitGuard()
-    const ip = '198.51.100.25'
-
-    // Attacker sends 10 DIFFERENT PINs from the same IP
-    for (let i = 0; i < 10; i++) {
-      const request = {
-        body: { pin: `PIN_${i.toString().padStart(12, '0')}` },
+      const context = contextFor({
+        body: { pin: `PIN_${attempt}` },
         headers: {},
         method: 'POST',
         path: '/api/v2/public/evaluations/verify-pin',
-        socket: { remoteAddress: ip }
-      }
-      const context = {
-        switchToHttp: () => ({ getRequest: () => request })
-      } as unknown as ExecutionContext
-      expect(guard.canActivate(context)).toBe(true)
+        socket: { remoteAddress: '198.51.100.25' }
+      })
+      await expect(guards[attempt % 2]!.canActivate(context)).resolves.toBe(
+        true
+      )
     }
 
-    // 11th attempt with yet another new PIN must be blocked by IP rate limit
-    const blockedRequest = {
-      body: { pin: 'PIN_NEW_ATTEMPT_' },
+    const blocked = contextFor({
+      body: { pin: 'PIN_11' },
       headers: {},
       method: 'POST',
       path: '/api/v2/public/evaluations/verify-pin',
-      socket: { remoteAddress: ip }
-    }
-    const blockedContext = {
-      switchToHttp: () => ({ getRequest: () => blockedRequest })
-    } as unknown as ExecutionContext
-
-    expect(() => guard.canActivate(blockedContext)).toThrowError(
-      expect.objectContaining({ status: 429 })
-    )
+      socket: { remoteAddress: '198.51.100.25' }
+    })
+    await expect(guards[0]!.canActivate(blocked)).rejects.toMatchObject({
+      status: 429
+    })
   })
 
-  it('correctly extracts client IP from x-forwarded-for header behind reverse proxy', () => {
-    const guard = new AuthRateLimitGuard()
-    const proxyIp = '10.0.0.1'
-    const clientIp = '203.0.113.88'
-
-    for (let i = 0; i < 10; i++) {
-      const request = {
-        body: { pin: `PIN_FWD_${i}` },
-        headers: { 'x-forwarded-for': `${clientIp}, 10.0.0.2` },
+  it('does not trust spoofed forwarded headers for client identity', async () => {
+    const guard = new AuthRateLimitGuard(new MemoryRateLimitStore())
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const context = contextFor({
+        body: { pin: `PIN_${attempt}` },
+        headers: { 'x-forwarded-for': `203.0.113.${attempt + 1}` },
         method: 'POST',
         path: '/api/v2/public/evaluations/verify-pin',
-        socket: { remoteAddress: proxyIp }
-      }
-      const context = {
-        switchToHttp: () => ({ getRequest: () => request })
-      } as unknown as ExecutionContext
-      expect(guard.canActivate(context)).toBe(true)
+        socket: { remoteAddress: '10.0.0.1' }
+      })
+      await expect(guard.canActivate(context)).resolves.toBe(true)
     }
-
-    // 11th request from same clientIp should be blocked
-    const requestBlocked = {
-      body: { pin: 'PIN_FWD_BLOCKED' },
-      headers: { 'x-forwarded-for': clientIp },
+    const blocked = contextFor({
+      body: { pin: 'PIN_LAST' },
+      headers: { 'x-forwarded-for': '203.0.113.200' },
       method: 'POST',
       path: '/api/v2/public/evaluations/verify-pin',
-      socket: { remoteAddress: proxyIp }
+      socket: { remoteAddress: '10.0.0.1' }
+    })
+    await expect(guard.canActivate(blocked)).rejects.toMatchObject({
+      status: 429
+    })
+  })
+
+  it('uses Express-resolved client IP when trusted proxy CIDRs are configured', async () => {
+    const guard = new AuthRateLimitGuard(new MemoryRateLimitStore())
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await expect(
+        guard.canActivate(
+          contextFor({
+            body: { pin: `PIN_${attempt}` },
+            headers: { 'x-forwarded-for': `198.51.100.${attempt + 1}` },
+            ip: '203.0.113.88',
+            method: 'POST',
+            path: '/api/v2/public/evaluations/verify-pin',
+            socket: { remoteAddress: '10.0.0.1' }
+          })
+        )
+      ).resolves.toBe(true)
     }
-    const contextBlocked = {
-      switchToHttp: () => ({ getRequest: () => requestBlocked })
-    } as unknown as ExecutionContext
 
-    expect(() => guard.canActivate(contextBlocked)).toThrowError(
-      expect.objectContaining({ status: 429 })
-    )
-
-    // A different client IP behind the same proxy is NOT blocked
-    const requestOther = {
-      body: { pin: 'PIN_OTHER_USER' },
-      headers: { 'x-forwarded-for': '203.0.113.99' },
+    const blocked = contextFor({
+      body: { pin: 'PIN_BLOCKED' },
+      headers: { 'x-forwarded-for': '198.51.100.200' },
+      ip: '203.0.113.88',
       method: 'POST',
       path: '/api/v2/public/evaluations/verify-pin',
-      socket: { remoteAddress: proxyIp }
+      socket: { remoteAddress: '10.0.0.1' }
+    })
+    await expect(guard.canActivate(blocked)).rejects.toMatchObject({
+      status: 429
+    })
+
+    const otherClient = contextFor({
+      body: { pin: 'PIN_OTHER_CLIENT' },
+      headers: { 'x-forwarded-for': '198.51.100.200' },
+      ip: '203.0.113.99',
+      method: 'POST',
+      path: '/api/v2/public/evaluations/verify-pin',
+      socket: { remoteAddress: '10.0.0.1' }
+    })
+    await expect(guard.canActivate(otherClient)).resolves.toBe(true)
+  })
+
+  it('fails closed when the shared limiter is unavailable', async () => {
+    const store: RateLimitStore = {
+      consume: () => Promise.reject(new Error('redis unavailable'))
     }
-    const contextOther = {
-      switchToHttp: () => ({ getRequest: () => requestOther })
-    } as unknown as ExecutionContext
-    expect(guard.canActivate(contextOther)).toBe(true)
+    const guard = new AuthRateLimitGuard(store)
+    const context = contextFor({
+      body: { pin: 'PIN_1' },
+      headers: {},
+      method: 'POST',
+      path: '/api/v2/public/evaluations/verify-pin',
+      socket: { remoteAddress: '198.51.100.25' }
+    })
+
+    await expect(guard.canActivate(context)).rejects.toMatchObject({
+      status: 503
+    })
+  })
+
+  it('limits workbook previews and normalizes commit paths across batch IDs', async () => {
+    const guard = new AuthRateLimitGuard(new MemoryRateLimitStore())
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await expect(
+        guard.canActivate(
+          contextFor({
+            headers: {},
+            method: 'POST',
+            path: '/api/v2/students/import-preview',
+            socket: { remoteAddress: '198.51.100.25' }
+          })
+        )
+      ).resolves.toBe(true)
+    }
+    await expect(
+      guard.canActivate(
+        contextFor({
+          headers: {},
+          method: 'POST',
+          path: '/api/v2/students/import-preview',
+          socket: { remoteAddress: '198.51.100.25' }
+        })
+      )
+    ).rejects.toMatchObject({ status: 429 })
+
+    const commitGuard = new AuthRateLimitGuard(new MemoryRateLimitStore())
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await expect(
+        commitGuard.canActivate(
+          contextFor({
+            headers: {},
+            method: 'POST',
+            path: `/api/v2/students/imports/batch-${attempt}/commit`,
+            socket: { remoteAddress: '198.51.100.26' }
+          })
+        )
+      ).resolves.toBe(true)
+    }
+    await expect(
+      commitGuard.canActivate(
+        contextFor({
+          headers: {},
+          method: 'POST',
+          path: '/api/v2/students/imports/another-batch/commit',
+          socket: { remoteAddress: '198.51.100.26' }
+        })
+      )
+    ).rejects.toMatchObject({ status: 429 })
   })
 })
+
+function contextFor(request: object): ExecutionContext {
+  return {
+    switchToHttp: () => ({
+      getRequest: () => request,
+      getResponse: () => ({ setHeader: () => undefined })
+    })
+  } as unknown as ExecutionContext
+}
+
+class MemoryRateLimitStore {
+  private readonly buckets = new Map<
+    string,
+    { count: number; resetAt: number }
+  >()
+  private readonly now = 1000
+
+  public consume(
+    keys: readonly string[],
+    limit: number,
+    windowMs: number
+  ): Promise<{ limited: boolean; retryAfterSeconds: number }> {
+    let limited = false
+    for (const key of keys) {
+      const current = this.buckets.get(key)
+      const bucket =
+        !current || current.resetAt <= this.now
+          ? { count: 0, resetAt: this.now + windowMs }
+          : current
+      bucket.count += 1
+      this.buckets.set(key, bucket)
+      if (bucket.count > limit) limited = true
+    }
+    return Promise.resolve({ limited, retryAfterSeconds: 60 })
+  }
+}

@@ -36,7 +36,7 @@ tags:
   - name: Competencies
     description: Versioned competency sets and scoring rules
   - name: Evaluations
-    description: Cycles, assignments, Drafts, submit, and reopen workflow
+    description: Cycles, assignments, Drafts, submit, and immutable final results
   - name: Correspondence
     description: Versioned email templates, campaigns, and delivery tracking
   - name: System Settings
@@ -145,6 +145,127 @@ paths:
           description: Session revoked
         '401':
           $ref: '#/components/responses/Unauthenticated'
+  /users:
+    get:
+      tags: [Auth]
+      operationId: listUsers
+      summary: List users within the caller's approved scope
+      x-permissions: [users.read]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 100 }
+        - name: role
+          in: query
+          schema:
+            type: string
+            enum: [systemAdmin, internshipStaff, coordinator, student, evaluator, auditor]
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, archived, suspended] }
+        - name: schoolId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Scoped user page without OIDC subject identifiers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedUserPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Auth]
+      operationId: createUser
+      summary: Create a scoped operational user or explicitly link a student record
+      x-permissions: [users.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateManagedUser'
+      responses:
+        '201':
+          description: Created scoped user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedUser'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /users/summary:
+    get:
+      tags: [Auth]
+      operationId: getUserSummary
+      summary: Count users within the caller's management scope
+      x-permissions: [users.manage]
+      responses:
+        '200':
+          description: Scoped user totals
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, minLength: 1 }
+    patch:
+      tags: [Auth]
+      operationId: updateUser
+      summary: Update a user within the caller's management scope
+      x-permissions: [users.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateManagedUser'
+      responses:
+        '200':
+          description: Updated scoped user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedUser'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Auth]
+      operationId: archiveUser
+      summary: Archive a user within the caller's management scope
+      x-permissions: [users.manage]
+      responses:
+        '204':
+          description: User archived
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /public/invitations/exchange:
     post:
       tags: [Auth]
@@ -216,8 +337,18 @@ paths:
       x-permissions: [academic.read]
       parameters:
         - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Search'
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 25
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 100
         - $ref: '#/components/parameters/Archived'
       responses:
         '200':
@@ -490,11 +621,15 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/ObjectId'
-        - name: termId
+        - name: studentId
           in: query
           schema:
-            $ref: '#/components/schemas/ObjectId'
-        - $ref: '#/components/parameters/Archived'
+            type: string
+        - name: evaluationStatus
+          in: query
+          schema:
+            type: string
+            enum: [awaiting_evaluator, awaiting_response, submitted, email_error]
       responses:
         '200':
           description: Paginated Students
@@ -522,6 +657,102 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Student'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /students/import-preview:
+    post:
+      tags: [Students]
+      operationId: previewStudentImport
+      summary: Validate a student workbook without writing student records
+      x-permissions: [students.import]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Import preview batch created; valid rows are not committed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentImportPreview'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          description: Workbook exceeds the 5 MiB upload or row limit
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /students/imports/{batchId}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ObjectId'
+    get:
+      tags: [Students]
+      operationId: getStudentImportPreview
+      summary: Read an unexpired import preview owned by the caller
+      x-permissions: [students.import]
+      responses:
+        '200':
+          description: Current row decisions and commit outcomes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentImportPreview'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /students/imports/{batchId}/commit:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ObjectId'
+    post:
+      tags: [Students]
+      operationId: commitStudentImport
+      summary: Commit up to 100 explicitly confirmed rows atomically per row
+      x-permissions: [students.import]
+      parameters:
+        - name: idempotency-key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentImportCommitInput'
+      responses:
+        '200':
+          description: Committed rows; retry with the same key and payload is safe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentImportCommit'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
@@ -1087,22 +1318,12 @@ paths:
     post:
       tags: [Evaluations]
       operationId: reopenEvaluation
-      summary: Reopen a submitted evaluation under approved policy
-      description: Authorized role and reopen window remain TBD.
+      summary: Reserved route; reopen is disabled in the Production MVP
+      description: No role is granted evaluations.reopen. The operation does not create a new editable version.
       x-permissions: [evaluations.reopen]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ReopenEvaluationRequest'
       responses:
-        '200':
-          description: Controlled editable version created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Evaluation'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
@@ -1196,7 +1417,8 @@ paths:
     post:
       tags: [Correspondence]
       operationId: sendStudentInvitation
-      summary: Create an evaluator assignment and queue its invitation email
+      summary: Create a scoped evaluator assignment and queue its invitation email
+      description: Requires exactly one active placement and applicable active cycle, a published competency version, and an active evaluator. Ambiguous placement/cycle and missing master data are rejected; no defaults are created.
       x-permissions: [campaigns.send]
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -1218,7 +1440,47 @@ paths:
                 notes: { type: string }
       responses:
         '202':
-          description: Invitation queued
+          description: Invitation delivery queued (not yet confirmed as sent)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueuedDelivery'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /campaigns/send-targeted:
+    post:
+      tags: [Correspondence]
+      operationId: sendTargetedEmail
+      summary: Queue an invitation or reminder for one scoped existing assignment
+      description: Does not create placements/cycles/assignments or extend deadlines. Reminders require the existing active invitation.
+      x-permissions: [campaigns.send]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [assignmentId, studentId, templateCode]
+              properties:
+                assignmentId: { type: string }
+                studentId: { type: string }
+                templateCode: { type: string, enum: [evaluation_request, evaluation_reminder] }
+                recipientEmail: { type: string, format: email }
+                evaluatorName: { type: string, minLength: 1 }
+      responses:
+        '202':
+          description: Delivery accepted into the queue; inspect Delivery for final outcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueuedDelivery'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -1848,7 +2110,7 @@ components:
       in: path
       required: true
       schema:
-        $ref: '#/components/schemas/ObjectId'
+        type: string
     CompetencySetId:
       name: competencySetId
       in: path
@@ -2070,6 +2332,107 @@ components:
               items: { type: string }
             studentId: { type: string }
             assignmentId: { type: string }
+        roleScopes:
+          type: array
+          items:
+            type: object
+            required: [role, tenant, schoolIds, programIds]
+            properties:
+              role:
+                type: string
+                enum: [systemAdmin, internshipStaff, coordinator, student, evaluator, auditor]
+              tenant: { type: boolean }
+              schoolIds:
+                type: array
+                items: { type: string }
+              programIds:
+                type: array
+                items: { type: string }
+    ManagedUser:
+      type: object
+      required: [id, email, displayName, status, roleAssignments]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        status: { type: string, enum: [active, archived, suspended] }
+        studentId: { type: string }
+        roleAssignments:
+          type: array
+          items:
+            type: object
+            required: [role, tenant, schoolIds, programIds, active]
+            properties:
+              role:
+                type: string
+                enum: [systemAdmin, internshipStaff, coordinator, student, evaluator, auditor]
+              tenant: { type: boolean }
+              schoolIds:
+                type: array
+                items: { type: string }
+              programIds:
+                type: array
+                items: { type: string }
+              active: { type: boolean }
+    ManagedUserPage:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagedUser'
+        meta:
+          type: object
+          required: [page, pageSize, total, totalPages]
+          properties:
+            page: { type: integer, minimum: 1 }
+            pageSize: { type: integer, minimum: 1 }
+            total: { type: integer, minimum: 0 }
+            totalPages: { type: integer, minimum: 0 }
+    UserSummary:
+      type: object
+      required: [total, systemAdmin, internshipStaff, coordinator, student]
+      properties:
+        total: { type: integer, minimum: 0 }
+        systemAdmin: { type: integer, minimum: 0 }
+        internshipStaff: { type: integer, minimum: 0 }
+        coordinator: { type: integer, minimum: 0 }
+        student: { type: integer, minimum: 0 }
+    CreateManagedUser:
+      type: object
+      required: [email, displayName, role]
+      properties:
+        email: { type: string, format: email }
+        displayName: { type: string, minLength: 1, maxLength: 200 }
+        role:
+          type: string
+          enum: [systemAdmin, internshipStaff, coordinator, student, evaluator, auditor]
+        status: { type: string, enum: [active, archived, suspended] }
+        studentId: { type: string, maxLength: 50 }
+        schoolIds:
+          type: array
+          items: { type: string }
+        programIds:
+          type: array
+          items: { type: string }
+    UpdateManagedUser:
+      type: object
+      minProperties: 1
+      properties:
+        email: { type: string, format: email }
+        displayName: { type: string, minLength: 1, maxLength: 200 }
+        role:
+          type: string
+          enum: [systemAdmin, internshipStaff, coordinator, student, evaluator, auditor]
+        status: { type: string, enum: [active, archived, suspended] }
+        studentId: { type: string, maxLength: 50 }
+        schoolIds:
+          type: array
+          items: { type: string }
+        programIds:
+          type: array
+          items: { type: string }
     InvitationExchangeRequest:
       type: object
       required: [token]
@@ -2273,65 +2636,88 @@ components:
 
     StudentInput:
       type: object
-      required: [studentNumber, name, email, schoolId, programId]
+      required: [studentId, name, email, schoolId, programId]
       properties:
-        studentNumber:
+        studentId:
           type: string
-          minLength: 1
-          maxLength: 50
+          minLength: 3
+          maxLength: 30
         name:
           $ref: '#/components/schemas/LocalizedText'
         email:
           type: string
           format: email
+        personalEmail:
+          type: string
+          format: email
         schoolId:
-          $ref: '#/components/schemas/ObjectId'
+          type: string
+          minLength: 1
         programId:
-          $ref: '#/components/schemas/ObjectId'
+          type: string
+          minLength: 1
         courseId:
-          oneOf:
-            - $ref: '#/components/schemas/ObjectId'
-            - type: 'null'
+          type: string
+        academicTermId: { type: string }
+        semester: { type: string }
+        company: { type: string }
+        companyAddress: { type: string }
+        province: { type: string }
+        evaluatorName: { type: string }
+        evaluatorEmail: { type: string, format: email }
+        admissionYear: { type: integer, minimum: 2000 }
+        academicYear: { type: integer, minimum: 2000 }
+        status: { type: string, enum: [active, archived], default: active }
     StudentPatch:
       type: object
-      required: [version]
       properties:
-        version:
-          type: integer
-          minimum: 1
-        studentNumber:
+        studentId:
           type: string
-          minLength: 1
-          maxLength: 50
+          minLength: 3
+          maxLength: 30
         name:
           $ref: '#/components/schemas/LocalizedText'
         email:
           type: string
           format: email
+        personalEmail:
+          type: string
+          format: email
         schoolId:
-          $ref: '#/components/schemas/ObjectId'
+          type: string
+          minLength: 1
         programId:
-          $ref: '#/components/schemas/ObjectId'
+          type: string
+          minLength: 1
         courseId:
-          oneOf:
-            - $ref: '#/components/schemas/ObjectId'
-            - type: 'null'
+          type: string
+        academicTermId: { type: string }
+        semester: { type: string }
+        company: { type: string }
+        companyAddress: { type: string }
+        province: { type: string }
+        evaluatorName: { type: string }
+        evaluatorEmail: { type: string, format: email }
+        admissionYear: { type: integer, minimum: 2000 }
+        academicYear: { type: integer, minimum: 2000 }
+        status: { type: string, enum: [active, archived] }
     Student:
       allOf:
         - $ref: '#/components/schemas/StudentInput'
         - type: object
-          required: [id, createdAt, updatedAt, version]
+          required: [id]
           properties:
             id:
-              $ref: '#/components/schemas/ObjectId'
+              type: string
             createdAt:
               type: string
               format: date-time
             updatedAt:
               type: string
               format: date-time
-            version:
-              type: integer
+            evaluationStatus:
+              type: string
+              enum: [awaiting_evaluator, awaiting_response, submitted, email_error]
             archivedAt:
               type: [string, 'null']
               format: date-time
@@ -2345,6 +2731,116 @@ components:
             $ref: '#/components/schemas/Student'
         meta:
           $ref: '#/components/schemas/PageMeta'
+    StudentImportIssue:
+      type: object
+      required: [code, field, message]
+      properties:
+        code: { type: string }
+        field: { type: string }
+        message: { type: string }
+    StudentImportChange:
+      type: object
+      required: [field, before, after]
+      properties:
+        field: { type: string }
+        before: {}
+        after: {}
+    StudentImportItem:
+      type: object
+      required: [id, sheet, rowNumber, action, status, issues, warnings, changes]
+      properties:
+        id:
+          $ref: '#/components/schemas/ObjectId'
+        sheet: { type: string }
+        rowNumber: { type: integer, minimum: 1 }
+        student:
+          type: object
+          additionalProperties: true
+        action:
+          type: string
+          enum: [create, update, unchanged, invalid]
+        status:
+          type: string
+          enum: [pending, committed, skipped]
+        outcome:
+          type: string
+          enum: [created, updated, unchanged, skipped]
+        issues:
+          type: array
+          items: { $ref: '#/components/schemas/StudentImportIssue' }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/StudentImportIssue' }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/StudentImportChange' }
+    StudentImportSummary:
+      type: object
+      required: [total, creates, updates, unchanged, invalid, warnings, committed]
+      properties:
+        total: { type: integer, minimum: 0 }
+        creates: { type: integer, minimum: 0 }
+        updates: { type: integer, minimum: 0 }
+        unchanged: { type: integer, minimum: 0 }
+        invalid: { type: integer, minimum: 0 }
+        warnings: { type: integer, minimum: 0 }
+        committed: { type: integer, minimum: 0 }
+    StudentImportPreview:
+      type: object
+      required: [batchId, sourceName, checksum, expiresAt, status, questionFieldsDetected, summary, items]
+      properties:
+        batchId:
+          $ref: '#/components/schemas/ObjectId'
+        sourceName: { type: string }
+        checksum: { type: string, pattern: '^[a-f0-9]{64}$' }
+        expiresAt: { type: string, format: date-time }
+        status: { type: string, enum: [preview, committed] }
+        questionFieldsDetected:
+          type: array
+          items: { type: string }
+        summary:
+          $ref: '#/components/schemas/StudentImportSummary'
+        items:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/StudentImportItem'
+    StudentImportCommitInput:
+      type: object
+      additionalProperties: false
+      required: [decisions]
+      properties:
+        decisions:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [rowId, action]
+            properties:
+              rowId:
+                $ref: '#/components/schemas/ObjectId'
+              action: { type: string, enum: [create, update] }
+    StudentImportCommit:
+      type: object
+      required: [batchId, commitId, status, results]
+      properties:
+        batchId:
+          $ref: '#/components/schemas/ObjectId'
+        commitId:
+          $ref: '#/components/schemas/ObjectId'
+        status: { type: string, enum: [completed] }
+        results:
+          type: array
+          items:
+            type: object
+            required: [rowId, action, outcome]
+            properties:
+              rowId:
+                $ref: '#/components/schemas/ObjectId'
+              action: { type: string, enum: [create, update] }
+              outcome: { type: string, enum: [created, updated, unchanged] }
     JobAccepted:
       type: object
       required: [jobId, status]
@@ -2735,6 +3231,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EvaluationAnswer'
+        aggregateScore:
+          type: [number, 'null']
+          description: Deprecated compatibility field; new submissions leave it null to avoid cross-category scoring.
+        categoryScores:
+          $ref: '#/components/schemas/EvaluationCategoryScores'
+        scoringPolicyVersion:
+          type: string
+          enum: [mfu-category-mean-v1]
         submittedAt:
           type: [string, 'null']
           format: date-time
@@ -2744,6 +3248,30 @@ components:
         updatedAt:
           type: string
           format: date-time
+    EvaluationCategoryScore:
+      type: object
+      required: [average, answeredCount, scaleMin, scaleMax]
+      properties:
+        average:
+          type: [number, 'null']
+        answeredCount:
+          type: integer
+          minimum: 0
+        scaleMin:
+          type: [number, 'null']
+        scaleMax:
+          type: [number, 'null']
+    EvaluationCategoryScores:
+      type: object
+      required: [hardSkill, softSkill, scoringPolicyVersion]
+      properties:
+        hardSkill:
+          $ref: '#/components/schemas/EvaluationCategoryScore'
+        softSkill:
+          $ref: '#/components/schemas/EvaluationCategoryScore'
+        scoringPolicyVersion:
+          type: string
+          enum: [mfu-category-mean-v1]
     EvaluationDraftInput:
       type: object
       required: [version, answers]
@@ -2764,18 +3292,6 @@ components:
             consent:
               type: boolean
               const: true
-    ReopenEvaluationRequest:
-      type: object
-      required: [reason]
-      properties:
-        reason:
-          type: string
-          minLength: 10
-          maxLength: 1000
-        closesAt:
-          type: string
-          format: date-time
-
     EmailAudience:
       type: string
       enum: [student, evaluator, staff]
@@ -2843,22 +3359,22 @@ components:
           $ref: '#/components/schemas/PageMeta'
     CampaignType:
       type: string
-      enum: [invitation, reminder, notification]
+      enum: [invitation, reminder]
     CampaignInput:
       type: object
-      required: [type, cycleId, emailTemplateVersionId, audience]
+      additionalProperties: false
+      required: [type, templateVersionId, assignmentIds]
       properties:
         type:
           $ref: '#/components/schemas/CampaignType'
-        cycleId:
+        templateVersionId:
           $ref: '#/components/schemas/ObjectId'
-        emailTemplateVersionId:
-          $ref: '#/components/schemas/ObjectId'
-        audience:
-          $ref: '#/components/schemas/EmailAudience'
-        filters:
-          type: object
-          additionalProperties: true
+        assignmentIds:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/ObjectId'
     CampaignPreview:
       type: object
       required: [eligible, excluded, invalid, sample]
@@ -2885,6 +3401,31 @@ components:
         total:
           type: integer
           minimum: 0
+    QueuedDelivery:
+      type: object
+      required: [status, campaignId, deliveryId, assignmentId]
+      properties:
+        success: { type: boolean, deprecated: true }
+        status: { type: string, enum: [queued, processing, completed, partial] }
+        campaignId:
+          $ref: '#/components/schemas/ObjectId'
+        deliveryId:
+          $ref: '#/components/schemas/ObjectId'
+        assignmentId:
+          $ref: '#/components/schemas/ObjectId'
+        invitationId:
+          $ref: '#/components/schemas/ObjectId'
+        invitationUrl:
+          type: string
+          format: uri
+        recipientEmail:
+          type: string
+          format: email
+        studentName:
+          type: string
+        deadlineAt:
+          type: string
+          format: date-time
     DeliveryStatus:
       type: string
       enum: [queued, sending, sent, failed, uncertain]

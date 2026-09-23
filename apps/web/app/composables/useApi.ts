@@ -1,6 +1,6 @@
 interface ApiRequestOptions {
   readonly method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-  readonly body?: Readonly<Record<string, unknown>>
+  readonly body?: Readonly<Record<string, unknown>> | FormData
   readonly headers?: Readonly<Record<string, string>>
   readonly query?: Readonly<
     Record<string, string | number | boolean | undefined>
@@ -29,6 +29,7 @@ export function useApi() {
         credentials: 'include',
         headers: {
           accept: 'application/json',
+          'x-requested-with': 'XMLHttpRequest',
           ...forwardedHeaders,
           ...options.headers
         },
@@ -57,7 +58,10 @@ export function useApi() {
             baseURL,
             method: 'POST',
             credentials: 'include',
-            headers: { accept: 'application/json' }
+            headers: {
+              accept: 'application/json',
+              'x-requested-with': 'XMLHttpRequest'
+            }
           })
             .then(() => {})
             .catch(() => {

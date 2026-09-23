@@ -6,14 +6,19 @@ import { InjectConnection } from '@nestjs/mongoose'
 import { Redis } from 'ioredis'
 import type { Connection } from 'mongoose'
 
+import { supportsMongoTransactions } from './health.mongo-capability.js'
+
 @Injectable()
 export class HealthService implements OnModuleDestroy {
   private readonly redis: Redis
+  private readonly requireMongoTransactions: boolean
 
   public constructor(
     @InjectConnection() private readonly mongo: Connection,
     config: ConfigService<AppEnvironment, true>
   ) {
+    this.requireMongoTransactions =
+      config.get('NODE_ENV', { infer: true }) === 'production'
     this.redis = new Redis(config.get('REDIS_URL', { infer: true }), {
       enableReadyCheck: true,
       lazyConnect: true,
@@ -52,7 +57,14 @@ export class HealthService implements OnModuleDestroy {
   private async checkMongo(): Promise<'ok' | 'unavailable'> {
     try {
       if (!this.mongo.db) return 'unavailable'
-      await this.mongo.db.admin().ping()
+      const admin = this.mongo.db.admin()
+      if (!this.requireMongoTransactions) {
+        await admin.ping()
+        return 'ok'
+      }
+
+      const hello = await admin.command({ hello: 1 })
+      if (!supportsMongoTransactions(hello)) return 'unavailable'
       return 'ok'
     } catch {
       return 'unavailable'
@@ -61,7 +73,9 @@ export class HealthService implements OnModuleDestroy {
 
   private async checkRedis(): Promise<'ok' | 'unavailable'> {
     try {
-      if (this.redis.status === 'wait') await this.redis.connect()
+      if (['wait', 'close', 'end'].includes(this.redis.status)) {
+        await this.redis.connect()
+      }
       if ((await this.redis.ping()) !== 'PONG') return 'unavailable'
       const info = await this.redis.info('server')
       const match = /^redis_version:(\d+)\./mu.exec(info)

@@ -269,9 +269,12 @@ async function pollTest(testId: string): Promise<void> {
     if (result.status === 'sent') {
       toast.add({
         title: 'ส่งอีเมลทดสอบสำเร็จ',
-        description: isProduction.value
-          ? 'ตรวจสอบกล่องจดหมายผู้รับ'
-          : 'ตรวจสอบอีเมลใน Mailpit ที่ localhost:8025',
+        description:
+          isProduction.value ||
+          (settings.value?.host !== 'localhost' &&
+            settings.value?.host !== 'mailpit')
+            ? 'ตรวจสอบกล่องจดหมายผู้รับ'
+            : 'ตรวจสอบอีเมลใน Mailpit ที่ localhost:8025',
         color: 'success',
         icon: 'i-lucide-send'
       })
@@ -415,14 +418,23 @@ function readApiError(error: unknown): string {
       <UAlert
         :color="isProduction ? 'warning' : 'info'"
         :description="
-          isProduction
-            ? 'การส่งอีเมลทดสอบจะส่งไปยังผู้รับจริง ตรวจสอบผู้รับและค่าการเชื่อมต่อก่อนกดส่ง'
-            : 'Development อนุญาตเฉพาะ localhost หรือ Mailpit อีเมลจะไม่ออกไปหาผู้รับจริง'
+          isProduction ||
+          (settings?.host !== 'localhost' && settings?.host !== 'mailpit')
+            ? 'การส่งอีเมลทดสอบจะส่งไปยังผู้รับจริงผ่าน SMTP ที่กำหนด ตรวจสอบผู้รับและค่าการเชื่อมต่อก่อนกดส่ง'
+            : 'Development โหมด Localhost/Mailpit อีเมลจะถูกดักจับที่ Mailpit'
         "
         :icon="
-          isProduction ? 'i-lucide-triangle-alert' : 'i-lucide-flask-conical'
+          isProduction ||
+          (settings?.host !== 'localhost' && settings?.host !== 'mailpit')
+            ? 'i-lucide-send'
+            : 'i-lucide-flask-conical'
         "
-        :title="isProduction ? 'Production mail' : 'Development mail safety'"
+        :title="
+          isProduction ||
+          (settings?.host !== 'localhost' && settings?.host !== 'mailpit')
+            ? 'ระบบส่งอีเมล SMTP (ส่งออกจริง)'
+            : 'Development mail safety (Mailpit)'
+        "
         variant="soft"
       />
 
@@ -884,7 +896,11 @@ function readApiError(error: unknown): string {
               @submit="sendTest"
             >
               <UFormField
-                description="Development จะส่งเข้า Mailpit เท่านั้น"
+                :description="
+                  settings?.host === 'localhost' || settings?.host === 'mailpit'
+                    ? 'Development จะส่งเข้า Mailpit (localhost:8025)'
+                    : `ส่งออกไปยังผู้รับจริงผ่าน ${settings?.host}`
+                "
                 label="อีเมลผู้รับ"
                 name="recipientEmail"
                 required

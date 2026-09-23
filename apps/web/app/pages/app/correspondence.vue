@@ -1,5 +1,6 @@
 <script setup lang="ts">
-definePageMeta({ layout: 'app', middleware: 'auth' })
+definePageMeta({ layout: 'app', middleware: 'auth', redirect: '/app/students' })
+await navigateTo('/app/students', { replace: true })
 
 interface Delivery {
   readonly id: string

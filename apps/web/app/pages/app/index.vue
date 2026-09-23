@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import type { EnrichedStudentRow } from '~/components/AdminStudentDirectory.vue'
+import {
+  buildStudentEvaluationResult,
+  formatCategoryAverage,
+  type EvaluationSectionSnapshot,
+  type StudentEvaluationRecord
+} from '~/utils/student-evaluation-result'
 
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
@@ -75,7 +81,14 @@ interface EvaluationAssignmentItem {
   readonly evaluatorId: string
   readonly deadlineAt: string
   readonly status:
-    'pending' | 'inProgress' | 'submitted' | 'expired' | 'reopened'
+    | 'pending'
+    | 'inProgress'
+    | 'submitted'
+    | 'expired'
+    | 'reopened'
+    | 'email_error'
+  readonly questionSnapshot?: readonly EvaluationSectionSnapshot[]
+  readonly placementId?: string
 }
 
 interface GeneratedDocItem {
@@ -119,10 +132,10 @@ const studentAssignment = ref<EvaluationAssignmentItem | null>(null)
 const studentDocs = ref<GeneratedDocItem[]>([])
 const studentDataLoading = ref(false)
 const studentDataError = ref('')
-const submittedEvaluation = ref<{
-  answers?: Record<string, unknown>
-  submittedAt?: string
-} | null>(null)
+const submittedEvaluation = ref<
+  (StudentEvaluationRecord & { readonly submittedAt?: string }) | null
+>(null)
+const studentQuestionSnapshot = ref<readonly EvaluationSectionSnapshot[]>([])
 
 // Document Preview & Download Modal State
 export interface TargetStudentDocContext {
@@ -146,7 +159,7 @@ export interface TargetStudentDocContext {
   deanEn: string
   startsAtText: string
   endsAtText: string
-  totalHours: number
+  totalHours: number | null
   scoreDisplay: string
   gradeDisplay: string
   commentsTh: string
@@ -162,8 +175,21 @@ async function loadStudentData(): Promise<void> {
   if (!isStudent.value) return
   studentDataLoading.value = true
   studentDataError.value = ''
+  studentProfile.value = null
+  studentSchool.value = null
+  studentProgram.value = null
+  studentPlacement.value = null
+  studentOrg.value = null
+  studentEvaluator.value = null
+  studentAssignment.value = null
+  studentDocs.value = []
+  submittedEvaluation.value = null
+  studentQuestionSnapshot.value = []
 
   try {
+    const currentStudentId = auth.actor?.scope.studentId
+    if (!currentStudentId) throw new Error('STUDENT_SCOPE_REQUIRED')
+
     const [
       studentsRes,
       schoolsRes,
@@ -174,7 +200,9 @@ async function loadStudentData(): Promise<void> {
       assignmentsRes,
       docsRes
     ] = await Promise.all([
-      api<{ items: StudentItem[] }>('/students', { query: { pageSize: 50 } }),
+      api<{ items: StudentItem[] }>('/students', {
+        query: { studentId: currentStudentId, pageSize: 50 }
+      }),
       api<{ items: SchoolItem[] }>('/academic/schools', {
         query: { pageSize: 100 }
       }),
@@ -198,13 +226,8 @@ async function loadStudentData(): Promise<void> {
       })
     ])
 
-    const currentStudentId = auth.actor?.scope.studentId
-    if (!currentStudentId) throw new Error('STUDENT_SCOPE_REQUIRED')
-
     studentProfile.value =
-      studentsRes.items.find((s) => s.studentId === currentStudentId) ??
-      studentsRes.items[0] ??
-      null
+      studentsRes.items.find((s) => s.studentId === currentStudentId) ?? null
     if (!studentProfile.value) throw new Error('STUDENT_NOT_FOUND')
 
     studentSchool.value =
@@ -215,25 +238,36 @@ async function loadStudentData(): Promise<void> {
       programsRes.items.find((p) => p.id === studentProfile.value?.programId) ??
       null
 
+    const matchingAssignments = assignmentsRes.items.filter(
+      (assignment) =>
+        assignment.studentId === studentProfile.value?.id ||
+        assignment.studentId === studentProfile.value?.studentId
+    )
+    studentAssignment.value =
+      matchingAssignments.find(
+        (assignment) => assignment.status === 'submitted'
+      ) ??
+      matchingAssignments[0] ??
+      null
+
     studentPlacement.value =
       placementsRes.items.find(
-        (p) =>
-          p.studentId === studentProfile.value?.id ||
-          p.studentId === studentProfile.value?.studentId
+        (placement) =>
+          (placement.studentId === studentProfile.value?.id ||
+            placement.studentId === studentProfile.value?.studentId) &&
+          (!studentAssignment.value?.placementId ||
+            placement.id === studentAssignment.value.placementId)
       ) ?? null
 
     studentOrg.value =
       orgsRes.items.find(
         (o) => o.id === studentPlacement.value?.organizationId
-      ) ?? null
-
-    studentAssignment.value =
-      assignmentsRes.items.find(
-        (a) =>
-          a.studentId === studentProfile.value?.id ||
-          a.studentId === studentProfile.value?.studentId
       ) ??
-      assignmentsRes.items[0] ??
+      orgsRes.items.find(
+        (o) =>
+          o.name?.th === studentProfile.value?.company ||
+          o.name?.en === studentProfile.value?.company
+      ) ??
       null
 
     studentEvaluator.value =
@@ -249,10 +283,12 @@ async function loadStudentData(): Promise<void> {
     ) {
       try {
         const evalRes = await api<{
-          evaluations?: Array<{
-            answers: Record<string, unknown>
-            submittedAt?: string
-          }>
+          assignment?: {
+            questionSnapshot?: readonly EvaluationSectionSnapshot[]
+          }
+          evaluations?: Array<
+            StudentEvaluationRecord & { readonly submittedAt?: string }
+          >
         }>(`/evaluations/${studentAssignment.value.id}`)
         if (
           evalRes.evaluations &&
@@ -261,15 +297,19 @@ async function loadStudentData(): Promise<void> {
         ) {
           submittedEvaluation.value = evalRes.evaluations[0]
         }
-      } catch {
+        studentQuestionSnapshot.value =
+          submittedEvaluation.value?.questionSnapshot ??
+          evalRes.assignment?.questionSnapshot ??
+          studentAssignment.value.questionSnapshot ??
+          []
+      } catch (err: unknown) {
+        console.error('Failed to load evaluation record:', err)
         studentDataError.value = 'ไม่สามารถโหลดผลประเมินได้'
       }
     }
-  } catch {
+  } catch (err: unknown) {
+    console.error('loadStudentData failed:', err)
     studentDataError.value = 'ไม่สามารถโหลดข้อมูลนักศึกษาได้ กรุณาลองใหม่'
-    studentProfile.value = null
-    studentPlacement.value = null
-    studentAssignment.value = null
   } finally {
     studentDataLoading.value = false
   }
@@ -395,427 +435,152 @@ watch(isStaff, (val) => {
   if (val) checkStaffFirstTimeWizard()
 })
 
+const studentEvaluationView = computed(() =>
+  buildStudentEvaluationResult(
+    submittedEvaluation.value
+      ? {
+          ...submittedEvaluation.value,
+          questionSnapshot:
+            submittedEvaluation.value.questionSnapshot ??
+            studentQuestionSnapshot.value
+        }
+      : null
+  )
+)
+
 const submittedScores = computed(() => {
-  const ans = submittedEvaluation.value?.answers
-  if (!ans) return null
-  const ratings: number[] = []
-  let commentText = ''
-  for (const val of Object.values(ans)) {
-    if (typeof val === 'number') {
-      ratings.push(val)
-    } else if (typeof val === 'string' && val.trim().length > 0) {
-      commentText = val.trim()
-    }
-  }
-  const avg =
-    ratings.length > 0
-      ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1)
-      : '-'
+  if (!submittedEvaluation.value) return null
+  const result = studentEvaluationView.value
+  const comments = result.suggestions
+    .map((suggestion) => suggestion.value)
+    .filter((value): value is string => value !== null)
+    .join(' | ')
+
   return {
-    ratings,
-    average: avg,
-    comment: commentText || '-'
+    hardSkill: formatCategoryAverage(result.hardSkillScore),
+    softSkill: formatCategoryAverage(result.softSkillScore),
+    comment: comments || '—'
   }
 })
 
-// Soft Skills Sub-sections (อิงตามแบบฟอร์มประเมินมาตรฐาน มฟล. หมวดที่ 1 ทักษะทั่วไปและความประพฤติ)
-interface SoftSkillSubSection {
+interface SkillSubSection {
   id: string
   title: string
   titleEn: string
-  score: number
-  maxScore: number
-  benchmarkAverage: number
+  score: number | null
+  maxScore: number | null
   icon: string
-  color: string
-  tags: string[]
-  criteria: Array<{ label: string; score: number }>
-  feedback: string
 }
 
-const softSkillSubSections = computed<SoftSkillSubSection[]>(() => {
-  const answers = (submittedEvaluation.value?.answers ?? {}) as Record<
-    string,
-    unknown
-  >
+interface SuggestionDetailItem {
+  id: string
+  title: string
+  titleEn: string
+  value: string
+  icon: string
+}
 
-  // ดึงคะแนนจากแบบฟอร์มที่เคยทำจริง หากไม่มีให้ใช้คะแนนตั้งต้น 5.0
-  const punctualityScore =
-    typeof answers['punctuality'] === 'number'
-      ? answers['punctuality']
-      : typeof answers['q_gen_1'] === 'number'
-        ? answers['q_gen_1']
-        : 5.0
+function getSoftSkillIcon(id: string): string {
+  const lower = id.toLowerCase()
+  if (
+    lower.includes('punctual') ||
+    lower.includes('time') ||
+    lower.includes('rule')
+  )
+    return 'i-lucide-clock'
+  if (
+    lower.includes('team') ||
+    lower.includes('comm') ||
+    lower.includes('human')
+  )
+    return 'i-lucide-users'
+  if (
+    lower.includes('responsib') ||
+    lower.includes('duty') ||
+    lower.includes('learn')
+  )
+    return 'i-lucide-award'
+  if (
+    lower.includes('problem') ||
+    lower.includes('think') ||
+    lower.includes('creat')
+  )
+    return 'i-lucide-lightbulb'
+  if (lower.includes('ethic') || lower.includes('integrity'))
+    return 'i-lucide-shield-check'
+  return 'i-lucide-smile'
+}
 
-  const teamworkScore =
-    typeof answers['teamwork'] === 'number'
-      ? answers['teamwork']
-      : typeof answers['q_gen_2'] === 'number'
-        ? answers['q_gen_2']
-        : 5.0
+function getHardSkillIcon(id: string): string {
+  const lower = id.toLowerCase()
+  if (
+    lower.includes('tech') ||
+    lower.includes('dev') ||
+    lower.includes('code') ||
+    lower.includes('knowl')
+  )
+    return 'i-lucide-code-xml'
+  if (
+    lower.includes('problem') ||
+    lower.includes('solv') ||
+    lower.includes('anal')
+  )
+    return 'i-lucide-cpu'
+  if (lower.includes('data') || lower.includes('db')) return 'i-lucide-database'
+  if (lower.includes('qa') || lower.includes('test'))
+    return 'i-lucide-shield-check'
+  return 'i-lucide-layers'
+}
 
-  const responsibilityScore =
-    typeof answers['responsibility'] === 'number'
-      ? answers['responsibility']
-      : 5.0
-
-  const problemSolvingScore =
-    typeof answers['problem-solving'] === 'number'
-      ? answers['problem-solving']
-      : 4.8
-
-  const learningScore =
-    typeof answers['learning'] === 'number' ? answers['learning'] : 5.0
-
-  const ethicsScore =
-    typeof answers['ethics'] === 'number' ? answers['ethics'] : 5.0
-
-  return [
-    {
-      id: 'soft_punctuality',
-      title:
-        'ความตรงต่อเวลาและการปฏิบัติตามกฎระเบียบขององค์กร (Punctuality & Regulations)',
-      titleEn: 'Punctuality & Workplace Regulations',
-      score: punctualityScore,
-      maxScore: 5.0,
-      benchmarkAverage: 4.2,
-      icon: 'i-lucide-clock',
-      color: 'emerald',
-      tags: [
-        'การตรงต่อเวลา',
-        'การปฏิบัติตามกฎระเบียบ',
-        'วินัยในการทำงาน',
-        'การรักษาสัญญา'
-      ],
-      criteria: [
-        {
-          label: 'การเข้างานและเข้าร่วมการประชุมตรงเวลาสม่ำเสมอ',
-          score: punctualityScore
-        },
-        {
-          label: 'การปฏิบัติตามระเบียบและข้อตกลงของสถานที่ฝึกงาน',
-          score: punctualityScore
-        },
-        {
-          label: 'การแจ้งล่วงหน้าเมื่อมีเหตุจำเป็นหรือภารกิจเร่งด่วน',
-          score: punctualityScore
-        }
-      ],
-      feedback:
-        'เข้างานตรงเวลาสม่ำเสมอ ปฏิบัติตามกฎระเบียบและวัฒนธรรมขององค์กรอย่างเคร่งครัด ไม่เคยมีประวัติขาดหรือมาสาย'
-    },
-    {
-      id: 'soft_teamwork',
-      title:
-        'การทำงานร่วมกับผู้อื่นและการสื่อสารในทีม (Teamwork & Communication)',
-      titleEn: 'Teamwork & Workplace Communication',
-      score: teamworkScore,
-      maxScore: 5.0,
-      benchmarkAverage: 4.25,
-      icon: 'i-lucide-users',
-      color: 'sky',
-      tags: [
-        'มนุษยสัมพันธ์',
-        'การสื่อสารในทีม',
-        'การรับฟังความคิดเห็น',
-        'การให้ความร่วมมือ'
-      ],
-      criteria: [
-        {
-          label: 'การมีมนุษยสัมพันธ์ที่ดีและให้ความร่วมมือกับเพื่อนร่วมงาน',
-          score: teamworkScore
-        },
-        {
-          label: 'การสื่อสารและประสานงานกับพี่เลี้ยงและทีมงานอย่างชัดเจน',
-          score: teamworkScore
-        },
-        {
-          label: 'การเปิดใจรับฟังคำแนะนำและข้อเสนอแนะเพื่อปรับปรุงตนเอง',
-          score: teamworkScore
-        }
-      ],
-      feedback:
-        'เข้ากับพี่ๆ ในทีมได้เป็นอย่างดี สื่อสารงานอย่างเปิดเผย ตรงไปตรงมา และพร้อมช่วยเหลือเพื่อนร่วมทีมเมื่อมีโอกาส'
-    },
-    {
-      id: 'soft_responsibility',
-      title:
-        'ความรับผิดชอบต่องานและความกระตือรือร้นในการเรียนรู้ (Responsibility & Initiative)',
-      titleEn: 'Task Responsibility & Learning Initiative',
-      score: responsibilityScore,
-      maxScore: 5.0,
-      benchmarkAverage: 4.15,
-      icon: 'i-lucide-check-circle-2',
-      color: 'indigo',
-      tags: [
-        'ความรับผิดชอบ',
-        'ความใส่ใจต่องาน',
-        'ความกระตือรือร้น',
-        'ส่งงานตรงกำหนด'
-      ],
-      criteria: [
-        {
-          label: 'ความมุ่งมั่นในการทำงานที่ได้รับมอบหมายให้สำเร็จตามเป้าหมาย',
-          score: responsibilityScore
-        },
-        {
-          label: 'ความรอบคอบ ละเอียดถี่ถ้วน และใส่ใจในผลลัพธ์ของงาน',
-          score: responsibilityScore
-        },
-        {
-          label: 'ความกระตือรือร้นในการแสวงหาความรู้และทักษะใหม่ๆ ด้วยตนเอง',
-          score: responsibilityScore
-        }
-      ],
-      feedback:
-        'มีความมุ่งมั่นและรับผิดชอบต่องานที่ได้รับมอบหมายสูงมาก ติดตามงานจนเสร็จสมบูรณ์ และมีใจรักในการเรียนรู้สิ่งใหม่ๆ'
-    },
-    {
-      id: 'soft_problem_solving',
-      title:
-        'การคิดวิเคราะห์และการแก้ปัญหาเฉพาะหน้า (Problem Solving & Critical Thinking)',
-      titleEn: 'Problem Solving & Critical Thinking',
-      score: problemSolvingScore,
-      maxScore: 5.0,
-      benchmarkAverage: 3.95,
-      icon: 'i-lucide-brain',
-      color: 'amber',
-      tags: [
-        'การคิดเชิงวิเคราะห์',
-        'การแก้ปัญหาเฉพาะหน้า',
-        'ความยืดหยุ่น',
-        'การคิดอย่างมีวิจารณญาณ'
-      ],
-      criteria: [
-        {
-          label: 'การวิเคราะห์สาเหตุของปัญหาได้อย่างเป็นระบบและมีเหตุผล',
-          score: 4.8
-        },
-        {
-          label: 'ความสามารถในการปรับตัวและแก้ไขสถานการณ์เฉพาะหน้า',
-          score: 4.8
-        },
-        {
-          label: 'การนำเสนอแนวทางแก้ไขปัญหาที่สร้างสรรค์และใช้งานได้จริง',
-          score: 4.8
-        }
-      ],
-      feedback:
-        'เมื่อเจอปัญหาหรืออุปสรรคในการทำงาน สามารถวิเคราะห์และหาทางออกร่วมกับพี่เลี้ยงได้อย่างมีเหตุผลและเป็นระบบ'
-    },
-    {
-      id: 'soft_learning',
-      title:
-        'การเรียนรู้และความคิดริเริ่มสร้างสรรค์ (Initiative & Fast Learning)',
-      titleEn: 'Initiative & Fast Learning',
-      score: learningScore,
-      maxScore: 5.0,
-      benchmarkAverage: 4.15,
-      icon: 'i-lucide-sparkles',
-      color: 'purple',
-      tags: [
-        'การเรียนรู้เร็ว',
-        'ความคิดสร้างสรรค์',
-        'ความกระตือรือร้น',
-        'การพัฒนาตนเอง'
-      ],
-      criteria: [
-        {
-          label: 'การทำความเข้าใจเทคโนโลยีและกระบวนการทำงานใหม่ได้อย่างรวดเร็ว',
-          score: learningScore
-        },
-        {
-          label: 'การกล้าคิดกล้าเสนอไอเดียใหม่ๆ ในการพัฒนางาน',
-          score: learningScore
-        },
-        {
-          label: 'การนำคำแนะนำไปปรับปรุงและพัฒนาทักษะตนเองอย่างต่อเนื่อง',
-          score: learningScore
-        }
-      ],
-      feedback:
-        'เรียนรู้งานได้เร็วมาก ไม่ต้องสอนซ้ำ สามารถศึกษา Documentation เพิ่มเติมได้ด้วยตนเองและนำมาประยุกต์ใช้ได้ทันที'
-    },
-    {
-      id: 'soft_ethics',
-      title:
-        'คุณธรรม จริยธรรม และจรรยาบรรณวิชาชีพ (Ethics & Professional Integrity)',
-      titleEn: 'Ethics & Professional Integrity',
-      score: ethicsScore,
-      maxScore: 5.0,
-      benchmarkAverage: 4.3,
-      icon: 'i-lucide-shield-alert',
-      color: 'teal',
-      tags: [
-        'ความซื่อสัตย์',
-        'จรรยาบรรณวิชาชีพ',
-        'การรักษาความลับ',
-        'ความสุภาพอ่อนน้อม'
-      ],
-      criteria: [
-        {
-          label: 'การรักษาความลับของข้อมูลองค์กรและข้อมูลลูกค้า',
-          score: ethicsScore
-        },
-        {
-          label: 'ความซื่อสัตย์สุจริตและความโปร่งใสในการปฏิบัติหน้าที่',
-          score: ethicsScore
-        },
-        {
-          label: 'ความสุภาพ อ่อนน้อมถ่อมตน และให้เกียรติผู้อื่นเสมอ',
-          score: ethicsScore
-        }
-      ],
-      feedback:
-        'ปฏิบัติตามจรรยาบรรณวิชาชีพอย่างดีเยี่ยม รักษาความลับของโครงการ และมีความสุภาพอ่อนน้อมต่อผู้ร่วมงานทุกคน'
+// Soft Skill rows are sourced only from the immutable evaluation snapshot.
+const softSkillSubSections = computed<SkillSubSection[]>(() => {
+  return studentEvaluationView.value.softSkillQuestions.map((question) => {
+    return {
+      id: question.id,
+      title: question.label.th,
+      titleEn: question.label.en,
+      score: question.score,
+      maxScore: question.scaleMax,
+      icon: getSoftSkillIcon(question.id)
     }
-  ]
+  })
 })
 
-// Hard Skills Detailed Sub-sections for Student Profile UI verification
-interface HardSkillSubSection {
-  id: string
-  title: string
-  titleEn: string
-  score: number
-  maxScore: number
-  benchmarkAverage: number
-  icon: string
-  color: string
-  tags: string[]
-  criteria: Array<{ label: string; score: number }>
-  feedback: string
-}
+// Hard Skill rows are sourced only from the immutable evaluation snapshot.
+const hardSkillSubSections = computed<SkillSubSection[]>(() => {
+  return studentEvaluationView.value.hardSkillQuestions.map((question) => {
+    return {
+      id: question.id,
+      title: question.label.th,
+      titleEn: question.label.en,
+      score: question.score,
+      maxScore: question.scaleMax,
+      icon: getHardSkillIcon(question.id)
+    }
+  })
+})
 
-const hardSkillSubSections = computed<HardSkillSubSection[]>(() => [
-  {
-    id: 'sub_dev',
-    title: 'การออกแบบและพัฒนาซอฟต์แวร์ (Software Engineering & Architecture)',
-    titleEn: 'Software Engineering & Architecture',
-    score: 5.0,
-    maxScore: 5.0,
-    benchmarkAverage: 4.05,
-    icon: 'i-lucide-code-xml',
-    color: 'emerald',
-    tags: [
-      'Clean Code',
-      'Design Patterns',
-      'API Architecture',
-      'TypeScript/Vue'
-    ],
-    criteria: [
-      { label: 'ความเข้าใจด้าน Component & Modular Architecture', score: 5.0 },
-      {
-        label: 'การเขียนโค้ดตามมาตรฐาน Clean Code & Best Practices',
-        score: 5.0
-      },
-      { label: 'การสร้างและเชื่อมต่อ RESTful / GraphQL APIs', score: 5.0 }
-    ],
-    feedback:
-      'เขียนโค้ดได้เป็นระเบียบ เข้าใจสถาปัตยกรรมระบบได้รวดเร็ว และส่งมอบงานฟีเจอร์ได้ตรงตามสเปกโดยมีข้อผิดพลาดน้อยมาก'
-  },
-  {
-    id: 'sub_data',
-    title:
-      'การจัดการฐานข้อมูลและสถาปัตยกรรมข้อมูล (Database & Data Engineering)',
-    titleEn: 'Database & Data Engineering',
-    score: 4.9,
-    maxScore: 5.0,
-    benchmarkAverage: 4.1,
-    icon: 'i-lucide-database',
-    color: 'sky',
-    tags: ['PostgreSQL', 'MongoDB', 'Indexing', 'Query Optimization'],
-    criteria: [
-      { label: 'การออกแบบ Schema และ Data Modeling', score: 5.0 },
-      { label: 'ความสามารถในการเขียน Complex Queries & Indexing', score: 4.8 },
-      { label: 'การดูแล Data Integrity และ Transaction Safety', score: 4.9 }
-    ],
-    feedback:
-      'ออกแบบโครงสร้างฐานข้อมูลได้รัดกุม สามารถปรับปรุง Query Performance ให้ทำงานได้เร็วขึ้นอย่างเห็นได้ชัด'
-  },
-  {
-    id: 'sub_qa',
-    title: 'การประกันคุณภาพและการทดสอบระบบ (QA & Automated Testing)',
-    titleEn: 'QA & Automated Testing',
-    score: 4.8,
-    maxScore: 5.0,
-    benchmarkAverage: 3.95,
-    icon: 'i-lucide-shield-check',
-    color: 'amber',
-    tags: ['Unit Testing', 'E2E Testing', 'Vitest', 'Regression Testing'],
-    criteria: [
-      { label: 'การเขียน Unit / Integration Test Coverage', score: 4.8 },
-      { label: 'การค้นหา Edge Cases และ Bug Reproducing', score: 4.9 },
-      { label: 'การจัดทำ Test Cases และ Documentation', score: 4.7 }
-    ],
-    feedback:
-      'ให้ความสำคัญกับการทดสอบระบบก่อน Deploy เสมอ ตรวจจับข้อผิดพลาดก่อนถึง Production ได้อย่างมีประสิทธิภาพ'
-  },
-  {
-    id: 'sub_devops',
-    title: 'ระบบคลาวด์และงานปฏิบัติการ (Cloud Infrastructure & DevOps)',
-    titleEn: 'Cloud Infrastructure & DevOps',
-    score: 4.9,
-    maxScore: 5.0,
-    benchmarkAverage: 4.0,
-    icon: 'i-lucide-cloud-cog',
-    color: 'indigo',
-    tags: ['Docker', 'CI/CD Pipelines', 'Linux Shell', 'Environment Config'],
-    criteria: [
-      { label: 'การจัดการ Containerization ด้วย Docker', score: 5.0 },
-      { label: 'การตั้งค่า CI/CD Automation และ Build Scripts', score: 4.8 },
-      { label: 'การจัดการความปลอดภัยและ Environment Secrets', score: 4.9 }
-    ],
-    feedback:
-      'คล่องตัวในการใช้งาน Docker และเครื่องมือ Command Line ช่วยทีม Setup Automated Workflow ได้อย่างราบรื่น'
-  },
-  {
-    id: 'sub_troubleshoot',
-    title:
-      'การวิเคราะห์ระบบและการแก้ปัญหาทางเทคนิค (System Analysis & Troubleshooting)',
-    titleEn: 'System Analysis & Troubleshooting',
-    score: 5.0,
-    maxScore: 5.0,
-    benchmarkAverage: 4.15,
-    icon: 'i-lucide-terminal',
-    color: 'purple',
-    tags: [
-      'Root Cause Analysis',
-      'Log Inspection',
-      'Debugging',
-      'Optimization'
-    ],
-    criteria: [
-      { label: 'ความสามารถในการ Debug ปัญหาที่ซับซ้อน', score: 5.0 },
-      { label: 'การวิเคราะห์ Root Cause และป้องกันปัญหาซ้ำ', score: 5.0 },
-      { label: 'การ Optimize ประสิทธิภาพการประมวลผล', score: 5.0 }
-    ],
-    feedback:
-      'มีทักษะการไล่โค้ดและตรวจเช็ค Error Log ในระบบได้อย่างแม่นยำ แก้ปัญหาคอขวดของแอปพลิเคชันได้ตรงจุด'
-  },
-  {
-    id: 'sub_workflow',
-    title:
-      'เครื่องมือวิศวกรรมและกระบวนการทำงาน (Engineering Tools & Agile Workflow)',
-    titleEn: 'Engineering Tools & Agile Workflow',
-    score: 5.0,
-    maxScore: 5.0,
-    benchmarkAverage: 4.25,
-    icon: 'i-lucide-git-branch',
-    color: 'teal',
-    tags: ['Git Workflow', 'Code Review', 'Agile/Scrum', 'Documentation'],
-    criteria: [
-      { label: 'การใช้งาน Git Branching, Pull Requests & Merging', score: 5.0 },
-      {
-        label: 'การสื่อสารในกระบวนการ Code Review อย่างสร้างสรรค์',
-        score: 5.0
-      },
-      { label: 'การปฏิบัติตามรอบ Sprint และการอัปเดตงานในบอร์ด', score: 5.0 }
-    ],
-    feedback:
-      'ปฏิบัติตามมาตรฐาน Git Workflow อย่างเคร่งครัด เข้าร่วม Daily Standup ตรงเวลา และบันทึกรายละเอียดงานชัดเจน'
-  }
-])
+// หมวด 3: Suggestions & Feedback (ไดนามิกตามโครงสร้างฟอร์มจริง)
+const dynamicSuggestions = computed<SuggestionDetailItem[]>(() => {
+  return studentEvaluationView.value.suggestions.map((suggestion) => ({
+    id: suggestion.id,
+    title: suggestion.label.th,
+    titleEn: suggestion.label.en,
+    value: suggestion.value ?? '—',
+    icon: suggestion.id.toLowerCase().includes('strength')
+      ? 'i-lucide-sparkles'
+      : 'i-lucide-message-square-quote'
+  }))
+})
+
+// คำนวณคะแนนเฉลี่ยแยกแต่ละหมวด
+const softSkillsAverage = computed(() =>
+  formatCategoryAverage(studentEvaluationView.value.softSkillScore)
+)
+
+const hardSkillsAverage = computed(() =>
+  formatCategoryAverage(studentEvaluationView.value.hardSkillScore)
+)
 
 function getDeanForSchool(schoolCode?: string): { th: string; en: string } {
   switch (schoolCode) {
@@ -876,7 +641,7 @@ const activeDocContext = computed<TargetStudentDocContext>(() => {
     const dean = getDeanForSchool(row.schoolCode)
     const startsAt = formatThaiDate(row.placement?.startsAt, '-')
     const endsAt = formatThaiDate(row.placement?.endsAt, '-')
-    const totalHours = 450 // Standard semester internship hours
+    const totalHours = null
 
     return {
       studentId: row.studentId,
@@ -900,12 +665,10 @@ const activeDocContext = computed<TargetStudentDocContext>(() => {
       startsAtText: startsAt,
       endsAtText: endsAt,
       totalHours,
-      scoreDisplay:
-        row.scoreDisplay !== '-' ? `${row.scoreDisplay} / 5.0` : '-',
-      gradeDisplay:
-        row.gradeDisplay !== '-' ? row.gradeDisplay : '-',
+      scoreDisplay: '-',
+      gradeDisplay: '-',
       commentsTh: row.commentsTh,
-      referenceNumber: `MFU-DOC-${row.academicYear}/${row.studentId.slice(-4)}`
+      referenceNumber: '—'
     }
   }
 
@@ -920,13 +683,11 @@ const activeDocContext = computed<TargetStudentDocContext>(() => {
   const dean = getDeanForSchool(school?.schoolCode)
   const startsAt = formatThaiDate(placement?.startsAt, '-')
   const endsAt = formatThaiDate(placement?.endsAt, '-')
-  const avg = submittedScores.value?.average ?? '-'
-
   return {
     studentId: sId || '-',
     nameTh: profile?.name?.th ?? '-',
     nameEn: profile?.name?.en ?? '-',
-    email: profile?.email ?? (sId ? `${sId}@lamduan.mfu.ac.th` : '-'),
+    email: profile?.email ?? '-',
     schoolTh: school?.name?.th ?? '-',
     schoolEn: school?.name?.en ?? '-',
     programTh: program?.name?.th ?? '-',
@@ -943,34 +704,39 @@ const activeDocContext = computed<TargetStudentDocContext>(() => {
     deanEn: dean?.en ?? '-',
     startsAtText: startsAt,
     endsAtText: endsAt,
-    totalHours: 450,
-    scoreDisplay: avg !== '-' ? `${avg} / 5.0` : '-',
-    gradeDisplay: avg !== '-' ? 'ระดับดีเยี่ยม (A)' : '-',
+    totalHours: null,
+    scoreDisplay: '-',
+    gradeDisplay: '-',
     commentsTh: submittedScores.value?.comment ?? '-',
-    referenceNumber: `MFU-DOC-${yearTh}/${sId ? sId.slice(-4) : '0000'}`
+    referenceNumber: '—'
   }
 })
 
-// Document Preview & Download Functions
-function openDocumentPreview(type: 'certification' | 'referral'): void {
-  selectedAdminStudentRow.value = null
-  previewDocType.value = type
-  previewModalOpen.value = true
+// Official documents are not issued by a browser-side mock/template.
+function notifyDocumentsUnavailable(): void {
+  toast.add({
+    title: 'ระบบออกเอกสารยังไม่พร้อม',
+    description:
+      'เอกสารจะดาวน์โหลดได้เมื่อมีแม่แบบที่อนุมัติและไฟล์ที่ออกจากระบบจริง',
+    color: 'warning',
+    icon: 'i-lucide-info'
+  })
+}
+
+function openDocumentPreview(_type: 'certification' | 'referral'): void {
+  notifyDocumentsUnavailable()
 }
 
 function handleAdminOpenDocument(payload: {
   type: 'certification' | 'referral'
   row: EnrichedStudentRow
 }): void {
-  selectedAdminStudentRow.value = payload.row
-  previewDocType.value = payload.type
-  previewModalOpen.value = true
+  void payload
+  notifyDocumentsUnavailable()
 }
 
 function triggerPrint(): void {
-  if (import.meta.client) {
-    window.print()
-  }
+  notifyDocumentsUnavailable()
 }
 
 function _downloadDocumentAsDoc(type: 'certification' | 'referral'): void {
@@ -1109,25 +875,8 @@ function _downloadDocumentAsDoc(type: 'certification' | 'referral'): void {
   })
 }
 
-function downloadDocument(type: 'certification' | 'referral'): void {
-  const filename =
-    type === 'certification'
-      ? `Certificate-of-Completion-${activeDocContext.value.studentId}.pdf`
-      : `Referral-Letter-${activeDocContext.value.studentId}.pdf`
-
-  toast.add({
-    title: 'เตรียมพิมพ์ / บันทึก PDF',
-    description: `ระบบเปิดเอกสาร ${filename} พร้อมสำหรับสั่งพิมพ์หรือบันทึก PDF`,
-    color: 'success',
-    icon: 'i-lucide-printer'
-  })
-
-  // Open print preview modal which triggers clean A4 print
-  previewDocType.value = type
-  previewModalOpen.value = true
-  setTimeout(() => {
-    triggerPrint()
-  }, 400)
+function downloadDocument(_type: 'certification' | 'referral'): void {
+  notifyDocumentsUnavailable()
 }
 
 // Admin Overview Cards
@@ -1229,7 +978,7 @@ const _adminCards = computed(() => [
             <UButton
               color="primary"
               icon="i-lucide-download"
-              label="ดาวน์โหลดแบบฟอร์ม"
+              label="สถานะเอกสาร"
               size="sm"
               @click="downloadModalOpen = true"
             />
@@ -1330,333 +1079,215 @@ const _adminCards = computed(() => [
           </UBadge>
         </div>
 
-        <!-- รายละเอียดคะแนนสมรรถนะจากแบบฟอร์มที่ผู้ทำฟอร์มส่ง -->
+        <!-- แสดงผลจาก final evaluation และ snapshot จริงเท่านั้น -->
         <div
           v-if="studentAssignment?.status === 'submitted'"
-          class="rounded-xl border border-default bg-default p-5 shadow-sm space-y-3"
+          class="rounded-xl border border-default bg-default p-5 shadow-sm space-y-6"
         >
-          <h3
-            class="text-sm font-bold text-highlighted flex items-center gap-2"
+          <div
+            class="flex flex-wrap items-center gap-2 pb-3 border-b border-default/60"
           >
             <UIcon
               name="i-lucide-check-check"
-              class="size-4 text-emerald-600"
+              class="size-5 text-emerald-600"
             />
-            ผลคะแนนสมรรถนะที่ได้รับจากผู้ทำแบบฟอร์ม
-          </h3>
-
-          <div class="grid gap-3 sm:grid-cols-2">
-            <div
-              class="p-3.5 rounded-lg border border-default/70 bg-muted/20 space-y-1.5"
-            >
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-semibold text-highlighted">
-                  หมวด 1: ทักษะทั่วไปและความประพฤติ (Soft Skills)
-                </span>
-                <span class="text-xs font-bold text-emerald-600">
-                  {{ submittedScores?.average ?? '5.0' }} / 5.0
-                </span>
-              </div>
-              <p class="text-[11px] text-muted">
-                ความตรงต่อเวลา, การทำงานร่วมกับผู้อื่น, ความรับผิดชอบต่องาน
-              </p>
-            </div>
-
-            <div
-              class="p-3.5 rounded-lg border border-default/70 bg-muted/20 space-y-1.5"
-            >
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-semibold text-highlighted">
-                  หมวด 2: ทักษะวิชาชีพและการประยุกต์ใช้ (Hard Skills)
-                </span>
-                <span class="text-xs font-bold text-emerald-600">
-                  {{ submittedScores?.average ?? '5.0' }} / 5.0
-                </span>
-              </div>
-              <p class="text-[11px] text-muted">
-                ทักษะวิชาชีพทางเทคนิค, การคิดวิเคราะห์ และการแก้ปัญหาจริง
-              </p>
-            </div>
+            <h3 class="text-base font-bold text-highlighted">
+              ผลประเมินที่ส่งแล้ว
+            </h3>
           </div>
 
-          <div
-            class="p-3 rounded-lg bg-muted/30 text-xs text-muted flex items-start gap-2.5"
-          >
-            <UIcon
-              name="i-lucide-message-square-quote"
-              class="size-4 text-primary shrink-0 mt-0.5"
-            />
-            <div>
-              <strong class="text-highlighted"
-                >ข้อเสนอแนะจากผู้ทำฟอร์ม (ผู้ประเมิน):</strong
-              >
-              <p class="mt-0.5 italic">
-                "{{ submittedScores?.comment || '-' }}"
-              </p>
-            </div>
-          </div>
+          <UAlert
+            v-if="!studentEvaluationView.hasQuestionSnapshot"
+            color="warning"
+            icon="i-lucide-circle-alert"
+            title="ไม่พบ snapshot ของแบบประเมินสำหรับแสดงรายละเอียด"
+            description="ระบบจะแสดงเฉพาะคะแนนหมวดที่บันทึกไว้จากผลประเมิน ไม่สร้างคำถามหรือคะแนนทดแทน"
+            variant="soft"
+          />
 
-          <!-- รายละเอียดสมรรถนะย่อย หมวดที่ 1: Soft Skills (อิงจากแบบฟอร์มประเมินที่ผู้ทำฟอร์มเคยทำ) -->
-          <div class="pt-2 border-t border-default/60 space-y-3">
+          <section class="space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex items-center gap-2">
                 <UIcon name="i-lucide-smile" class="size-4 text-emerald-600" />
-                <span class="text-xs font-bold text-highlighted">
-                  หมวด 1: รายละเอียดทักษะทั่วไปและความประพฤติ (Soft Skills
-                  Sub-sections - อิงจากฟอร์มที่เคยทำ)
-                </span>
+                <h4 class="text-xs font-bold text-highlighted">
+                  ทักษะทั่วไปและความประพฤติ (Soft Skills)
+                </h4>
               </div>
               <span class="text-[11px] text-muted">
-                ครอบคลุม 6 ทักษะย่อย • เกณฑ์คะแนนเต็ม 5.0
+                เฉลี่ย {{ softSkillsAverage
+                }}<template
+                  v-if="
+                    studentEvaluationView.softSkillScore?.scaleMax !== null &&
+                    studentEvaluationView.softSkillScore?.scaleMax !== undefined
+                  "
+                >
+                  /
+                  {{
+                    studentEvaluationView.softSkillScore.scaleMax.toFixed(1)
+                  }}</template
+                >
+                · ตอบ
+                {{ studentEvaluationView.softSkillScore?.answeredCount ?? 0 }}
+                ข้อ
               </span>
             </div>
-
-            <div class="grid gap-3.5 sm:grid-cols-2">
+            <div
+              v-if="softSkillSubSections.length"
+              class="grid gap-3.5 sm:grid-cols-2"
+            >
               <div
-                v-for="sub in softSkillSubSections"
-                :key="sub.id"
-                class="rounded-lg border border-default/70 bg-default/60 p-3.5 space-y-2.5 transition-all hover:border-emerald-500/40 hover:shadow-xs"
+                v-for="question in softSkillSubSections"
+                :key="question.id"
+                class="rounded-lg border border-default/70 bg-default/60 p-3.5 flex items-start justify-between gap-3"
               >
-                <!-- หัวข้อ Sub-section และคะแนน -->
-                <div class="flex items-start justify-between gap-2">
-                  <div class="flex items-start gap-2 min-w-0">
-                    <div
-                      class="p-1.5 rounded-md bg-emerald-500/10 text-emerald-600 shrink-0 mt-0.5"
-                    >
-                      <UIcon :name="sub.icon" class="size-4" />
-                    </div>
-                    <div>
-                      <h4
-                        class="text-xs font-semibold text-highlighted line-clamp-1 leading-snug"
-                      >
-                        {{ sub.title }}
-                      </h4>
-                      <p class="text-[10px] text-muted line-clamp-1">
-                        {{ sub.titleEn }}
-                      </p>
-                    </div>
-                  </div>
-                  <div class="text-right shrink-0">
-                    <div class="text-xs font-extrabold text-emerald-600">
-                      {{ sub.score.toFixed(1) }}
-                      <span class="text-[10px] text-muted font-normal"
-                        >/ {{ sub.maxScore.toFixed(1) }}</span
-                      >
-                    </div>
-                    <span
-                      class="inline-flex items-center gap-0.5 text-[9px] font-medium text-emerald-600 bg-emerald-500/10 px-1 py-0.5 rounded"
-                    >
-                      <UIcon name="i-lucide-trending-up" class="size-2.5" />
-                      +{{
-                        Math.round(
-                          ((sub.score - sub.benchmarkAverage) /
-                            sub.benchmarkAverage) *
-                            100
-                        )
-                      }}% จากค่าเฉลี่ย
-                    </span>
+                <div class="flex items-start gap-2 min-w-0">
+                  <UIcon
+                    :name="question.icon"
+                    class="size-4 text-emerald-600 shrink-0 mt-0.5"
+                  />
+                  <div class="min-w-0">
+                    <p class="text-xs font-semibold text-highlighted">
+                      {{ question.title }}
+                    </p>
+                    <p class="text-[10px] text-muted">{{ question.titleEn }}</p>
                   </div>
                 </div>
-
-                <!-- Progress Bar เทียบกับคะแนนเต็มและค่าเฉลี่ยรุ่น -->
-                <div class="space-y-1">
-                  <div
-                    class="relative w-full h-1.5 bg-muted/20 rounded-full overflow-hidden"
-                  >
-                    <div
-                      class="h-full rounded-full bg-emerald-500 transition-all duration-500"
-                      :style="{ width: `${(sub.score / sub.maxScore) * 100}%` }"
-                    />
-                  </div>
-                  <div class="flex justify-between text-[10px] text-muted">
-                    <span
-                      >คะแนนที่ได้รับจากฟอร์ม:
-                      <strong class="text-highlighted">{{
-                        sub.score.toFixed(1)
-                      }}</strong></span
-                    >
-                    <span
-                      >ค่าเฉลี่ยรุ่นปี 2569:
-                      {{ sub.benchmarkAverage.toFixed(1) }}</span
-                    >
-                  </div>
-                </div>
-
-                <!-- รายการเกณฑ์ย่อย (Criteria checklist) -->
-                <div class="space-y-1 pt-1 border-t border-default/40">
-                  <div
-                    v-for="(crit, cIdx) in sub.criteria"
-                    :key="cIdx"
-                    class="flex items-center justify-between text-[11px] text-muted"
-                  >
-                    <span class="flex items-center gap-1.5 truncate">
-                      <UIcon
-                        name="i-lucide-check"
-                        class="size-3 text-emerald-500 shrink-0"
-                      />
-                      <span class="truncate">{{ crit.label }}</span>
-                    </span>
-                    <span class="font-medium text-highlighted shrink-0 ml-2">{{
-                      crit.score.toFixed(1)
-                    }}</span>
-                  </div>
-                </div>
-
-                <!-- Skill Tags & Feedback -->
-                <div class="flex flex-wrap gap-1 pt-1">
-                  <span
-                    v-for="t in sub.tags"
-                    :key="t"
-                    class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-muted/40 text-muted"
-                  >
-                    #{{ t }}
-                  </span>
-                </div>
-
-                <div
-                  class="text-[10.5px] italic text-muted bg-muted/15 rounded p-2 border-l-2 border-emerald-500/60"
+                <span
+                  v-if="question.score !== null"
+                  class="text-xs font-bold text-emerald-600 shrink-0"
                 >
-                  "{{ sub.feedback }}"
-                </div>
+                  {{ question.score.toFixed(1)
+                  }}<template v-if="question.maxScore !== null">
+                    / {{ question.maxScore.toFixed(1) }}</template
+                  >
+                </span>
+                <span v-else class="text-[11px] text-muted shrink-0"
+                  >ไม่มีคะแนน</span
+                >
               </div>
             </div>
-          </div>
+            <p v-else class="text-xs text-muted">
+              ไม่มีรายการ Soft Skill ใน snapshot แบบประเมิน
+            </p>
+          </section>
 
-          <!-- รายละเอียดสมรรถนะย่อย หมวดที่ 2: Hard Skills (Sub-sections) -->
-          <div class="pt-4 border-t border-default/60 space-y-3">
+          <section class="space-y-3 border-t border-default/60 pt-4">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex items-center gap-2">
                 <UIcon name="i-lucide-layers" class="size-4 text-primary" />
-                <span class="text-xs font-bold text-highlighted">
-                  หมวด 2: รายละเอียดสมรรถนะวิชาชีพเฉพาะด้าน (Hard Skills
-                  Sub-sections)
-                </span>
+                <h4 class="text-xs font-bold text-highlighted">
+                  ทักษะวิชาชีพเฉพาะด้าน (Hard Skills)
+                </h4>
               </div>
               <span class="text-[11px] text-muted">
-                ครอบคลุม 6 ทักษะย่อย • เกณฑ์คะแนนเต็ม 5.0
+                เฉลี่ย {{ hardSkillsAverage
+                }}<template
+                  v-if="
+                    studentEvaluationView.hardSkillScore?.scaleMax !== null &&
+                    studentEvaluationView.hardSkillScore?.scaleMax !== undefined
+                  "
+                >
+                  /
+                  {{
+                    studentEvaluationView.hardSkillScore.scaleMax.toFixed(1)
+                  }}</template
+                >
+                · ตอบ
+                {{ studentEvaluationView.hardSkillScore?.answeredCount ?? 0 }}
+                ข้อ
               </span>
             </div>
-
-            <div class="grid gap-3.5 sm:grid-cols-2">
+            <div
+              v-if="hardSkillSubSections.length"
+              class="grid gap-3.5 sm:grid-cols-2"
+            >
               <div
-                v-for="sub in hardSkillSubSections"
-                :key="sub.id"
-                class="rounded-lg border border-default/70 bg-default/60 p-3.5 space-y-2.5 transition-all hover:border-primary/40 hover:shadow-xs"
+                v-for="question in hardSkillSubSections"
+                :key="question.id"
+                class="rounded-lg border border-default/70 bg-default/60 p-3.5 flex items-start justify-between gap-3"
               >
-                <!-- หัวข้อ Sub-section และคะแนน -->
-                <div class="flex items-start justify-between gap-2">
-                  <div class="flex items-start gap-2 min-w-0">
-                    <div
-                      class="p-1.5 rounded-md bg-muted/30 text-primary shrink-0 mt-0.5"
-                    >
-                      <UIcon :name="sub.icon" class="size-4" />
-                    </div>
-                    <div>
-                      <h4
-                        class="text-xs font-semibold text-highlighted line-clamp-1 leading-snug"
-                      >
-                        {{ sub.title }}
-                      </h4>
-                      <p class="text-[10px] text-muted line-clamp-1">
-                        {{ sub.titleEn }}
-                      </p>
-                    </div>
-                  </div>
-                  <div class="text-right shrink-0">
-                    <div class="text-xs font-extrabold text-emerald-600">
-                      {{ sub.score.toFixed(1) }}
-                      <span class="text-[10px] text-muted font-normal"
-                        >/ {{ sub.maxScore.toFixed(1) }}</span
-                      >
-                    </div>
-                    <span
-                      class="inline-flex items-center gap-0.5 text-[9px] font-medium text-emerald-600 bg-emerald-500/10 px-1 py-0.5 rounded"
-                    >
-                      <UIcon name="i-lucide-trending-up" class="size-2.5" />
-                      +{{
-                        Math.round(
-                          ((sub.score - sub.benchmarkAverage) /
-                            sub.benchmarkAverage) *
-                            100
-                        )
-                      }}% จากค่าเฉลี่ย
-                    </span>
+                <div class="flex items-start gap-2 min-w-0">
+                  <UIcon
+                    :name="question.icon"
+                    class="size-4 text-primary shrink-0 mt-0.5"
+                  />
+                  <div class="min-w-0">
+                    <p class="text-xs font-semibold text-highlighted">
+                      {{ question.title }}
+                    </p>
+                    <p class="text-[10px] text-muted">{{ question.titleEn }}</p>
                   </div>
                 </div>
-
-                <!-- Progress Bar เทียบกับคะแนนเต็มและค่าเฉลี่ยรุ่น -->
-                <div class="space-y-1">
-                  <div
-                    class="relative w-full h-1.5 bg-muted/20 rounded-full overflow-hidden"
-                  >
-                    <div
-                      class="h-full rounded-full bg-emerald-500 transition-all duration-500"
-                      :style="{ width: `${(sub.score / sub.maxScore) * 100}%` }"
-                    />
-                  </div>
-                  <div class="flex justify-between text-[10px] text-muted">
-                    <span
-                      >คะแนนนักศึกษา:
-                      <strong class="text-highlighted">{{
-                        sub.score.toFixed(1)
-                      }}</strong></span
-                    >
-                    <span
-                      >ค่าเฉลี่ยรุ่นปี:
-                      {{ sub.benchmarkAverage.toFixed(1) }}</span
-                    >
-                  </div>
-                </div>
-
-                <!-- รายการเกณฑ์ย่อย (Criteria checklist) -->
-                <div class="space-y-1 pt-1 border-t border-default/40">
-                  <div
-                    v-for="(crit, cIdx) in sub.criteria"
-                    :key="cIdx"
-                    class="flex items-center justify-between text-[11px] text-muted"
-                  >
-                    <span class="flex items-center gap-1.5 truncate">
-                      <UIcon
-                        name="i-lucide-check"
-                        class="size-3 text-emerald-500 shrink-0"
-                      />
-                      <span class="truncate">{{ crit.label }}</span>
-                    </span>
-                    <span class="font-medium text-highlighted shrink-0 ml-2">{{
-                      crit.score.toFixed(1)
-                    }}</span>
-                  </div>
-                </div>
-
-                <!-- Skill Tags & Feedback -->
-                <div class="flex flex-wrap gap-1 pt-1">
-                  <span
-                    v-for="t in sub.tags"
-                    :key="t"
-                    class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-muted/40 text-muted"
-                  >
-                    #{{ t }}
-                  </span>
-                </div>
-
-                <div
-                  class="text-[10.5px] italic text-muted bg-muted/15 rounded p-2 border-l-2 border-primary/60"
+                <span
+                  v-if="question.score !== null"
+                  class="text-xs font-bold text-primary shrink-0"
                 >
-                  "{{ sub.feedback }}"
-                </div>
+                  {{ question.score.toFixed(1)
+                  }}<template v-if="question.maxScore !== null">
+                    / {{ question.maxScore.toFixed(1) }}</template
+                  >
+                </span>
+                <span v-else class="text-[11px] text-muted shrink-0"
+                  >ไม่มีคะแนน</span
+                >
               </div>
             </div>
-          </div>
+            <p v-else class="text-xs text-muted">
+              ไม่มีรายการ Hard Skill ใน snapshot แบบประเมิน
+            </p>
+          </section>
 
-          <!-- กราฟวิเคราะห์สมรรถนะเทียบกับนักศึกษารุ่นปีเดียวกัน (Hard Skills & Soft Skills) -->
-          <StudentSkillBenchmarkChart
-            :student-score="submittedScores?.average ?? 5.0"
-            :academic-year="
-              studentProfile?.admissionYear
-                ? studentProfile.admissionYear + 4
-                : '-'
-            "
-            :student-name="studentProfile?.name?.th ?? '-'"
+          <section class="space-y-3 border-t border-default/60 pt-4">
+            <div class="flex items-center gap-2">
+              <UIcon
+                name="i-lucide-message-square-quote"
+                class="size-4 text-amber-500"
+              />
+              <h4 class="text-xs font-bold text-highlighted">
+                ข้อเสนอแนะจากสถานประกอบการ
+              </h4>
+            </div>
+            <div
+              v-if="dynamicSuggestions.length"
+              class="grid gap-3.5 sm:grid-cols-2"
+            >
+              <div
+                v-for="suggestion in dynamicSuggestions"
+                :key="suggestion.id"
+                class="rounded-lg border border-default/70 bg-default/60 p-4 space-y-2"
+              >
+                <div class="flex items-start gap-2">
+                  <UIcon
+                    :name="suggestion.icon"
+                    class="size-4 text-amber-600 shrink-0 mt-0.5"
+                  />
+                  <div>
+                    <p class="text-xs font-semibold text-highlighted">
+                      {{ suggestion.title }}
+                    </p>
+                    <p class="text-[10px] text-muted">
+                      {{ suggestion.titleEn }}
+                    </p>
+                  </div>
+                </div>
+                <p
+                  class="rounded-lg bg-muted/20 p-3 text-xs leading-relaxed text-highlighted whitespace-pre-wrap"
+                >
+                  {{ suggestion.value }}
+                </p>
+              </div>
+            </div>
+            <p v-else class="text-xs text-muted">
+              ไม่มีข้อความข้อเสนอแนะใน snapshot แบบประเมิน
+            </p>
+          </section>
+
+          <UAlert
+            color="neutral"
+            icon="i-lucide-info"
+            title="ยังไม่มีข้อมูลเปรียบเทียบค่าเฉลี่ยรุ่นที่ตรวจสอบได้"
+            description="ผลนี้แสดงคะแนนรายหมวดจากแบบประเมินเท่านั้น ไม่มีคะแนนรวมข้ามหมวดหรือค่าเฉลี่ยตัวอย่าง"
+            variant="soft"
           />
         </div>
       </section>
@@ -1728,11 +1359,11 @@ const _adminCards = computed(() => [
             </span>
             <div>
               <h2 class="text-base sm:text-lg font-bold text-highlighted">
-                ดาวน์โหลดแบบฟอร์มและเอกสารรับรอง (2 ฉบับ)
+                เอกสารสำหรับนักศึกษา
               </h2>
               <p class="text-xs text-muted">
-                เอกสารรับรองอย่างเป็นทางการจากมหาวิทยาลัยแม่ฟ้าหลวง
-                สามารถดูตัวอย่างและดาวน์โหลดได้ทันที
+                เอกสารจะพร้อมดาวน์โหลดเมื่อมีแม่แบบที่อนุมัติและระบบออก PDF
+                บันทึกไฟล์จริงแล้ว
               </p>
             </div>
           </div>
@@ -1782,28 +1413,24 @@ const _adminCards = computed(() => [
                   Certificate of Internship Completion
                 </p>
                 <p class="text-xs text-muted mt-2 leading-relaxed">
-                  ใบรับรองการสำเร็จการฝึกปฏิบัติงานวิชาชีพอย่างเป็นทางการ
-                  พร้อมตรามหาวิทยาลัยแม่ฟ้าหลวง กรอบเกียรติบัตรสีทอง
-                  และลายมือชื่อคณบดี
+                  ใบรับรองจะยังไม่ถือเป็นเอกสารทางการจนกว่าจะออกจากระบบด้วยแม่แบบและผู้ลงนามที่ได้รับอนุมัติ
                 </p>
               </div>
 
               <div class="border-t border-default/70 pt-3 space-y-1 text-xs">
                 <div class="flex justify-between text-muted">
-                  <span>เลขที่รับรอง:</span>
-                  <span class="font-mono font-semibold text-highlighted">
-                    CERT-{{ activeDocContext.academicYear }}-{{
-                      activeDocContext.studentId
-                    }}
-                  </span>
+                  <span>เลขที่เอกสาร:</span>
+                  <span class="font-mono font-semibold text-muted"
+                    >ยังไม่มี</span
+                  >
                 </div>
                 <div class="flex justify-between text-muted">
                   <span>สถานะเอกสาร:</span>
                   <span
-                    class="font-semibold text-emerald-600 flex items-center gap-1"
+                    class="font-semibold text-warning-600 flex items-center gap-1"
                   >
-                    <UIcon name="i-lucide-check-circle" class="size-3.5" />
-                    พร้อมดาวน์โหลด (Ready)
+                    <UIcon name="i-lucide-clock-3" class="size-3.5" />
+                    ยังไม่ออกโดยระบบ
                   </span>
                 </div>
               </div>
@@ -1816,6 +1443,7 @@ const _adminCards = computed(() => [
                   size="xs"
                   variant="outline"
                   class="flex-1 justify-center min-w-[80px]"
+                  disabled
                   @click="openDocumentPreview('certification')"
                 />
                 <UButton
@@ -1825,13 +1453,14 @@ const _adminCards = computed(() => [
                   size="xs"
                   variant="solid"
                   class="flex-1 justify-center min-w-[90px]"
+                  disabled
                   @click="downloadDocument('certification')"
                 />
               </div>
             </div>
           </UCard>
 
-          <!-- ฉบับที่ 2: เอกสารของผู้ดูแล (หนังสือส่งตัวนักศึกษาฝึกงาน) -->
+          <!-- ฉบับที่ 2: Transcript -->
           <UCard
             class="group relative border-2 border-sky-500/30 hover:border-sky-500/60 bg-gradient-to-br from-default to-sky-500/5 transition-all duration-300 shadow-sm hover:shadow-md"
           >
@@ -1844,7 +1473,7 @@ const _adminCards = computed(() => [
                 </span>
                 <UBadge
                   color="info"
-                  label="เอกสารของผู้ดูแล"
+                  label="Transcript"
                   size="xs"
                   variant="subtle"
                 />
@@ -1855,37 +1484,36 @@ const _adminCards = computed(() => [
                   class="flex items-center gap-1.5 text-xs text-sky-700 dark:text-sky-400 font-semibold"
                 >
                   <UIcon name="i-lucide-shield-check" class="size-3.5" />
-                  เอกสารฉบับที่ 2: เอกสารราชการ
+                  เอกสารฉบับที่ 2: Transcript
                 </div>
                 <h3
                   class="text-base font-bold text-highlighted mt-1 group-hover:text-primary transition-colors"
                 >
-                  หนังสือส่งตัวนักศึกษาฝึกงาน
+                  ใบบันทึกผลการฝึกงาน
                 </h3>
                 <p class="text-[11px] text-muted font-mono">
-                  Official Referral Letter
+                  Internship Transcript
                 </p>
                 <p class="text-xs text-muted mt-2 leading-relaxed">
-                  หนังสือราชการส่งตัวนักศึกษาเข้าฝึกปฏิบัติงานวิชาชีพ ณ
-                  สถานประกอบการ ออกและอนุมัติโดยผู้ดูแลระบบ
-                  (ฝ่ายสหกิจศึกษาและฝึกงาน)
+                  Transcript จะแสดงผลประเมินจากข้อมูลจริงหลังแม่แบบและ PDF
+                  renderer ผ่านการอนุมัติ
                 </p>
               </div>
 
               <div class="border-t border-default/70 pt-3 space-y-1 text-xs">
                 <div class="flex justify-between text-muted">
                   <span>เลขที่เอกสาร:</span>
-                  <span class="font-mono font-semibold text-highlighted">
-                    {{ activeDocContext.referenceNumber }}
-                  </span>
+                  <span class="font-mono font-semibold text-muted"
+                    >ยังไม่มี</span
+                  >
                 </div>
                 <div class="flex justify-between text-muted">
                   <span>สถานะเอกสาร:</span>
                   <span
-                    class="font-semibold text-emerald-600 flex items-center gap-1"
+                    class="font-semibold text-warning-600 flex items-center gap-1"
                   >
-                    <UIcon name="i-lucide-check-circle" class="size-3.5" />
-                    พร้อมดาวน์โหลด (Ready)
+                    <UIcon name="i-lucide-clock-3" class="size-3.5" />
+                    ยังไม่ออกโดยระบบ
                   </span>
                 </div>
               </div>
@@ -1898,6 +1526,7 @@ const _adminCards = computed(() => [
                   size="xs"
                   variant="outline"
                   class="flex-1 justify-center min-w-[80px]"
+                  disabled
                   @click="openDocumentPreview('referral')"
                 />
                 <UButton
@@ -1907,6 +1536,7 @@ const _adminCards = computed(() => [
                   size="xs"
                   variant="solid"
                   class="flex-1 justify-center min-w-[90px]"
+                  disabled
                   @click="downloadDocument('referral')"
                 />
               </div>

@@ -35,6 +35,10 @@ services:
     image: redis:8.2.8-alpine
     command:
       - redis-server
+      - --bind
+      - '0.0.0.0'
+      - --protected-mode
+      - 'no'
       - --appendonly
       - 'yes'
       - --appendfsync
@@ -42,7 +46,7 @@ services:
       - --maxmemory-policy
       - noeviction
     ports:
-      - '127.0.0.1:6380:6379'
+      - '6380:6379'
     volumes:
       - redis-data:/data
     healthcheck:

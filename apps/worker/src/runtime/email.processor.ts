@@ -1,12 +1,16 @@
 import { TextEncoder } from 'node:util'
-import { createHmac, randomInt } from 'node:crypto'
+import { createHmac, randomInt, randomUUID } from 'node:crypto'
 
 import { decryptSmtpSecret, type AppEnvironment } from '@internship/config'
-import type { Job } from 'bullmq'
+import { campaignStatusFromDeliveryCounts } from '@internship/shared-types'
+import type { Job, Queue } from 'bullmq'
 import { SignJWT } from 'jose'
-import nodemailer from 'nodemailer'
+import type { Types } from 'mongoose'
+import nodemailer, { type Transporter } from 'nodemailer'
 import type { Logger } from 'pino'
 
+import { renderSafeEmailHtml } from './email-template.js'
+import { studentReferenceFilter } from './student-reference.js'
 import type { SmtpSetting, WorkerModels } from './models.js'
 
 export interface DeliveryEmailJob {
@@ -19,6 +23,11 @@ export interface SmtpTestJob {
 }
 
 export type EmailJob = DeliveryEmailJob | SmtpTestJob
+
+const DELIVERY_LEASE_MS = 2 * 60 * 1000
+const DELIVERY_LEASE_HEARTBEAT_MS = 30 * 1000
+const DELIVERY_RECOVERY_BATCH_SIZE = 100
+const INTERRUPTED_BEFORE_SEND = 'WORKER_INTERRUPTED_BEFORE_SEND'
 
 interface ResolvedSmtpConfiguration {
   readonly source: 'database' | 'environment'
@@ -39,7 +48,8 @@ export class EmailProcessor {
   public constructor(
     private readonly environment: AppEnvironment,
     private readonly models: WorkerModels,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly emailQueue?: Queue<EmailJob>
   ) {
     this.assertSafeCaptureHost(environment.SMTP_HOST)
     this.signingKey = new TextEncoder().encode(environment.AUTH_JWT_SECRET)
@@ -54,73 +64,284 @@ export class EmailProcessor {
     await this.processDelivery(job.data as DeliveryEmailJob)
   }
 
+  public async recoverExpiredDeliveries(now = new Date()): Promise<void> {
+    const legacyCutoff = new Date(now.getTime() - DELIVERY_LEASE_MS)
+    const expired = await this.models.Delivery.find({
+      status: 'sending',
+      $or: [
+        { processingLeaseUntil: { $lte: now } },
+        {
+          processingLeaseUntil: { $exists: false },
+          processingStartedAt: { $lte: legacyCutoff }
+        }
+      ]
+    })
+      .select(
+        '_id campaignId assignmentId attempts processingLeaseUntil processingToken providerAttemptStartedAt'
+      )
+      .sort({ processingLeaseUntil: 1 })
+      .limit(DELIVERY_RECOVERY_BATCH_SIZE)
+      .lean()
+      .exec()
+
+    for (const delivery of expired) {
+      const isLegacyLease = !delivery.processingLeaseUntil
+      const providerMayHaveAccepted =
+        isLegacyLease || Boolean(delivery.providerAttemptStartedAt)
+      const claimFilter: Record<string, unknown> = {
+        _id: delivery._id,
+        status: 'sending',
+        ...(delivery.processingToken
+          ? { processingToken: delivery.processingToken }
+          : {}),
+        ...(isLegacyLease
+          ? {
+              processingLeaseUntil: { $exists: false },
+              processingStartedAt: { $lte: legacyCutoff }
+            }
+          : { processingLeaseUntil: { $lte: now } }),
+        ...(!providerMayHaveAccepted
+          ? { providerAttemptStartedAt: { $exists: false } }
+          : {})
+      }
+      const recoveryUpdate = providerMayHaveAccepted
+        ? {
+            $set: {
+              status: 'uncertain',
+              lastErrorCode: 'PROVIDER_STATE_UNCERTAIN'
+            },
+            $unset: { processingLeaseUntil: 1, processingStartedAt: 1 }
+          }
+        : {
+            $set: {
+              status: 'failed',
+              lastErrorCode: INTERRUPTED_BEFORE_SEND
+            },
+            $unset: {
+              processingLeaseUntil: 1,
+              processingStartedAt: 1,
+              processingToken: 1
+            }
+          }
+      const recovered = await this.models.Delivery.updateOne(
+        claimFilter,
+        recoveryUpdate
+      )
+      if (recovered.matchedCount !== 1) continue
+
+      if (providerMayHaveAccepted) {
+        this.logger.warn(
+          { deliveryId: delivery._id.toString() },
+          'stale email delivery marked uncertain; automatic resend suppressed'
+        )
+      }
+      await this.reconcileCampaign(delivery.campaignId)
+    }
+
+    await this.enqueuePendingDeliveries()
+  }
+
+  private async enqueuePendingDeliveries(): Promise<void> {
+    if (!this.emailQueue) return
+    let afterId: Types.ObjectId | undefined
+    while (true) {
+      const pending = await this.models.Delivery.find({
+        $or: [
+          { status: 'queued' },
+          {
+            status: 'failed',
+            lastErrorCode: {
+              $in: [INTERRUPTED_BEFORE_SEND, 'QUEUE_ENQUEUE_FAILED']
+            }
+          }
+        ],
+        ...(afterId ? { _id: { $gt: afterId } } : {})
+      })
+        .select('_id assignmentId attempts status lastErrorCode')
+        .sort({ _id: 1 })
+        .limit(DELIVERY_RECOVERY_BATCH_SIZE)
+        .lean()
+        .exec()
+      if (pending.length === 0) break
+
+      for (const delivery of pending) {
+        afterId = delivery._id
+        const invitation = await this.models.Invitation.findOne({
+          assignmentId: delivery.assignmentId
+        })
+          .select('_id')
+          .lean()
+        if (!invitation) {
+          await this.models.Delivery.updateOne(
+            {
+              _id: delivery._id,
+              status: delivery.status,
+              ...(delivery.status === 'failed'
+                ? { lastErrorCode: delivery.lastErrorCode }
+                : {})
+            },
+            {
+              $set: {
+                status: 'failed',
+                lastErrorCode: 'INVITATION_NOT_FOUND'
+              }
+            }
+          )
+          continue
+        }
+
+        try {
+          const jobId =
+            delivery.attempts === 0
+              ? `delivery-${delivery._id.toString()}`
+              : `delivery-${delivery._id.toString()}-retry-${delivery.attempts + 1}`
+          const existingJob = await this.emailQueue.getJob(jobId)
+          if (existingJob) {
+            const state = await existingJob.getState()
+            if (
+              [
+                'active',
+                'waiting',
+                'delayed',
+                'waiting-children',
+                'paused'
+              ].includes(state)
+            ) {
+              continue
+            }
+            await existingJob.remove()
+          }
+          await this.emailQueue.add(
+            'send-delivery',
+            {
+              deliveryId: delivery._id.toString(),
+              invitationId: invitation._id.toString()
+            },
+            {
+              attempts: 5,
+              backoff: { type: 'exponential', delay: 5000 },
+              jobId,
+              removeOnComplete: 500,
+              removeOnFail: 1000
+            }
+          )
+        } catch (error: unknown) {
+          this.logger.error(
+            {
+              deliveryId: delivery._id.toString(),
+              error: safeFailureCode(error)
+            },
+            'could not re-enqueue pending email delivery'
+          )
+        }
+      }
+    }
+  }
+
   private async processDelivery(job: DeliveryEmailJob): Promise<void> {
+    const startedAt = new Date()
+    const processingToken = randomUUID()
     const delivery = await this.models.Delivery.findOneAndUpdate(
       {
         _id: job.deliveryId,
         status: { $in: ['queued', 'failed'] }
       },
       {
-        $set: { status: 'sending', processingStartedAt: new Date() },
+        $set: {
+          status: 'sending',
+          processingStartedAt: startedAt,
+          processingLeaseUntil: new Date(
+            startedAt.getTime() + DELIVERY_LEASE_MS
+          ),
+          processingToken
+        },
+        $unset: { providerAttemptStartedAt: 1 },
         $inc: { attempts: 1 }
       },
       { new: true }
     )
-    if (!delivery) return
-    await this.models.Campaign.updateOne(
-      { _id: delivery.campaignId, status: 'queued' },
-      { $set: { status: 'processing' } }
-    )
+    if (!delivery) {
+      const existingDelivery = await this.models.Delivery.findById(
+        job.deliveryId
+      )
+        .select('campaignId')
+        .lean()
+      if (existingDelivery) {
+        await this.reconcileCampaign(existingDelivery.campaignId)
+      }
+      return
+    }
+    const leaseHeartbeat = setInterval(() => {
+      void this.extendDeliveryLease(delivery.id, processingToken)
+    }, DELIVERY_LEASE_HEARTBEAT_MS)
+    leaseHeartbeat.unref?.()
 
     let providerAccepted = false
+    let mailAttempted = false
     try {
+      await this.reconcileCampaign(delivery.campaignId)
       const [invitation, template, assignment, smtp] = await Promise.all([
         this.models.Invitation.findById(job.invitationId),
         this.models.EmailVersion.findById(delivery.templateVersionId),
         this.models.Assignment.findById(delivery.assignmentId),
         this.resolveSmtpConfiguration()
       ])
+      const campaign = await this.models.Campaign.findById(delivery.campaignId)
+      const now = new Date()
       if (
         !invitation ||
-        invitation.status !== 'active' ||
-        invitation.expiresAt <= new Date() ||
         !template ||
-        template.status !== 'published' ||
-        !assignment
+        !assignment ||
+        !campaign ||
+        !deliverySourcesAreCurrent(
+          {
+            invitationStatus: invitation.status,
+            invitationAssignmentId: invitation.assignmentId,
+            invitationExpiresAt: invitation.expiresAt,
+            templatePublished: template.status === 'published',
+            assignmentStatus: assignment.status,
+            assignmentDeadlineAt: assignment.deadlineAt
+          },
+          delivery.assignmentId,
+          now
+        )
       ) {
         throw new Error('DELIVERY_SOURCE_INVALID')
       }
       const [student, evaluator] = await Promise.all([
-        this.models.Student.findOne({
-          $or: [
-            { _id: assignment.studentId },
-            { studentId: assignment.studentId }
-          ]
-        }),
+        this.models.Student.findOne(
+          studentReferenceFilter(assignment.studentId)
+        ),
         this.models.Evaluator.findById(assignment.evaluatorId)
       ])
       if (!student || !evaluator) throw new Error('DELIVERY_RECIPIENT_INVALID')
 
-      const pin = generatePin()
-      const accessPinHash = createHmac(
-        'sha256',
-        this.environment.AUTH_JWT_SECRET
-      )
-        .update(pin)
-        .digest('hex')
-      await Promise.all([
-        this.models.Invitation.updateOne(
-          { _id: invitation.id, status: 'active' },
-          { $set: { accessPinHash }, $unset: { accessPin: 1 } }
-        ),
-        this.models.Assignment.updateOne(
-          {
-            _id: assignment.id,
-            status: { $in: ['pending', 'inProgress', 'reopened'] }
-          },
-          { $set: { accessPinHash }, $unset: { accessPin: 1 } }
+      let pin = ''
+      if (shouldRotateInvitationPin(campaign.type)) {
+        pin = generatePin()
+        const accessPinHash = createHmac(
+          'sha256',
+          this.environment.AUTH_JWT_SECRET
         )
-      ])
+          .update(pin)
+          .digest('hex')
+        const [invitationWrite, assignmentWrite] = await Promise.all([
+          this.models.Invitation.updateOne(
+            { _id: invitation.id, status: 'active' },
+            { $set: { accessPinHash }, $unset: { accessPin: 1 } }
+          ),
+          this.models.Assignment.updateOne(
+            { _id: assignment.id, status: { $in: ['pending', 'inProgress'] } },
+            { $set: { accessPinHash }, $unset: { accessPin: 1 } }
+          )
+        ])
+        if (
+          invitationWrite.matchedCount !== 1 ||
+          assignmentWrite.matchedCount !== 1
+        ) {
+          throw new Error('INVITATION_REVOKED')
+        }
+      }
 
       const token = await new SignJWT({
         tokenUse: 'invitation',
@@ -130,13 +351,14 @@ export class EmailProcessor {
         .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
         .setIssuer('internship-transcript-v2')
         .setAudience('internship-transcript-api')
-        .setIssuedAt()
         .setExpirationTime(Math.floor(invitation.expiresAt.getTime() / 1000))
         .sign(this.signingKey)
       const values = {
         student_name: student.name?.th ?? student.name?.en ?? student.studentId,
         student_id: student.studentId ?? student.id,
-        company_name: (student as unknown as { company?: string }).company || 'สถานประกอบการ',
+        company_name:
+          (student as unknown as { company?: string }).company ||
+          'สถานประกอบการ',
         evaluator_name:
           evaluator.name?.th ?? evaluator.name?.en ?? evaluator.email,
         invitation_url: `${this.environment.PUBLIC_WEB_URL}/evaluate?token=${encodeURIComponent(token)}`,
@@ -149,20 +371,43 @@ export class EmailProcessor {
           : '-',
         pin
       }
+      const attemptStarted = await this.models.Delivery.updateOne(
+        { _id: delivery.id, status: 'sending', processingToken },
+        {
+          $set: {
+            providerAttemptStartedAt: new Date(),
+            processingLeaseUntil: new Date(Date.now() + DELIVERY_LEASE_MS)
+          }
+        }
+      )
+      if (attemptStarted.matchedCount !== 1) {
+        throw new Error('DELIVERY_LEASE_LOST')
+      }
+      mailAttempted = true
       const result: unknown = await this.createTransport(smtp).sendMail({
         from: smtp.from,
         to: delivery.recipientEmail,
         subject: render(template.subject, values),
-        html: render(template.html, values),
+        html: renderSafeEmailHtml(template.html, values),
         text: render(template.text, values)
       })
       providerAccepted = true
       const messageId = readMessageId(result)
       await this.models.Delivery.updateOne(
-        { _id: delivery.id },
+        {
+          _id: delivery.id,
+          processingToken,
+          status: { $in: ['sending', 'uncertain'] }
+        },
         {
           $set: { status: 'sent', providerMessageId: messageId },
-          $unset: { lastErrorCode: 1, processingStartedAt: 1 }
+          $unset: {
+            lastErrorCode: 1,
+            processingStartedAt: 1,
+            processingLeaseUntil: 1,
+            processingToken: 1,
+            providerAttemptStartedAt: 1
+          }
         }
       )
       this.logger.info(
@@ -171,43 +416,95 @@ export class EmailProcessor {
       )
     } catch (error: unknown) {
       const code = safeFailureCode(error)
+      const deliveryStatus = deliveryFailureStatus(
+        error,
+        mailAttempted,
+        providerAccepted
+      )
       await this.models.Delivery.updateOne(
-        { _id: delivery.id },
+        {
+          _id: delivery.id,
+          processingToken,
+          status: { $in: ['sending', 'uncertain'] }
+        },
         {
           $set: {
-            status: providerAccepted ? 'uncertain' : 'failed',
-            lastErrorCode: providerAccepted ? 'PROVIDER_STATE_UNCERTAIN' : code
+            status: deliveryStatus,
+            lastErrorCode:
+              deliveryStatus === 'uncertain' ? 'PROVIDER_STATE_UNCERTAIN' : code
           },
-          $unset: { processingStartedAt: 1 }
+          $unset: {
+            processingStartedAt: 1,
+            processingLeaseUntil: 1,
+            processingToken: 1,
+            providerAttemptStartedAt: 1
+          }
         }
       )
       throw error
     } finally {
+      clearInterval(leaseHeartbeat)
       await this.reconcileCampaign(delivery.campaignId)
     }
   }
 
+  private async extendDeliveryLease(
+    deliveryId: string,
+    processingToken: string
+  ): Promise<void> {
+    try {
+      const result = await this.models.Delivery.updateOne(
+        { _id: deliveryId, status: 'sending', processingToken },
+        {
+          $set: {
+            processingLeaseUntil: new Date(Date.now() + DELIVERY_LEASE_MS)
+          }
+        }
+      )
+      if (result.matchedCount !== 1) {
+        this.logger.warn(
+          { deliveryId },
+          'email delivery lease is no longer owned'
+        )
+      }
+    } catch {
+      this.logger.error({ deliveryId }, 'email delivery lease heartbeat failed')
+    }
+  }
+
   private async reconcileCampaign(campaignId: string): Promise<void> {
-    const deliveries = await this.models.Delivery.find({ campaignId })
-      .select('status')
-      .lean()
-    const pending = deliveries.some((item) =>
-      ['queued', 'sending'].includes(item.status)
+    const [campaign, summary] = await Promise.all([
+      this.models.Campaign.findById(campaignId).select('total').lean(),
+      this.models.Delivery.aggregate<{ _id: string; count: number }>([
+        { $match: { campaignId } },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ])
+    ])
+    if (!campaign) throw new Error('CAMPAIGN_NOT_FOUND')
+
+    const counts: Record<string, number> = {}
+    for (const item of summary) counts[item._id] = item.count
+    const observedCount = Object.values(counts).reduce(
+      (total, count) => total + count,
+      0
     )
-    const failed = deliveries.some((item) =>
-      ['failed', 'uncertain'].includes(item.status)
-    )
-    const status = pending
-      ? deliveries.some((item) => item.status === 'sending')
-        ? 'processing'
-        : 'queued'
-      : failed
-        ? 'partial'
-        : 'completed'
-    await this.models.Campaign.updateOne(
+    if (campaign.total > 0 && observedCount !== campaign.total) {
+      this.logger.error(
+        {
+          campaignId,
+          expectedDeliveries: campaign.total,
+          observedDeliveries: observedCount
+        },
+        'campaign delivery records do not match expected total'
+      )
+    }
+
+    const status = campaignStatusFromDeliveryCounts(campaign.total, counts)
+    const result = await this.models.Campaign.updateOne(
       { _id: campaignId },
       { $set: { status } }
     )
+    if (result.matchedCount !== 1) throw new Error('CAMPAIGN_NOT_FOUND')
   }
 
   private async processSmtpTest(job: SmtpTestJob): Promise<void> {
@@ -330,9 +627,7 @@ export class EmailProcessor {
     )
   }
 
-  private createTransport(
-    smtp: ResolvedSmtpConfiguration
-  ): nodemailer.Transporter {
+  private createTransport(smtp: ResolvedSmtpConfiguration): Transporter {
     return nodemailer.createTransport({
       host: smtp.host,
       port: smtp.port,
@@ -371,6 +666,26 @@ function safeFailureCode(error: unknown): string {
   return 'SMTP_SEND_FAILED'
 }
 
+export function deliveryFailureStatus(
+  error: unknown,
+  mailAttempted: boolean,
+  providerAccepted: boolean
+): 'failed' | 'uncertain' {
+  if (providerAccepted) return 'uncertain'
+  if (!mailAttempted) return 'failed'
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'responseCode' in error &&
+    typeof error.responseCode === 'number' &&
+    error.responseCode >= 400 &&
+    error.responseCode <= 599
+  ) {
+    return 'failed'
+  }
+  return 'uncertain'
+}
+
 function withOptionalPassword(password: string | undefined): {
   readonly password?: string
 } {
@@ -383,6 +698,34 @@ function generatePin(): string {
     pin += String(randomInt(0, 10))
   }
   return pin
+}
+
+export function shouldRotateInvitationPin(
+  campaignType: 'invitation' | 'reminder'
+): boolean {
+  return campaignType === 'invitation'
+}
+
+export function deliverySourcesAreCurrent(
+  sources: {
+    invitationStatus: string
+    invitationAssignmentId: string
+    invitationExpiresAt: Date
+    templatePublished: boolean
+    assignmentStatus: string
+    assignmentDeadlineAt: Date
+  },
+  deliveryAssignmentId: string,
+  now: Date
+): boolean {
+  return (
+    sources.invitationStatus === 'active' &&
+    sources.invitationExpiresAt > now &&
+    sources.invitationAssignmentId === deliveryAssignmentId &&
+    sources.templatePublished &&
+    ['pending', 'inProgress'].includes(sources.assignmentStatus) &&
+    sources.assignmentDeadlineAt > now
+  )
 }
 
 function render(

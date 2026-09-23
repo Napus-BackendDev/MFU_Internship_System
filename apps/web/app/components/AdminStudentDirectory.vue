@@ -67,7 +67,12 @@ export interface EvaluationAssignmentItem {
   readonly evaluatorId: string
   readonly deadlineAt: string
   readonly status:
-    'pending' | 'inProgress' | 'submitted' | 'expired' | 'reopened'
+    | 'pending'
+    | 'inProgress'
+    | 'submitted'
+    | 'expired'
+    | 'reopened'
+    | 'email_error'
   readonly accessPin?: string
 }
 
@@ -115,6 +120,7 @@ const emit = defineEmits<{
 }>()
 
 const toast = useToast()
+const api = useApi()
 
 // Filter states
 const selectedYear = ref<string>('all')
@@ -164,7 +170,13 @@ export interface EnrichedStudentRow {
   evaluatorPositionEn: string
   evaluatorEmail: string
   accessPin: string
-  status: 'pending' | 'inProgress' | 'submitted' | 'expired' | 'reopened'
+  status:
+    | 'pending'
+    | 'inProgress'
+    | 'submitted'
+    | 'expired'
+    | 'reopened'
+    | 'email_error'
   statusTh: string
   statusEn: string
   scoreDisplay: string
@@ -194,9 +206,7 @@ const enrichedRows = computed<EnrichedStudentRow[]>(() => {
 
     // Match assignment
     const assignment = assignmentsList.find(
-      (a) =>
-        a.studentId === student.id ||
-        a.studentId === student.studentId
+      (a) => a.studentId === student.id || a.studentId === student.studentId
     )
 
     // Match evaluator
@@ -283,8 +293,12 @@ const enrichedRows = computed<EnrichedStudentRow[]>(() => {
     const rawEvalStatus =
       student.evaluationStatus || assignment?.status || 'awaiting_evaluator'
     let status:
-      'pending' | 'inProgress' | 'submitted' | 'expired' | 'reopened' =
-      'pending'
+      | 'pending'
+      | 'inProgress'
+      | 'submitted'
+      | 'expired'
+      | 'reopened'
+      | 'email_error' = 'pending'
     let statusTh = 'รอระบุผู้ประเมิน'
     let statusEn = 'Awaiting Evaluator'
     const scoreDisplay = '-'
@@ -297,6 +311,13 @@ const enrichedRows = computed<EnrichedStudentRow[]>(() => {
       status = 'submitted'
       statusTh = 'ส่งผลประเมินแล้ว'
       statusEn = 'Submitted'
+    } else if (
+      rawEvalStatus === 'email_error' ||
+      assignment?.status === 'email_error'
+    ) {
+      status = 'email_error'
+      statusTh = 'ส่งอีเมลผิดพลาด'
+      statusEn = 'Email Error'
     } else if (
       rawEvalStatus === 'awaiting_response' ||
       rawEvalStatus === 'inProgress' ||
@@ -430,29 +451,43 @@ const availableSemesters = computed<string[]>(() => {
   return Array.from(semsSet).sort()
 })
 
-const availableSchools = computed<{ id: string; nameTh: string; schoolCode: string }[]>(() => {
-  const schoolMap = new Map<string, { id: string; nameTh: string; schoolCode: string }>()
+const availableSchools = computed<
+  { id: string; nameTh: string; schoolCode: string }[]
+>(() => {
+  const schoolMap = new Map<
+    string,
+    { id: string; nameTh: string; schoolCode: string }
+  >()
   enrichedRows.value.forEach((r) => {
     const sId = r.student.schoolId || r.school?.id
     if (sId && !schoolMap.has(sId)) {
       schoolMap.set(sId, {
         id: sId,
-        nameTh: r.schoolTh !== '-' ? r.schoolTh : (r.school?.name?.th || sId),
-        schoolCode: r.schoolCode !== '-' ? r.schoolCode : (r.school?.schoolCode || '')
+        nameTh: r.schoolTh !== '-' ? r.schoolTh : r.school?.name?.th || sId,
+        schoolCode:
+          r.schoolCode !== '-' ? r.schoolCode : r.school?.schoolCode || ''
       })
     }
   })
-  return Array.from(schoolMap.values()).sort((a, b) => a.nameTh.localeCompare(b.nameTh, 'th'))
+  return Array.from(schoolMap.values()).sort((a, b) =>
+    a.nameTh.localeCompare(b.nameTh, 'th')
+  )
 })
 
-const availableStatuses = computed<{ value: string; labelTh: string; icon: string }[]>(() => {
-  const statusMap = new Map<string, { value: string; labelTh: string; icon: string }>()
+const availableStatuses = computed<
+  { value: string; labelTh: string; icon: string }[]
+>(() => {
+  const statusMap = new Map<
+    string,
+    { value: string; labelTh: string; icon: string }
+  >()
   enrichedRows.value.forEach((r) => {
     if (!statusMap.has(r.status)) {
       let icon = '⚪'
       if (r.status === 'submitted') icon = '🟢'
       else if (r.status === 'inProgress') icon = '🟡'
       else if (r.status === 'expired') icon = '🔴'
+      else if (r.status === 'email_error') icon = '❌'
 
       statusMap.set(r.status, {
         value: r.status,
@@ -465,39 +500,55 @@ const availableStatuses = computed<{ value: string; labelTh: string; icon: strin
 })
 
 // Auto-reset filters if current value is invalid or not in available options
-watch(availableYears, (years) => {
-  if (selectedYear.value !== 'all' && !years.includes(selectedYear.value)) {
-    selectedYear.value = 'all'
-  }
-}, { immediate: true })
+watch(
+  availableYears,
+  (years) => {
+    if (selectedYear.value !== 'all' && !years.includes(selectedYear.value)) {
+      selectedYear.value = 'all'
+    }
+  },
+  { immediate: true }
+)
 
-watch(availableSemesters, (sems) => {
-  if (
-    selectedSemester.value !== 'all' &&
-    !sems.includes(selectedSemester.value) &&
-    selectedSemester.value !== '1'
-  ) {
-    selectedSemester.value = 'all'
-  }
-}, { immediate: true })
+watch(
+  availableSemesters,
+  (sems) => {
+    if (
+      selectedSemester.value !== 'all' &&
+      !sems.includes(selectedSemester.value) &&
+      selectedSemester.value !== '1'
+    ) {
+      selectedSemester.value = 'all'
+    }
+  },
+  { immediate: true }
+)
 
-watch(availableSchools, (schs) => {
-  if (
-    selectedSchool.value !== 'all' &&
-    !schs.some((s) => s.id === selectedSchool.value)
-  ) {
-    selectedSchool.value = 'all'
-  }
-}, { immediate: true })
+watch(
+  availableSchools,
+  (schs) => {
+    if (
+      selectedSchool.value !== 'all' &&
+      !schs.some((s) => s.id === selectedSchool.value)
+    ) {
+      selectedSchool.value = 'all'
+    }
+  },
+  { immediate: true }
+)
 
-watch(availableStatuses, (statuses) => {
-  if (
-    selectedStatus.value !== 'all' &&
-    !statuses.some((s) => s.value === selectedStatus.value)
-  ) {
-    selectedStatus.value = 'all'
-  }
-}, { immediate: true })
+watch(
+  availableStatuses,
+  (statuses) => {
+    if (
+      selectedStatus.value !== 'all' &&
+      !statuses.some((s) => s.value === selectedStatus.value)
+    ) {
+      selectedStatus.value = 'all'
+    }
+  },
+  { immediate: true }
+)
 
 // Filtered rows
 const filteredRows = computed(() => {
@@ -607,10 +658,13 @@ const stats = computed(() => {
   const inProgress = filteredRows.value.filter(
     (r) => r.status === 'inProgress'
   ).length
+  const emailError = filteredRows.value.filter(
+    (r) => r.status === 'email_error'
+  ).length
   const pending = filteredRows.value.filter(
     (r) => r.status === 'pending'
   ).length
-  return { all, submitted, inProgress, pending }
+  return { all, submitted, inProgress, emailError, pending }
 })
 
 // Pagination (Configurable: 5, 10, 15, 20 items per page)
@@ -686,6 +740,140 @@ function openDoc(
   emit('openDocument', { type, row })
 }
 
+// =============================================================================
+// EDIT & DELETE STUDENT ACTIONS
+// =============================================================================
+const isEditModalOpen = ref(false)
+const isEditSubmitting = ref(false)
+const editingStudentId = ref<string>('')
+
+const editForm = ref({
+  studentId: '',
+  nameTh: '',
+  nameEn: '',
+  email: '',
+  personalEmail: '',
+  schoolId: '',
+  programId: '',
+  courseId: '',
+  semester: '',
+  company: '',
+  companyAddress: '',
+  province: '',
+  academicYear: 2569,
+  admissionYear: 2565
+})
+
+const availableProgramsForEditSchool = computed(() => {
+  if (!editForm.value.schoolId) return props.programs || []
+  return (
+    props.programs?.filter((p) => p.schoolId === editForm.value.schoolId) || []
+  )
+})
+
+function openEditModal(row: EnrichedStudentRow) {
+  const s = row.student
+  editingStudentId.value = s.id
+  editForm.value = {
+    studentId: s.studentId,
+    nameTh: s.name?.th || '',
+    nameEn: s.name?.en || '',
+    email: s.email || '',
+    personalEmail: s.personalEmail || '',
+    schoolId: s.schoolId || '',
+    programId: s.programId || '',
+    courseId: s.courseId || '',
+    semester:
+      row.semester && row.semester !== '-'
+        ? row.semester
+        : s.semester || 'ภาคการศึกษาต้น',
+    company: s.company || '',
+    companyAddress:
+      (s as unknown as { companyAddress?: string }).companyAddress ||
+      row.companyAddress ||
+      '',
+    province: s.province || '',
+    academicYear: Number(row.academicYear) || 2569,
+    admissionYear: s.admissionYear || 2565
+  }
+  isEditModalOpen.value = true
+}
+
+async function handleEditSubmit() {
+  if (!editingStudentId.value) return
+  isEditSubmitting.value = true
+  try {
+    await api(`/students/${editingStudentId.value}`, {
+      method: 'PATCH',
+      body: {
+        name: {
+          th: editForm.value.nameTh.trim(),
+          en: editForm.value.nameEn.trim()
+        },
+        email: editForm.value.email.trim().toLowerCase(),
+        personalEmail: editForm.value.personalEmail.trim()
+          ? editForm.value.personalEmail.trim().toLowerCase()
+          : undefined,
+        schoolId: editForm.value.schoolId,
+        programId: editForm.value.programId,
+        courseId: editForm.value.courseId || undefined,
+        semester: editForm.value.semester || undefined,
+        company: editForm.value.company.trim() || undefined,
+        companyAddress: editForm.value.companyAddress.trim() || undefined,
+        province: editForm.value.province.trim() || undefined,
+        academicYear: Number(editForm.value.academicYear) || undefined,
+        admissionYear: Number(editForm.value.admissionYear) || undefined
+      }
+    })
+
+    toast.add({
+      title: 'อัปเดตข้อมูลนักศึกษาสำเร็จ',
+      description: `อัปเดตข้อมูล ${editForm.value.nameTh} (${editForm.value.studentId}) เรียบร้อยแล้ว`,
+      color: 'success'
+    })
+
+    isEditModalOpen.value = false
+    emit('refresh')
+  } catch (err: unknown) {
+    const msg =
+      err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการอัปเดตข้อมูล'
+    toast.add({
+      title: 'อัปเดตข้อมูลไม่สำเร็จ',
+      description: msg,
+      color: 'error'
+    })
+  } finally {
+    isEditSubmitting.value = false
+  }
+}
+
+async function handleDeleteStudent(row: EnrichedStudentRow) {
+  if (
+    !confirm(
+      `คุณต้องการลบข้อมูลนักศึกษา "${row.nameTh}" (${row.studentId}) หรือไม่?`
+    )
+  ) {
+    return
+  }
+  try {
+    await api(`/students/${row.student.id}`, {
+      method: 'DELETE'
+    })
+    toast.add({
+      title: 'ลบข้อมูลสำเร็จ',
+      description: `ลบข้อมูลนักศึกษา ${row.nameTh} เรียบร้อยแล้ว`,
+      color: 'success'
+    })
+    emit('refresh')
+  } catch {
+    toast.add({
+      title: 'ดำเนินการไม่สำเร็จ',
+      description: 'ไม่สามารถลบข้อมูลนักศึกษาได้',
+      color: 'error'
+    })
+  }
+}
+
 // Dropdown Action Menu for each student row (3 dots icon)
 function getRowActions(row: EnrichedStudentRow) {
   const hasPin = row.accessPin && row.accessPin !== '-'
@@ -699,13 +887,22 @@ function getRowActions(row: EnrichedStudentRow) {
     ],
     [
       {
-        label: 'พิมพ์ใบประกาศนียบัตร',
+        label: 'แก้ไขข้อมูล',
+        icon: 'i-lucide-pencil',
+        onSelect: () => openEditModal(row)
+      }
+    ],
+    [
+      {
+        label: 'Certificate (ยังไม่พร้อมออกเอกสาร)',
         icon: 'i-lucide-award',
+        disabled: true,
         onSelect: () => openDoc('certification', row)
       },
       {
-        label: 'พิมพ์หนังสือส่งตัว',
+        label: 'Transcript (ยังไม่พร้อมออกเอกสาร)',
         icon: 'i-lucide-file-text',
+        disabled: true,
         onSelect: () => openDoc('referral', row)
       }
     ],
@@ -739,6 +936,14 @@ function getRowActions(row: EnrichedStudentRow) {
               disabled: true
             }
           ])
+    ],
+    [
+      {
+        label: 'ลบข้อมูล',
+        icon: 'i-lucide-trash-2',
+        color: 'error' as const,
+        onSelect: () => handleDeleteStudent(row)
+      }
     ]
   ]
 }
@@ -899,132 +1104,6 @@ function exportToExcel(locale: 'th' | 'en'): void {
 
   exportMenuOpen.value = false
 }
-
-// =============================================================================
-// POWER BI DATASET EXPORT (CSV UTF-8 with BOM & Excel Flat Table)
-// =============================================================================
-function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
-  if (!import.meta.client) return
-
-  const rowsToExport = filteredRows.value
-  if (rowsToExport.length === 0) {
-    toast.add({
-      title: 'ไม่มีข้อมูลสำหรับส่งออก',
-      description: 'กรุณาปรับเปลี่ยนตัวกรองเพื่อเลือกข้อมูลนักศึกษา',
-      color: 'warning',
-      icon: 'i-lucide-alert-triangle'
-    })
-    return
-  }
-
-  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-
-  // Structured flat dimensional dataset designed specifically for Power BI Desktop ingestion
-  const biRows = rowsToExport.map((row, index) => {
-    const isCompleted = row.status === 'submitted' ? 1 : 0
-    const numScore =
-      row.status === 'submitted' && row.scoreDisplay !== '-'
-        ? parseFloat(row.scoreDisplay)
-        : null
-    const yearBe =
-      typeof row.academicYear === 'number'
-        ? row.academicYear
-        : parseInt(String(row.academicYear), 10) || 2569
-    const yearAd =
-      typeof row.academicYearEn === 'number' ? row.academicYearEn : yearBe - 543
-    const semesterNum = parseInt(String(row.semester), 10) || 1
-
-    return {
-      Row_Index: index + 1,
-      Student_ID: String(row.studentId),
-      Student_Name_TH: row.nameTh,
-      Student_Name_EN: row.nameEn,
-      Student_Email: row.email,
-      Personal_Email: row.personalEmail !== '-' ? row.personalEmail : '',
-      School_Code: row.schoolCode,
-      School_Name_TH: row.schoolTh,
-      School_Name_EN: row.schoolEn,
-      Program_Code: row.programCode,
-      Program_Name_TH: row.programTh,
-      Program_Name_EN: row.programEn,
-      Academic_Year_BE: yearBe,
-      Academic_Year_AD: yearAd,
-      Semester: semesterNum,
-      Semester_Label: `ภาคการศึกษาที่ ${row.semester}`,
-      Company_Name: row.company,
-      Company_Province: row.province,
-      Advisor_Name: row.advisorTh,
-      Evaluator_Name: row.evaluatorTh,
-      Evaluator_Position: row.evaluatorPositionTh,
-      Evaluator_Email: row.evaluatorEmail,
-      Access_PIN: String(row.accessPin),
-      Evaluation_Status_Code: row.status,
-      Evaluation_Status_TH: row.statusTh,
-      Evaluation_Status_EN: row.statusEn,
-      Is_Completed: isCompleted,
-      Evaluation_Score: numScore,
-      Grade:
-        row.status === 'submitted' && row.gradeDisplay !== '-'
-          ? row.gradeDisplay
-          : '',
-      Evaluation_Comments:
-        row.commentsTh !== '-' ? row.commentsTh : ''
-    }
-  })
-
-  if (format === 'csv') {
-    // Generate CSV with UTF-8 BOM so Power BI reads Thai characters properly without manual encoding setup
-    const headers = Object.keys(biRows[0] || {})
-    const csvLines = [headers.join(',')]
-
-    for (const row of biRows) {
-      const lineValues = headers.map((header) => {
-        const val = (row as Record<string, unknown>)[header]
-        if (val === null || val === undefined) return ''
-        const strVal = String(val).replace(/"/g, '""')
-        return strVal.includes(',') ||
-          strVal.includes('"') ||
-          strVal.includes('\n')
-          ? `"${strVal}"`
-          : strVal
-      })
-      csvLines.push(lineValues.join(','))
-    }
-
-    const csvContent = '\ufeff' + csvLines.join('\r\n')
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const filename = `PowerBI_Internship_Dataset_${timestamp}.csv`
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-
-    toast.add({
-      title: 'ส่งออกไฟล์ Power BI (CSV) สำเร็จ',
-      description: `ดาวน์โหลด ${filename} (${rowsToExport.length} แถว) พร้อมนำเข้า Power BI Desktop ได้ทันที`,
-      color: 'success',
-      icon: 'i-lucide-bar-chart-3'
-    })
-  } else {
-    // Generate Excel XLSX formatted table
-    const ws = XLSX.utils.json_to_sheet(biRows)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'PowerBI_Fact_Internship')
-    const filename = `PowerBI_Internship_Model_${timestamp}.xlsx`
-    XLSX.writeFile(wb, filename)
-
-    toast.add({
-      title: 'ส่งออกไฟล์ Power BI (Excel) สำเร็จ',
-      description: `ดาวน์โหลด ${filename} (${rowsToExport.length} แถว) พร้อมนำเข้า Power BI Desktop ได้ทันที`,
-      color: 'success',
-      icon: 'i-lucide-bar-chart-3'
-    })
-  }
-}
 </script>
 
 <template>
@@ -1050,22 +1129,13 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
           </UBadge>
         </div>
         <p class="text-xs text-muted">
-          ตรวจสอบข้อมูลนักศึกษาทุกคนในระบบ แยกตามปีการศึกษา ภาคเรียน สถานประกอบการ และสถานะประเมิน
+          ตรวจสอบข้อมูลนักศึกษาทุกคนในระบบ แยกตามปีการศึกษา ภาคเรียน
+          สถานประกอบการ และสถานะประเมิน
         </p>
       </div>
 
       <!-- ปุ่มส่งออกข้อมูล (Export Buttons) -->
       <div class="flex flex-wrap items-center gap-2.5 shrink-0">
-        <UButton
-          color="neutral"
-          icon="i-lucide-refresh-cw"
-          label="รีเฟรชข้อมูล"
-          :loading="loading"
-          size="sm"
-          variant="outline"
-          @click="emit('refresh')"
-        />
-
         <!-- ส่งออกภาษาไทย -->
         <UButton
           color="success"
@@ -1093,9 +1163,11 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
     <!-- ========================================================================= -->
     <!-- 2. แถบสรุปตัวเลข (Quick Statistics Counter Badges)                       -->
     <!-- ========================================================================= -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
       <div
-        class="rounded-xl border border-default bg-default p-3.5 flex items-center gap-3"
+        class="rounded-xl border border-default bg-default p-3.5 flex items-center gap-3 cursor-pointer transition-all hover:border-primary/40"
+        :class="{ 'ring-2 ring-primary/50': selectedStatus === 'all' }"
+        @click="selectedStatus = 'all'"
       >
         <span
           class="grid size-10 place-items-center rounded-lg bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300"
@@ -1103,13 +1175,19 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
           <UIcon name="i-lucide-graduation-cap" class="size-5" />
         </span>
         <div>
-          <p class="text-xs text-muted">นักศึกษาตรงตามตัวกรอง</p>
+          <p class="text-xs text-muted">นักศึกษาทั้งหมด</p>
           <p class="text-xl font-bold text-highlighted">{{ stats.all }} คน</p>
         </div>
       </div>
 
       <div
-        class="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3.5 flex items-center gap-3"
+        class="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3.5 flex items-center gap-3 cursor-pointer transition-all hover:border-emerald-500/40"
+        :class="{
+          'ring-2 ring-emerald-500/50': selectedStatus === 'submitted'
+        }"
+        @click="
+          selectedStatus = selectedStatus === 'submitted' ? 'all' : 'submitted'
+        "
       >
         <span
           class="grid size-10 place-items-center rounded-lg bg-emerald-500/15 text-emerald-600"
@@ -1127,7 +1205,12 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
       </div>
 
       <div
-        class="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5 flex items-center gap-3"
+        class="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5 flex items-center gap-3 cursor-pointer transition-all hover:border-amber-500/40"
+        :class="{ 'ring-2 ring-amber-500/50': selectedStatus === 'inProgress' }"
+        @click="
+          selectedStatus =
+            selectedStatus === 'inProgress' ? 'all' : 'inProgress'
+        "
       >
         <span
           class="grid size-10 place-items-center rounded-lg bg-amber-500/15 text-amber-600"
@@ -1145,7 +1228,34 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
       </div>
 
       <div
-        class="rounded-xl border border-neutral-500/20 bg-neutral-500/5 p-3.5 flex items-center gap-3"
+        class="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3.5 flex items-center gap-3 cursor-pointer transition-all hover:border-rose-500/40"
+        :class="{ 'ring-2 ring-rose-500/50': selectedStatus === 'email_error' }"
+        @click="
+          selectedStatus =
+            selectedStatus === 'email_error' ? 'all' : 'email_error'
+        "
+      >
+        <span
+          class="grid size-10 place-items-center rounded-lg bg-rose-500/15 text-rose-600"
+        >
+          <UIcon name="i-lucide-alert-triangle" class="size-5" />
+        </span>
+        <div>
+          <p class="text-xs text-rose-700 dark:text-rose-400">
+            ส่งอีเมลผิดพลาด
+          </p>
+          <p class="text-xl font-bold text-rose-700 dark:text-rose-300">
+            {{ stats.emailError }} คน
+          </p>
+        </div>
+      </div>
+
+      <div
+        class="rounded-xl border border-neutral-500/20 bg-neutral-500/5 p-3.5 flex items-center gap-3 cursor-pointer transition-all hover:border-neutral-500/40"
+        :class="{ 'ring-2 ring-neutral-500/50': selectedStatus === 'pending' }"
+        @click="
+          selectedStatus = selectedStatus === 'pending' ? 'all' : 'pending'
+        "
       >
         <span
           class="grid size-10 place-items-center rounded-lg bg-neutral-500/15 text-neutral-600 dark:text-neutral-300"
@@ -1223,7 +1333,11 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
             class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
           >
             <option value="all">ทุกสำนักวิชา (All Schools)</option>
-            <option v-for="sch in availableSchools" :key="sch.id" :value="sch.id">
+            <option
+              v-for="sch in availableSchools"
+              :key="sch.id"
+              :value="sch.id"
+            >
               {{ sch.nameTh }} {{ sch.schoolCode ? `(${sch.schoolCode})` : '' }}
             </option>
           </select>
@@ -1242,7 +1356,11 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
             class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary"
           >
             <option value="all">ทุกสถานะ (All Statuses)</option>
-            <option v-for="st in availableStatuses" :key="st.value" :value="st.value">
+            <option
+              v-for="st in availableStatuses"
+              :key="st.value"
+              :value="st.value"
+            >
               {{ st.icon }} {{ st.labelTh }}
             </option>
           </select>
@@ -1396,7 +1514,9 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
               <td class="py-3 px-4">
                 <div class="space-y-1">
                   <div>
-                    <p class="font-medium text-highlighted text-xs leading-snug">
+                    <p
+                      class="font-medium text-highlighted text-xs leading-snug"
+                    >
                       {{ row.schoolTh }}
                     </p>
                     <p class="text-[11px] text-muted leading-snug">
@@ -1475,6 +1595,16 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                     ส่งผลประเมินแล้ว
                   </UBadge>
                   <UBadge
+                    v-else-if="row.status === 'email_error'"
+                    color="error"
+                    size="xs"
+                    variant="subtle"
+                    class="font-semibold flex items-center gap-1 w-fit"
+                  >
+                    <UIcon name="i-lucide-alert-triangle" class="size-3" />
+                    ส่งอีเมลผิดพลาด
+                  </UBadge>
+                  <UBadge
                     v-else-if="row.status === 'inProgress'"
                     color="warning"
                     size="xs"
@@ -1497,11 +1627,15 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
 
                   <!-- แสดงคะแนนถ้ามีผลประเมินจริง -->
                   <div
-                    v-if="row.status === 'submitted' && row.scoreDisplay !== '-'"
+                    v-if="
+                      row.status === 'submitted' && row.scoreDisplay !== '-'
+                    "
                     class="text-[11px] text-emerald-700 dark:text-emerald-400 font-bold"
                   >
                     คะแนน: {{ row.scoreDisplay }} / 5.0
-                    <span v-if="row.gradeDisplay !== '-'"> (เกรด {{ row.gradeDisplay }})</span>
+                    <span v-if="row.gradeDisplay !== '-'">
+                      (เกรด {{ row.gradeDisplay }})</span
+                    >
                   </div>
                 </div>
               </td>
@@ -1543,7 +1677,8 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
     <UModal
       v-model:open="detailModalOpen"
       :ui="{
-        content: 'sm:max-w-5xl lg:max-w-6xl xl:max-w-7xl w-[96vw] max-h-[92vh] flex flex-col p-0 overflow-hidden'
+        content:
+          'sm:max-w-5xl lg:max-w-6xl xl:max-w-7xl w-[96vw] max-h-[92vh] flex flex-col p-0 overflow-hidden'
       }"
     >
       <template #content>
@@ -1631,7 +1766,8 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                       <div class="pt-0.5 flex items-center gap-1.5">
                         <UBadge
                           :color="
-                            activeStudentRow.courseDisplay === 'Cooperative Education'
+                            activeStudentRow.courseDisplay ===
+                            'Cooperative Education'
                               ? 'primary'
                               : 'neutral'
                           "
@@ -1641,7 +1777,8 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                         >
                           <UIcon
                             :name="
-                              activeStudentRow.courseDisplay === 'Cooperative Education'
+                              activeStudentRow.courseDisplay ===
+                              'Cooperative Education'
                                 ? 'i-lucide-briefcase'
                                 : 'i-lucide-graduation-cap'
                             "
@@ -1649,23 +1786,44 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                           />
                           <span>{{ activeStudentRow.courseDisplay }}</span>
                         </UBadge>
-                        <span class="text-muted text-[11px]">({{ activeStudentRow.courseTh }})</span>
+                        <span class="text-muted text-[11px]"
+                          >({{ activeStudentRow.courseTh }})</span
+                        >
                       </div>
                     </div>
-                    <div class="flex justify-between items-center pt-1 border-t border-default/70">
-                      <span>ปีการศึกษา:
-                        <strong class="text-highlighted">{{ activeStudentRow.academicYear }} ({{ activeStudentRow.academicYearEn }})</strong>
+                    <div
+                      class="flex justify-between items-center pt-1 border-t border-default/70"
+                    >
+                      <span
+                        >ปีการศึกษา:
+                        <strong class="text-highlighted"
+                          >{{ activeStudentRow.academicYear }} ({{
+                            activeStudentRow.academicYearEn
+                          }})</strong
+                        >
                       </span>
-                      <span>ภาคเรียน:
-                        <strong class="text-highlighted">{{ activeStudentRow.semester?.startsWith('ภาคการศึกษา') ? activeStudentRow.semester : `ภาคการศึกษาที่ ${activeStudentRow.semester}` }}</strong>
+                      <span
+                        >ภาคเรียน:
+                        <strong class="text-highlighted">{{
+                          activeStudentRow.semester?.startsWith('ภาคการศึกษา')
+                            ? activeStudentRow.semester
+                            : `ภาคการศึกษาที่ ${activeStudentRow.semester}`
+                        }}</strong>
                       </span>
                     </div>
                     <div class="border-t border-default/70 pt-1.5">
                       <span class="text-muted/80">อาจารย์ที่ปรึกษา:</span>
                       <p class="font-semibold text-highlighted text-xs">
-                        {{ activeStudentRow.advisorTh !== '-' ? activeStudentRow.advisorTh : 'ยังไม่ได้ระบุอาจารย์ที่ปรึกษา' }}
+                        {{
+                          activeStudentRow.advisorTh !== '-'
+                            ? activeStudentRow.advisorTh
+                            : 'ยังไม่ได้ระบุอาจารย์ที่ปรึกษา'
+                        }}
                       </p>
-                      <p v-if="activeStudentRow.advisorEn !== '-'" class="text-[11px] text-muted">
+                      <p
+                        v-if="activeStudentRow.advisorEn !== '-'"
+                        class="text-[11px] text-muted"
+                      >
                         {{ activeStudentRow.advisorEn }}
                       </p>
                     </div>
@@ -1679,7 +1837,10 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                   <h4
                     class="font-bold text-highlighted flex items-center gap-1.5 text-xs"
                   >
-                    <UIcon name="i-lucide-building-2" class="size-4 text-primary" />
+                    <UIcon
+                      name="i-lucide-building-2"
+                      class="size-4 text-primary"
+                    />
                     สถานที่ตั้งบริษัทและคนทำฟอร์ม
                   </h4>
                   <div class="space-y-2 pt-1 text-muted">
@@ -1696,16 +1857,33 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                       </p>
                     </div>
                     <div class="border-t border-default/70 pt-1.5">
-                      <span class="text-muted/80">คนทำแบบฟอร์ม (ผู้ประเมิน):</span>
+                      <span class="text-muted/80"
+                        >คนทำแบบฟอร์ม (ผู้ประเมิน):</span
+                      >
                       <p class="font-semibold text-highlighted text-xs">
-                        {{ activeStudentRow.evaluatorTh !== '-' ? activeStudentRow.evaluatorTh : 'ยังไม่ได้ระบุผู้ประเมิน' }}
+                        {{
+                          activeStudentRow.evaluatorTh !== '-'
+                            ? activeStudentRow.evaluatorTh
+                            : 'ยังไม่ได้ระบุผู้ประเมิน'
+                        }}
                       </p>
                       <p
-                        v-if="activeStudentRow.evaluatorPositionTh !== '-' || activeStudentRow.evaluatorEmail !== '-'"
+                        v-if="
+                          activeStudentRow.evaluatorPositionTh !== '-' ||
+                          activeStudentRow.evaluatorEmail !== '-'
+                        "
                         class="text-[11px] text-muted"
                       >
-                        {{ activeStudentRow.evaluatorPositionTh !== '-' ? activeStudentRow.evaluatorPositionTh : '' }}
-                        {{ activeStudentRow.evaluatorEmail !== '-' ? `(${activeStudentRow.evaluatorEmail})` : '' }}
+                        {{
+                          activeStudentRow.evaluatorPositionTh !== '-'
+                            ? activeStudentRow.evaluatorPositionTh
+                            : ''
+                        }}
+                        {{
+                          activeStudentRow.evaluatorEmail !== '-'
+                            ? `(${activeStudentRow.evaluatorEmail})`
+                            : ''
+                        }}
                       </p>
                     </div>
 
@@ -1740,11 +1918,18 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                       v-else
                       class="mt-2 p-2.5 rounded-lg border border-default bg-muted/30 text-xs text-muted space-y-1"
                     >
-                      <p class="font-medium text-highlighted flex items-center gap-1">
-                        <UIcon name="i-lucide-info" class="size-3.5 text-muted" />
+                      <p
+                        class="font-medium text-highlighted flex items-center gap-1"
+                      >
+                        <UIcon
+                          name="i-lucide-info"
+                          class="size-3.5 text-muted"
+                        />
                         ยังไม่มีรหัส PIN
                       </p>
-                      <p class="text-[11px]">รอการระบุผู้ประเมินและส่งคำขอประเมิน</p>
+                      <p class="text-[11px]">
+                        รอการระบุผู้ประเมินและส่งคำขอประเมิน
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -1764,7 +1949,11 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                       :color="
                         activeStudentRow.status === 'submitted'
                           ? 'success'
-                          : 'neutral'
+                          : activeStudentRow.status === 'email_error'
+                            ? 'error'
+                            : activeStudentRow.status === 'inProgress'
+                              ? 'warning'
+                              : 'neutral'
                       "
                       size="xs"
                       variant="soft"
@@ -1774,13 +1963,24 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                   </div>
 
                   <div
-                    v-if="activeStudentRow.status === 'submitted' && activeStudentRow.scoreDisplay !== '-'"
+                    v-if="
+                      activeStudentRow.status === 'submitted' &&
+                      activeStudentRow.scoreDisplay !== '-'
+                    "
                     class="space-y-3"
                   >
                     <div class="grid grid-cols-2 gap-2 text-center">
-                      <div class="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 col-span-2">
-                        <p class="text-[10px] text-emerald-700 dark:text-emerald-400">คะแนนรวมเฉลี่ย</p>
-                        <p class="font-bold text-sm text-emerald-600 dark:text-emerald-400 mt-0.5">
+                      <div
+                        class="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 col-span-2"
+                      >
+                        <p
+                          class="text-[10px] text-emerald-700 dark:text-emerald-400"
+                        >
+                          คะแนนรวมเฉลี่ย
+                        </p>
+                        <p
+                          class="font-bold text-sm text-emerald-600 dark:text-emerald-400 mt-0.5"
+                        >
                           {{ activeStudentRow.scoreDisplay }} / 5.0
                         </p>
                       </div>
@@ -1788,7 +1988,9 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                         v-if="activeStudentRow.gradeDisplay !== '-'"
                         class="p-2 rounded-lg bg-primary/10 border border-primary/20 col-span-2"
                       >
-                        <p class="text-[10px] text-primary">ระดับผลการประเมิน</p>
+                        <p class="text-[10px] text-primary">
+                          ระดับผลการประเมิน
+                        </p>
                         <p class="font-bold text-sm text-primary mt-0.5">
                           {{ activeStudentRow.gradeDisplay }}
                         </p>
@@ -1808,9 +2010,36 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                     </div>
                   </div>
 
+                  <div
+                    v-else-if="activeStudentRow.status === 'email_error'"
+                    class="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-700 dark:text-red-400 text-xs space-y-1"
+                  >
+                    <p class="font-bold flex items-center gap-1.5">
+                      <UIcon
+                        name="i-lucide-alert-triangle"
+                        class="size-4 text-error"
+                      />
+                      ส่งอีเมลแบบประเมินไม่สำเร็จ
+                    </p>
+                    <p class="text-muted leading-relaxed">
+                      ระบบส่งอีเมลไม่สำเร็จเนื่องจากที่อยู่อีเมลไม่ถูกต้อง
+                      หรือเซิร์ฟเวอร์ปลายทางปฏิเสธ
+                      โปรดตรวจสอบอีเมลผู้ประเมินและส่งใหม่อีกครั้ง
+                    </p>
+                  </div>
+
                   <div v-else class="text-center py-4 text-muted text-xs">
-                    <p>{{ activeStudentRow.status === 'submitted' ? 'ยังไม่มีข้อมูลคะแนนประเมิน' : 'ผู้ประเมินยังไม่ได้ส่งผลการประเมินฉบับสมบูรณ์' }}</p>
-                    <p v-if="activeStudentRow.accessPin !== '-'" class="text-[11px] text-muted/70 mt-0.5">
+                    <p>
+                      {{
+                        activeStudentRow.status === 'submitted'
+                          ? 'ยังไม่มีข้อมูลคะแนนประเมิน'
+                          : 'ผู้ประเมินยังไม่ได้ส่งผลการประเมินฉบับสมบูรณ์'
+                      }}
+                    </p>
+                    <p
+                      v-if="activeStudentRow.accessPin !== '-'"
+                      class="text-[11px] text-muted/70 mt-0.5"
+                    >
                       สามารถส่งรหัส PIN หรือลิงก์ไปยังผู้ประเมินเพื่อดำเนินการ
                     </p>
                   </div>
@@ -1821,7 +2050,12 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
               <!-- ฝั่งขวา: การวิเคราะห์สมรรถนะ & Benchmark (7 cols)               -->
               <!-- ============================================================= -->
               <div class="lg:col-span-7">
-                <div v-if="activeStudentRow.status === 'submitted' && activeStudentRow.scoreDisplay !== '-'">
+                <div
+                  v-if="
+                    activeStudentRow.status === 'submitted' &&
+                    activeStudentRow.scoreDisplay !== '-'
+                  "
+                >
                   <StudentSkillBenchmarkChart
                     :student-score="activeStudentRow.scoreDisplay"
                     :academic-year="activeStudentRow.academicYear"
@@ -1832,7 +2066,9 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                   v-else
                   class="rounded-xl border border-default bg-muted/10 p-8 text-center space-y-3 flex flex-col items-center justify-center min-h-[360px]"
                 >
-                  <div class="size-14 rounded-full bg-amber-500/10 text-amber-600 flex items-center justify-center ring-1 ring-amber-500/20">
+                  <div
+                    class="size-14 rounded-full bg-amber-500/10 text-amber-600 flex items-center justify-center ring-1 ring-amber-500/20"
+                  >
                     <UIcon name="i-lucide-clock-3" class="size-7" />
                   </div>
                   <div>
@@ -1840,7 +2076,10 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
                       ยังไม่มีข้อมูลการประเมินสมรรถนะ
                     </h4>
                     <p class="text-xs text-muted mt-1 max-w-md">
-                      เมื่อผู้ประเมินจากสถานประกอบการเข้าทำแบบฟอร์มด้วยรหัส PIN และส่งผลการประเมิน ระบบจะวิเคราะห์และประมวลผลเรดาร์สมรรถนะเทียบกับเพื่อนร่วมรุ่นปี {{ activeStudentRow.academicYear }} ให้ทันที
+                      เมื่อผู้ประเมินจากสถานประกอบการเข้าทำแบบฟอร์มด้วยรหัส PIN
+                      และส่งผลการประเมิน
+                      ระบบจะวิเคราะห์และประมวลผลเรดาร์สมรรถนะเทียบกับเพื่อนร่วมรุ่นปี
+                      {{ activeStudentRow.academicYear }} ให้ทันที
                     </p>
                   </div>
                   <div v-if="activeStudentRow.accessPin !== '-'" class="pt-2">
@@ -1875,17 +2114,19 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
               <UButton
                 color="warning"
                 icon="i-lucide-award"
-                label="พิมพ์ใบประกาศ"
+                label="Certificate ยังไม่พร้อม"
                 size="sm"
                 variant="subtle"
+                disabled
                 @click="openDoc('certification', activeStudentRow)"
               />
               <UButton
                 color="info"
                 icon="i-lucide-file-text"
-                label="พิมพ์หนังสือส่งตัว"
+                label="Transcript ยังไม่พร้อม"
                 size="sm"
                 variant="subtle"
+                disabled
                 @click="openDoc('referral', activeStudentRow)"
               />
             </div>
@@ -1911,5 +2152,377 @@ function exportToPowerBI(format: 'csv' | 'xlsx' = 'csv'): void {
         </div>
       </template>
     </UModal>
+
+    <!-- ========================================================================= -->
+    <!-- 6. MODAL EDIT STUDENT (แก้ไขข้อมูลนักศึกษา)                                 -->
+    <!-- ========================================================================= -->
+    <div
+      v-if="isEditModalOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      @click="isEditModalOpen = false"
+    >
+      <div
+        class="w-full max-w-5xl lg:max-w-6xl xl:max-w-7xl rounded-2xl sm:rounded-3xl border border-default bg-default p-6 sm:p-8 shadow-2xl space-y-6 max-h-[92vh] overflow-y-auto"
+        @click.stop
+      >
+        <div
+          class="flex items-center justify-between border-b border-default pb-4"
+        >
+          <div class="flex items-center gap-3">
+            <span
+              class="grid size-11 place-items-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/20"
+            >
+              <UIcon name="i-lucide-pencil-line" class="size-6" />
+            </span>
+            <div>
+              <h2 class="text-xl font-bold text-highlighted tracking-tight">
+                แก้ไขข้อมูลนักศึกษา
+                <span class="font-mono text-primary font-bold ml-1"
+                  >({{ editForm.studentId }})</span
+                >
+              </h2>
+              <p class="text-xs sm:text-sm text-muted mt-0.5">
+                แก้ไขข้อมูลส่วนตัว สำนักวิชา หลักสูตร
+                และข้อมูลการฝึกงานของนักศึกษา
+              </p>
+            </div>
+          </div>
+          <UButton
+            color="neutral"
+            icon="i-lucide-x"
+            size="sm"
+            variant="ghost"
+            @click="isEditModalOpen = false"
+          />
+        </div>
+
+        <form class="space-y-6" @submit.prevent="handleEditSubmit">
+          <!-- 2 Columns Grid -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- คอลัมน์ที่ 1: ข้อมูลสถานประกอบการและหลักสูตร -->
+            <div
+              class="rounded-2xl border border-default/70 bg-muted/15 dark:bg-muted/10 p-5 sm:p-6 space-y-4 shadow-sm"
+            >
+              <div
+                class="flex items-center gap-2.5 pb-3 border-b border-default text-xs font-bold uppercase tracking-wider text-primary"
+              >
+                <UIcon
+                  name="i-lucide-building-2"
+                  class="size-4.5 text-primary"
+                />
+                <span
+                  >ข้อมูลสถานประกอบการและหลักสูตร (Internship & Course
+                  Info)</span
+                >
+              </div>
+
+              <!-- 1. สถานประกอบการ -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  สถานประกอบการ (Company / หน่วยงานที่ฝึกงาน)
+                </label>
+                <UInput
+                  v-model="editForm.company"
+                  placeholder="เช่น บริษัท ดิจิทัล โซลูชั่นส์ จำกัด หรือ สวทช."
+                  size="lg"
+                  class="w-full"
+                  icon="i-lucide-building-2"
+                />
+              </div>
+
+              <!-- 2. สาขา / ที่ตั้งสถานประกอบการ -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  สาขา / ที่ตั้งสถานประกอบการ (Branch / Location)
+                </label>
+                <UInput
+                  v-model="editForm.companyAddress"
+                  placeholder="เช่น สำนักงานใหญ่ หรือ 99/1 ถ.พหลโยธิน"
+                  size="lg"
+                  class="w-full"
+                  icon="i-lucide-map-pin"
+                />
+              </div>
+
+              <!-- 3. จังหวัดที่ฝึกงาน -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  จังหวัดที่ฝึกงาน (Province)
+                </label>
+                <input
+                  v-model="editForm.province"
+                  placeholder="เช่น เชียงราย, กรุงเทพมหานคร"
+                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors"
+                />
+              </div>
+
+              <!-- 4. สำนักวิชา -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  สำนักวิชา (School) <span class="text-rose-500">*</span>
+                </label>
+                <select
+                  v-model="editForm.schoolId"
+                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                  required
+                >
+                  <option
+                    v-for="school in schools"
+                    :key="school.id"
+                    :value="school.id"
+                  >
+                    {{ school.name?.th }} ({{ school.name?.en }})
+                  </option>
+                </select>
+              </div>
+
+              <!-- 5. สาขาวิชา / หลักสูตร -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  สาขาวิชา / หลักสูตร (Program)
+                  <span class="text-rose-500">*</span>
+                </label>
+                <select
+                  v-model="editForm.programId"
+                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                  required
+                >
+                  <option
+                    v-for="prog in availableProgramsForEditSchool"
+                    :key="prog.id"
+                    :value="prog.id"
+                  >
+                    {{ prog.name?.th }} ({{ prog.name?.en }})
+                  </option>
+                </select>
+              </div>
+
+              <!-- 6. รายวิชาที่ฝึกงาน -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  รายวิชาที่ฝึกงาน (Course)
+                </label>
+                <select
+                  v-model="editForm.courseId"
+                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                >
+                  <option value="">-- ไม่ระบุรายวิชา --</option>
+                  <option v-for="c in courses" :key="c.id" :value="c.id">
+                    {{ c.courseCode ? c.courseCode + ' — ' : ''
+                    }}{{ c.name?.th }} ({{ c.name?.en }})
+                  </option>
+                </select>
+              </div>
+
+              <!-- 7. ภาคการศึกษา -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  ภาคการศึกษา (Semester)
+                </label>
+                <select
+                  v-model="editForm.semester"
+                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                >
+                  <option value="" disabled>-- เลือกภาคการศึกษา --</option>
+                  <option
+                    v-if="
+                      editForm.semester &&
+                      ![
+                        'ภาคการศึกษาต้น',
+                        'ภาคการศึกษาปลาย',
+                        'ภาคการศึกษาฤดูร้อน'
+                      ].includes(editForm.semester)
+                    "
+                    :value="editForm.semester"
+                  >
+                    {{ editForm.semester }}
+                  </option>
+                  <option value="ภาคการศึกษาต้น">
+                    ภาคการศึกษาที่ 1 (ภาคการศึกษาต้น)
+                  </option>
+                  <option value="ภาคการศึกษาปลาย">
+                    ภาคการศึกษาที่ 2 (ภาคการศึกษาปลาย)
+                  </option>
+                  <option value="ภาคการศึกษาฤดูร้อน">
+                    ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <!-- คอลัมน์ที่ 2: ข้อมูลส่วนตัวและการศึกษา -->
+            <div
+              class="rounded-2xl border border-default/70 bg-muted/15 dark:bg-muted/10 p-5 sm:p-6 space-y-4 shadow-sm"
+            >
+              <div
+                class="flex items-center gap-2.5 pb-3 border-b border-default text-xs font-bold uppercase tracking-wider text-primary"
+              >
+                <UIcon name="i-lucide-user" class="size-4.5 text-primary" />
+                <span>ข้อมูลส่วนตัวและการศึกษา (Personal & Academic Info)</span>
+              </div>
+
+              <!-- 1. รหัสนักศึกษา (Readonly) -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  รหัสนักศึกษา (Student ID)
+                </label>
+                <UInput
+                  v-model="editForm.studentId"
+                  disabled
+                  size="lg"
+                  class="w-full font-mono font-bold opacity-80"
+                  icon="i-lucide-id-card"
+                />
+              </div>
+
+              <!-- 2. ปีการศึกษา และ ปีที่เข้าศึกษา (2-Column Subgrid) -->
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label
+                    class="block text-xs font-semibold text-highlighted mb-1.5"
+                  >
+                    ปีการศึกษา (Academic Year)
+                  </label>
+                  <UInput
+                    v-model.number="editForm.academicYear"
+                    type="number"
+                    placeholder="2569"
+                    size="lg"
+                    class="w-full font-mono"
+                    icon="i-lucide-calendar"
+                  />
+                </div>
+                <div>
+                  <label
+                    class="block text-xs font-semibold text-highlighted mb-1.5"
+                  >
+                    ปีที่เข้าศึกษา (Admission Year)
+                  </label>
+                  <UInput
+                    v-model.number="editForm.admissionYear"
+                    type="number"
+                    placeholder="2565"
+                    size="lg"
+                    class="w-full font-mono"
+                    icon="i-lucide-calendar-days"
+                  />
+                </div>
+              </div>
+
+              <!-- 3. Thai Name -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  ชื่อ-นามสกุล (ภาษาไทย) <span class="text-rose-500">*</span>
+                </label>
+                <UInput
+                  v-model="editForm.nameTh"
+                  placeholder="เช่น นายนิติพงษ์ สิทธิวงค์"
+                  size="lg"
+                  class="w-full"
+                  required
+                />
+              </div>
+
+              <!-- 4. English Name -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  Full Name (English) <span class="text-rose-500">*</span>
+                </label>
+                <UInput
+                  v-model="editForm.nameEn"
+                  placeholder="เช่น Mr. Nitipong Sittiwong"
+                  size="lg"
+                  class="w-full"
+                  required
+                />
+              </div>
+
+              <!-- 5. Email: เมลนักศึกษา -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  อีเมลนักศึกษา (Student Email / ลำดวนเมล)
+                  <span class="text-rose-500">*</span>
+                </label>
+                <UInput
+                  v-model="editForm.email"
+                  type="email"
+                  placeholder="เช่น student@lamduan.mfu.ac.th"
+                  size="lg"
+                  class="w-full font-mono"
+                  icon="i-lucide-graduation-cap"
+                  required
+                />
+                <p class="text-[11px] text-muted mt-1">
+                  อีเมลทางการมหาวิทยาลัยแม่ฟ้าหลวง (@lamduan.mfu.ac.th)
+                </p>
+              </div>
+
+              <!-- 6. Email: เมลส่วนตัว -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  อีเมลส่วนตัว (Personal Email)
+                </label>
+                <UInput
+                  v-model="editForm.personalEmail"
+                  type="email"
+                  placeholder="เช่น somchai.dev@gmail.com"
+                  size="lg"
+                  class="w-full font-mono"
+                  icon="i-lucide-mail"
+                />
+                <p class="text-[11px] text-muted mt-1">
+                  อีเมลส่วนตัวหรืออีเมลสำรองสำหรับติดต่อ (เช่น Gmail, Outlook)
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Actions -->
+          <div
+            class="flex items-center justify-end gap-3 pt-4 border-t border-default"
+          >
+            <UButton
+              color="neutral"
+              label="ยกเลิก"
+              variant="outline"
+              size="lg"
+              @click="isEditModalOpen = false"
+            />
+            <UButton
+              color="primary"
+              icon="i-lucide-check"
+              label="บันทึกการแก้ไข"
+              type="submit"
+              size="lg"
+              :loading="isEditSubmitting"
+            />
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>

@@ -129,10 +129,20 @@ export class DeliveryRecord {
 
   @Prop()
   public processingStartedAt?: Date
+
+  @Prop()
+  public processingLeaseUntil?: Date
+
+  @Prop()
+  public processingToken?: string
+
+  @Prop()
+  public providerAttemptStartedAt?: Date
 }
 
 export const DeliverySchema = SchemaFactory.createForClass(DeliveryRecord)
 DeliverySchema.index({ campaignId: 1, assignmentId: 1 }, { unique: true })
+DeliverySchema.index({ status: 1, processingLeaseUntil: 1 })
 
 @Schema({ ...schemaOptions, collection: 'invitations' })
 export class InvitationRecord {

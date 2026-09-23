@@ -15,6 +15,7 @@ import { AuditModule } from './audit/audit.module.js'
 import { AcademicModule } from './academic/academic.module.js'
 import { AccessGuard } from './auth/access.guard.js'
 import { AuthRateLimitGuard } from './auth/auth-rate-limit.guard.js'
+import { CsrfGuard } from './auth/csrf.guard.js'
 import { AuthModule } from './auth/auth.module.js'
 import { redisConnectionOptions } from './common/redis.js'
 import { RequestIdMiddleware } from './common/request-id.middleware.js'
@@ -98,6 +99,7 @@ import { SmtpSettingsModule } from './system-settings/smtp-settings.module.js'
     HealthService,
     RequestIdMiddleware,
     { provide: APP_GUARD, useClass: AuthRateLimitGuard },
+    { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: AccessGuard },
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor }
   ]

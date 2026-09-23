@@ -54,6 +54,15 @@ export class DevAuthController {
         ...(input.studentId ? { studentId: input.studentId } : {}),
         ...(input.assignmentId ? { assignmentId: input.assignmentId } : {})
       },
+      roleScopes: [
+        {
+          role: input.role,
+          tenant:
+            input.role === 'systemAdmin' || input.role === 'internshipStaff',
+          schoolIds: input.schoolIds,
+          programIds: input.programIds
+        }
+      ],
       ...(input.avatarUrl
         ? { avatarUrl: input.avatarUrl, picture: input.avatarUrl }
         : {})

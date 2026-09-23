@@ -18,6 +18,7 @@ import {
 } from 'openid-client'
 
 import { TokenService } from './token.service.js'
+import { hasVerifiedEmailClaim } from './oidc-claims.policy.js'
 import { UsersService } from './users.service.js'
 
 interface AuthorizationStart {
@@ -101,7 +102,8 @@ export class OidcService {
     if (
       !claims ||
       typeof claims.sub !== 'string' ||
-      typeof claims.email !== 'string'
+      typeof claims.email !== 'string' ||
+      !hasVerifiedEmailClaim(claims.email_verified)
     ) {
       throw new UnauthorizedException({ code: 'OIDC_CLAIMS_INVALID' })
     }

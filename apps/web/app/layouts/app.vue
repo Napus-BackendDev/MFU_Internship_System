@@ -3,9 +3,7 @@ import type { RoleKey } from '@internship/shared-types'
 import type { NavigationMenuItem } from '@nuxt/ui'
 
 interface AppNavigationItem extends NavigationMenuItem {
-  readonly systemAdminOnly?: boolean
-  readonly academicManageOnly?: boolean
-  readonly excludeRoles?: readonly RoleKey[]
+  readonly allowedRoles?: readonly RoleKey[]
 }
 
 const auth = useAuthStore()
@@ -15,98 +13,122 @@ const runtimeConfig = useRuntimeConfig()
 const sidebarCollapsed = ref(false)
 const signingOut = ref(false)
 
-const allLinks = [
+const allNavigationItems: readonly AppNavigationItem[] = [
   {
     label: 'ภาพรวม',
     to: '/app',
     icon: 'i-lucide-layout-dashboard',
-    exact: true
+    exact: true,
+    allowedRoles: [
+      'systemAdmin',
+      'internshipStaff',
+      'coordinator',
+      'auditor',
+      'evaluator'
+    ]
+  },
+  {
+    label: 'ข้อมูลการฝึกงาน',
+    to: '/app',
+    icon: 'i-lucide-layout-dashboard',
+    exact: true,
+    allowedRoles: ['student']
   },
   {
     label: 'นักศึกษา',
     to: '/app/students',
-    icon: 'i-lucide-graduation-cap'
+    icon: 'i-lucide-graduation-cap',
+    allowedRoles: ['systemAdmin', 'internshipStaff', 'coordinator', 'auditor']
   },
   {
     label: 'การประเมิน',
     to: '/app/evaluations',
-    icon: 'i-lucide-clipboard-check'
+    icon: 'i-lucide-clipboard-check',
+    exact: true,
+    allowedRoles: [
+      'systemAdmin',
+      'internshipStaff',
+      'coordinator',
+      'auditor',
+      'evaluator'
+    ]
   },
   {
-    label: 'การสื่อสาร',
-    to: '/app/correspondence',
-    icon: 'i-lucide-mail'
+    label: 'แบบฟอร์มประเมิน',
+    to: '/app/evaluations/forms',
+    icon: 'i-lucide-form-input',
+    allowedRoles: ['systemAdmin', 'internshipStaff']
   },
   {
     label: 'เอกสาร',
     to: '/app/documents',
-    icon: 'i-lucide-file-text'
+    icon: 'i-lucide-file-text',
+    allowedRoles: ['systemAdmin', 'internshipStaff', 'coordinator', 'auditor']
   },
   {
-    label: 'Audit',
+    label: 'ผู้ใช้งานระบบ',
+    to: '/app/users',
+    icon: 'i-lucide-users',
+    allowedRoles: ['systemAdmin', 'internshipStaff']
+  },
+  {
+    label: 'Audit Logs',
     to: '/app/audit',
     icon: 'i-lucide-shield-check',
-    excludeRoles: ['internshipStaff']
+    allowedRoles: ['systemAdmin', 'auditor']
   },
   {
     label: 'สำนักวิชาและหลักสูตร',
     to: '/app/settings/academic',
     icon: 'i-lucide-building-2',
-    academicManageOnly: true
+    allowedRoles: ['systemAdmin', 'internshipStaff']
   },
   {
     label: 'ตั้งค่าจดหมาย',
     to: '/app/settings/email',
     icon: 'i-lucide-mails',
-    academicManageOnly: true
+    allowedRoles: ['systemAdmin', 'internshipStaff']
   },
   {
     label: 'ตั้งค่า SMTP',
     to: '/app/settings/smtp',
     icon: 'i-lucide-mail',
-    systemAdminOnly: true
+    allowedRoles: ['systemAdmin']
   }
-] satisfies AppNavigationItem[]
+]
 
-const isStudent = computed(() => Boolean(auth.actor?.roles.includes('student')))
+const isStudent = computed(() => {
+  const roles = auth.actor?.roles ?? []
+  return Boolean(
+    roles.includes('student') &&
+    !roles.some((r) =>
+      ['systemAdmin', 'internshipStaff', 'coordinator', 'auditor'].includes(r)
+    )
+  )
+})
 
 const links = computed<NavigationMenuItem[]>(() => {
+  const currentRoles = (auth.actor?.roles ?? []) as RoleKey[]
+  if (currentRoles.length === 0) return []
+
+  // If student only, return student-targeted menu items
   if (isStudent.value) {
-    return [
-      {
-        label: 'ข้อมูลการฝึกงาน',
-        to: '/app',
-        icon: 'i-lucide-layout-dashboard',
-        exact: true
-      }
-    ]
+    return allNavigationItems
+      .filter((item) => item.allowedRoles?.includes('student'))
+      .map(({ allowedRoles: _a, ...item }) => item)
   }
 
-  return allLinks.filter((link) => {
-    if (link.systemAdminOnly && !auth.actor?.roles.includes('systemAdmin')) {
-      return false
-    }
-    if (
-      link.academicManageOnly &&
-      !auth.actor?.roles.some((r) =>
-        ['systemAdmin', 'internshipStaff'].includes(r)
-      )
-    ) {
-      return false
-    }
-    if (
-      !auth.actor?.roles.includes('systemAdmin') &&
-      link.excludeRoles?.some((r) => auth.actor?.roles.includes(r))
-    ) {
-      return false
-    }
-    return true
-  })
+  // Filter items based on actor's assigned roles
+  return allNavigationItems
+    .filter((item) => {
+      if (!item.allowedRoles || item.allowedRoles.length === 0) return true
+      return item.allowedRoles.some((r) => currentRoles.includes(r))
+    })
+    .map(({ allowedRoles: _a, ...item }) => item)
 })
 
 const canManageAcademic = computed(() =>
   Boolean(
-    !isStudent.value &&
     auth.actor?.roles.some((r) =>
       ['systemAdmin', 'internshipStaff'].includes(r)
     )
@@ -146,15 +168,15 @@ const pageMetadataMap: Readonly<Record<string, PageHeaderMeta>> = {
     description:
       'ติดตามรอบการประเมิน มอบหมายผู้ประเมิน และตรวจสอบผลคะแนนสมรรถนะ'
   },
-  '/app/correspondence': {
-    title: 'การสื่อสาร',
-    description:
-      'ส่งอีเมลแจ้งเตือน บันทึกประวัติ และติดตามการประสานงานกับสถานประกอบการ'
-  },
   '/app/documents': {
     title: 'เอกสาร',
     description:
       'จัดการแม่แบบเอกสาร หนังสือส่งตัว และออกใบ Internship Transcript'
+  },
+  '/app/users': {
+    title: 'ผู้ใช้งานระบบ',
+    description:
+      'จัดการบัญชีผู้ใช้งาน สิทธิ์การเข้าถึง และสังกัดของบุคลากรและนักศึกษา'
   },
   '/app/audit': {
     title: 'Audit Logs',

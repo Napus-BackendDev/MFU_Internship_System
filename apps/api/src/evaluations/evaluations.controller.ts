@@ -22,7 +22,14 @@ const pageSchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(500).default(25),
   cycleId: z.string().optional(),
   status: z
-    .enum(['pending', 'inProgress', 'submitted', 'expired', 'reopened'])
+    .enum([
+      'pending',
+      'inProgress',
+      'submitted',
+      'expired',
+      'reopened',
+      'email_error'
+    ])
     .optional()
 })
 const questionSchema = z

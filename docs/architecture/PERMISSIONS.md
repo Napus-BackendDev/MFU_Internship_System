@@ -86,7 +86,7 @@ Scope must be applied in the database query or repository filter. Fetch-then-che
 | `evaluations.read`     | Read evaluation assignment/final results within visibility scope |
 | `evaluations.draft`    | Save own assigned evaluation Draft                               |
 | `evaluations.submit`   | Submit own assigned evaluation once                              |
-| `evaluations.reopen`   | Reopen submitted evaluation under approved policy                |
+| `evaluations.reopen`   | Reserved for a future release; disabled in the Production MVP    |
 
 ### Correspondence
 
@@ -144,7 +144,7 @@ Legend: `T` tenant, `S/P` assigned School/Program, `Own` own Student, `Assign` o
 | `evaluations.read`          | T with visibility rules | T/S/P           | S/P after visibility gate | Own after visibility gate                 | Assign before/after submit as policy allows | A after visibility gate |
 | `evaluations.draft`         | —                       | —               | —                         | only if self-evaluation is later approved | Assign                                      | —                       |
 | `evaluations.submit`        | —                       | —               | —                         | only if self-evaluation is later approved | Assign                                      | —                       |
-| `evaluations.reopen`        | policy-limited          | policy-limited  | —                         | —                                         | —                                           | —                       |
+| `evaluations.reopen`        | —                       | —               | —                         | —                                         | —                                           | —                       |
 | `emailTemplates.read`       | T                       | T/S/P           | —                         | —                                         | —                                           | A                       |
 | `emailTemplates.manage`     | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
 | `emailTemplates.publish`    | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
@@ -181,14 +181,14 @@ Legend: `T` tenant, `S/P` assigned School/Program, `Own` own Student, `Assign` o
 - Evaluator may see only the assigned Student summary required to assess.
 - Evaluator cannot enumerate Student, placement, cycle, or evaluation identifiers.
 - Assignment close, invitation revoke, expiry, or final submit removes Draft/submit ability.
-- Token/session must not survive policy-defined reopen unless explicitly reissued.
+- Reopen is unavailable in the Production MVP; legacy `reopened` records do not grant invitation exchange, PIN verification, Draft, or submit access.
 
 ### 7.3 Evaluation
 
 - Draft belongs to one assignment and uses the assignment's immutable question snapshot.
 - Staff/System Admin may inspect workflow state, but reading raw answers before visibility gates requires an explicit operational/legal basis.
 - Submitted answer content is immutable.
-- Reopen never overwrites prior final content; reason and actor are audited.
+- Reopen is disabled for the MVP. No role has `evaluations.reopen`; submitted content remains locked and immutable.
 - If Student result visibility is off, own evaluation endpoint must conceal result content while still allowing safe progress/status if product policy permits.
 
 ### 7.4 Templates
@@ -210,23 +210,23 @@ Legend: `T` tenant, `S/P` assigned School/Program, `Own` own Student, `Assign` o
 
 The OpenAPI file carries matching `x-permissions` metadata. Minimum mapping:
 
-| Endpoint family                          | Read permission                | Mutation permission                                             |
-| ---------------------------------------- | ------------------------------ | --------------------------------------------------------------- |
-| `/academic/*`                            | `academic.read`                | `academic.manage`                                               |
-| `/students`                              | `students.read`                | `students.manage` / `students.import`                           |
-| `/organizations`, `/evaluators`          | `organizations.read`           | `organizations.manage`                                          |
-| `/placements`, `/evaluation-assignments` | `placements.read`              | `placements.manage` / `cycles.manage`                           |
-| `/competency-sets`                       | `competencies.read`            | `competencies.manage` / `competencies.publish`                  |
-| `/evaluation-cycles`                     | `cycles.read`                  | `cycles.manage`                                                 |
-| `/evaluations`                           | `evaluations.read`             | `evaluations.draft`, `evaluations.submit`, `evaluations.reopen` |
-| `/email-templates`                       | `emailTemplates.read`          | `emailTemplates.manage`, `emailTemplates.publish`               |
-| `/campaigns`, `/deliveries`              | `campaigns.read`               | `campaigns.send`, `deliveries.retry`                            |
-| `/system-settings/smtp*`                 | `system.config.manage`         | `system.config.manage`                                          |
-| `/document-templates`                    | `documentTemplates.read`       | `documentTemplates.manage`, `documentTemplates.publish`         |
-| `/generated-documents`                   | own/scoped document permission | own/scoped generate permission                                  |
-| `/reports`                               | `reports.read`                 | —                                                               |
-| `/exports`                               | job read through ownership     | `exports.create`, `exports.download`                            |
-| `/audit-logs`                            | `audit.read`                   | `audit.export` for export                                       |
+| Endpoint family                          | Read permission                | Mutation permission                                        |
+| ---------------------------------------- | ------------------------------ | ---------------------------------------------------------- |
+| `/academic/*`                            | `academic.read`                | `academic.manage`                                          |
+| `/students`                              | `students.read`                | `students.manage` / `students.import`                      |
+| `/organizations`, `/evaluators`          | `organizations.read`           | `organizations.manage`                                     |
+| `/placements`, `/evaluation-assignments` | `placements.read`              | `placements.manage` / `cycles.manage`                      |
+| `/competency-sets`                       | `competencies.read`            | `competencies.manage` / `competencies.publish`             |
+| `/evaluation-cycles`                     | `cycles.read`                  | `cycles.manage`                                            |
+| `/evaluations`                           | `evaluations.read`             | `evaluations.draft`, `evaluations.submit`; reopen disabled |
+| `/email-templates`                       | `emailTemplates.read`          | `emailTemplates.manage`, `emailTemplates.publish`          |
+| `/campaigns`, `/deliveries`              | `campaigns.read`               | `campaigns.send`, `deliveries.retry`                       |
+| `/system-settings/smtp*`                 | `system.config.manage`         | `system.config.manage`                                     |
+| `/document-templates`                    | `documentTemplates.read`       | `documentTemplates.manage`, `documentTemplates.publish`    |
+| `/generated-documents`                   | own/scoped document permission | own/scoped generate permission                             |
+| `/reports`                               | `reports.read`                 | —                                                          |
+| `/exports`                               | job read through ownership     | `exports.create`, `exports.download`                       |
+| `/audit-logs`                            | `audit.read`                   | `audit.export` for export                                  |
 
 ## 9. HTTP denial behavior
 
