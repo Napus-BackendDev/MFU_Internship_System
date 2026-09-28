@@ -514,8 +514,7 @@ async function commitRows(
         $setOnInsert: {
           _id: new ObjectId(),
           createdAt: now,
-          status: 'active',
-          evaluationStatus: 'awaiting_evaluator'
+          status: 'active'
         }
       },
       upsert: true

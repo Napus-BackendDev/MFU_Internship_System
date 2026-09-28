@@ -16,6 +16,7 @@ interface UserItem {
   readonly email: string
   readonly displayName: string
   readonly status: 'active' | 'archived' | 'suspended'
+  readonly oidcLinked?: boolean
   readonly roleAssignments?: readonly RoleAssignment[]
   readonly studentId?: string
   readonly avatarUrl?: string
@@ -48,6 +49,9 @@ const api = useApi()
 const toast = useToast()
 const auth = useAuthStore()
 const config = useRuntimeConfig()
+const canLinkOidc = computed(
+  () => auth.actor?.roles.includes('systemAdmin') ?? false
+)
 
 const isDev = computed(
   () =>
@@ -82,6 +86,12 @@ const isModalOpen = ref(false)
 const modalMode = ref<'create' | 'edit'>('create')
 const editingUserId = ref<string | null>(null)
 const submitting = ref(false)
+const isOidcLinkModalOpen = ref(false)
+const oidcLinkTarget = ref<UserItem | null>(null)
+const oidcSubject = ref('')
+const oidcLinkReason = ref('')
+const oidcLinkSubmitting = ref(false)
+let pendingOidcLink: { fingerprint: string; key: string } | undefined
 
 const form = ref<{
   displayName: string
@@ -245,7 +255,7 @@ async function loadUsers(): Promise<void> {
 
 // Watchers
 watch([page, pageSize, selectedRole, selectedStatus, selectedSchool], () => {
-  loadUsers()
+  void loadUsers()
 })
 
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -253,7 +263,7 @@ function onSearchInput(): void {
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
   searchDebounceTimer = setTimeout(() => {
     page.value = 1
-    loadUsers()
+    void loadUsers()
   }, 350)
 }
 
@@ -268,12 +278,12 @@ function resetFilters(): void {
   selectedSchool.value = 'all'
   selectedStatus.value = 'all'
   page.value = 1
-  loadUsers()
+  void loadUsers()
 }
 
 // Modal Actions
 function openCreateModal(): void {
-  if (schools.value.length === 0) loadAcademic()
+  if (schools.value.length === 0) void loadAcademic()
   modalMode.value = 'create'
   editingUserId.value = null
   form.value = {
@@ -292,7 +302,7 @@ function openCreateModal(): void {
 }
 
 function openEditModal(user: UserItem): void {
-  if (schools.value.length === 0) loadAcademic()
+  if (schools.value.length === 0) void loadAcademic()
   modalMode.value = 'edit'
   editingUserId.value = user.id
   const role = getPrimaryRole(user)
@@ -309,6 +319,65 @@ function openEditModal(user: UserItem): void {
     status: user.status === 'suspended' ? 'suspended' : 'active'
   }
   isModalOpen.value = true
+}
+
+function openOidcLinkModal(user: UserItem): void {
+  if (!canLinkOidc.value || user.oidcLinked || user.status !== 'active') return
+  oidcLinkTarget.value = user
+  oidcSubject.value = ''
+  oidcLinkReason.value = ''
+  isOidcLinkModalOpen.value = true
+}
+
+async function submitOidcLink(): Promise<void> {
+  const target = oidcLinkTarget.value
+  const subject = oidcSubject.value
+  const reason = oidcLinkReason.value.trim()
+  if (
+    !target ||
+    !subject.trim() ||
+    subject !== subject.trim() ||
+    reason.length < 10
+  ) {
+    toast.add({
+      title: 'ข้อมูลยังไม่ครบ',
+      description:
+        'ระบุ subject ให้ตรงตามต้นทางโดยไม่มีช่องว่างหัวท้าย และเหตุผลอย่างน้อย 10 ตัวอักษร',
+      color: 'warning'
+    })
+    return
+  }
+
+  const fingerprint = JSON.stringify([target.id, subject, reason])
+  if (pendingOidcLink?.fingerprint !== fingerprint) {
+    pendingOidcLink = { fingerprint, key: crypto.randomUUID() }
+  }
+
+  oidcLinkSubmitting.value = true
+  try {
+    await api(`/users/${target.id}/oidc-link`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': pendingOidcLink.key },
+      body: { subject, reason }
+    })
+    pendingOidcLink = undefined
+    isOidcLinkModalOpen.value = false
+    toast.add({
+      title: 'เชื่อมบัญชีสำเร็จ',
+      description: `ผูก OIDC identity ให้ ${target.displayName} แล้ว`,
+      color: 'success'
+    })
+    await loadUsers()
+  } catch {
+    toast.add({
+      title: 'ไม่สามารถเชื่อมบัญชีได้',
+      description:
+        'ลองส่งคำขอซ้ำด้วยข้อมูลเดิม หรือรีเฟรชเพื่อตรวจสอบสถานะบัญชี',
+      color: 'error'
+    })
+  } finally {
+    oidcLinkSubmitting.value = false
+  }
 }
 
 async function submitForm(): Promise<void> {
@@ -420,7 +489,7 @@ async function switchPersona(user: UserItem): Promise<void> {
       description: `เข้าใช้งานในฐานะ: ${user.displayName} (${roleBadgeMap[role]?.label || role})`,
       color: 'success'
     })
-    navigateTo('/app')
+    await navigateTo('/app')
   } catch (err) {
     console.error('Failed to switch persona:', err)
     toast.add({
@@ -452,7 +521,9 @@ function getUserActions(user: UserItem) {
     primaryGroup.push({
       label: 'สลับสวมบทบาท (Dev Persona)',
       icon: 'i-lucide-log-in',
-      onSelect: () => switchPersona(user)
+      onSelect: () => {
+        void switchPersona(user)
+      }
     })
   }
 
@@ -461,6 +532,14 @@ function getUserActions(user: UserItem) {
     icon: 'i-lucide-pencil',
     onSelect: () => openEditModal(user)
   })
+
+  if (canLinkOidc.value && !user.oidcLinked && user.status === 'active') {
+    primaryGroup.push({
+      label: 'เชื่อมบัญชี MFU SSO (OIDC)',
+      icon: 'i-lucide-link',
+      onSelect: () => openOidcLinkModal(user)
+    })
+  }
 
   actions.push(primaryGroup)
 
@@ -471,7 +550,9 @@ function getUserActions(user: UserItem) {
       icon:
         user.status === 'active' ? 'i-lucide-user-x' : 'i-lucide-user-check',
       color: user.status === 'active' ? 'error' : 'neutral',
-      onSelect: () => toggleUserStatus(user)
+      onSelect: () => {
+        void toggleUserStatus(user)
+      }
     }
   ])
 
@@ -479,9 +560,9 @@ function getUserActions(user: UserItem) {
 }
 
 onMounted(() => {
-  loadSummary()
-  loadAcademic()
-  loadUsers()
+  void loadSummary()
+  void loadAcademic()
+  void loadUsers()
 })
 </script>
 
@@ -902,6 +983,15 @@ onMounted(() => {
                     >
                       {{ user.email }}
                     </p>
+                    <UBadge
+                      :color="user.oidcLinked ? 'success' : 'neutral'"
+                      size="xs"
+                      variant="subtle"
+                    >
+                      {{
+                        user.oidcLinked ? 'เชื่อม SSO แล้ว' : 'ยังไม่เชื่อม SSO'
+                      }}
+                    </UBadge>
                   </div>
                 </div>
               </td>
@@ -1207,6 +1297,69 @@ onMounted(() => {
             @click="submitForm"
           >
             {{ modalMode === 'create' ? 'เพิ่มผู้ใช้งาน' : 'บันทึกการแก้ไข' }}
+          </UButton>
+        </div>
+      </template>
+    </UModal>
+
+    <UModal
+      v-model:open="isOidcLinkModalOpen"
+      title="เชื่อมบัญชี MFU SSO (OIDC)"
+      :ui="{ content: 'sm:max-w-lg w-full' }"
+    >
+      <template #body>
+        <form class="space-y-4" @submit.prevent="submitOidcLink">
+          <p class="text-sm text-muted">
+            บัญชีเป้าหมาย:
+            <strong>{{ oidcLinkTarget?.displayName }}</strong> ({{
+              oidcLinkTarget?.email
+            }}) ระบบใช้ issuer OIDC ที่ตั้งค่าไว้ และไม่ใช้ email
+            เพื่อจับคู่บัญชี
+          </p>
+          <div>
+            <label class="mb-1 block text-xs font-semibold text-highlighted"
+              >OIDC subject *</label
+            >
+            <UInput
+              v-model="oidcSubject"
+              class="w-full"
+              autocomplete="off"
+              maxlength="255"
+              placeholder="ค่า sub จาก MFU Identity Provider"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-semibold text-highlighted"
+              >เหตุผลและหลักฐานการตรวจสอบ *</label
+            >
+            <UTextarea
+              v-model="oidcLinkReason"
+              class="w-full"
+              :rows="3"
+              maxlength="1000"
+              placeholder="บันทึกเหตุผลที่ตรวจยืนยันตัวตนและผู้อนุมัติ"
+            />
+          </div>
+        </form>
+      </template>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton
+            color="neutral"
+            size="sm"
+            variant="outline"
+            @click="isOidcLinkModalOpen = false"
+          >
+            ยกเลิก
+          </UButton>
+          <UButton
+            color="primary"
+            icon="i-lucide-link"
+            :loading="oidcLinkSubmitting"
+            size="sm"
+            @click="submitOidcLink"
+          >
+            ยืนยันการเชื่อมบัญชี
           </UButton>
         </div>
       </template>

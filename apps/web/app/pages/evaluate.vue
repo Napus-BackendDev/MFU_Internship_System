@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { readEvaluationEntryCredentials } from '~/utils/evaluation-entry-link'
+
 definePageMeta({ layout: 'public' })
 
 interface Question {
@@ -40,6 +42,7 @@ interface EvaluationView {
 }
 
 const route = useRoute()
+const router = useRouter()
 const api = useApi()
 const auth = useAuthStore()
 
@@ -272,11 +275,17 @@ async function resetPinVerification(): Promise<void> {
 
 onMounted(async () => {
   try {
-    const token =
-      typeof route.query.token === 'string' ? route.query.token : undefined
-    const pinParam =
-      typeof route.query.pin === 'string' ? route.query.pin : undefined
+    const entry = readEvaluationEntryCredentials(
+      window.location.search,
+      window.location.hash
+    )
+    if (entry.hasCredential) {
+      // Strip bearer credentials before any API calls or same-origin navigation.
+      await router.replace('/evaluate')
+    }
 
+    const token = entry.token
+    const pinParam = entry.pin
     if (token) {
       await auth.exchangeInvitation(token)
     } else if (pinParam) {
@@ -301,6 +310,7 @@ onMounted(async () => {
 
     const assignmentId =
       auth.actor?.scope.assignmentId ??
+      entry.assignment ??
       (typeof route.query.assignment === 'string'
         ? route.query.assignment
         : undefined)
@@ -502,6 +512,14 @@ function ratingValues(question: Question): readonly number[] {
 
     <!-- 3. หน้าจอกรอกรหัส PIN 16 หลัก (เมื่อยังไม่ได้เปิดฟอร์ม) -->
     <div v-else-if="!view" class="space-y-6">
+      <UAlert
+        v-if="errorMessage"
+        color="error"
+        icon="i-lucide-circle-alert"
+        :title="errorMessage"
+        variant="soft"
+      />
+
       <div class="text-center max-w-xl mx-auto space-y-2">
         <span
           class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-primary/10 text-primary mb-2"
@@ -867,7 +885,7 @@ function ratingValues(question: Question): readonly number[] {
           <div>
             <p class="font-semibold text-highlighted">ยืนยันส่งผลสุดท้าย?</p>
             <p class="text-sm text-muted">
-              หลังส่งจะแก้ไขไม่ได้ เว้นแต่เจ้าหน้าที่เปิดใหม่ตามนโยบาย
+              หลังส่งแล้ว ผลประเมินจะถูกล็อกและไม่สามารถแก้ไขได้
             </p>
           </div>
           <div class="flex gap-2">

@@ -10,7 +10,8 @@ import { EvaluatorRecord } from '../members/members.schema.js'
 import { SessionService } from '../auth/session.service.js'
 import { TokenService } from '../auth/token.service.js'
 import { InvitationRecord } from './correspondence.schema.js'
-import { hashPin, normalizePin } from './pin.js'
+import { invitationVersionFilter } from './invitation-version.policy.js'
+import { hashInvitationPin, hashPin, normalizePin } from './pin.js'
 
 @Injectable()
 export class InvitationService {
@@ -37,18 +38,26 @@ export class InvitationService {
     )
     const invitationId = payload.invitationId
     const assignmentId = payload.assignmentId
+    const invitationVersion = payload.invitationVersion ?? 1
     if (typeof invitationId !== 'string' || typeof assignmentId !== 'string') {
+      throw new UnauthorizedException({ code: 'INVITATION_INVALID' })
+    }
+    if (
+      typeof invitationVersion !== 'number' ||
+      !Number.isInteger(invitationVersion)
+    ) {
       throw new UnauthorizedException({ code: 'INVITATION_INVALID' })
     }
     const invitation = await this.invitations.findOneAndUpdate(
       {
         _id: invitationId,
         assignmentId,
+        ...invitationVersionFilter(invitationVersion),
         status: 'active',
         expiresAt: { $gt: new Date() }
       },
       { $set: { lastExchangedAt: new Date() } },
-      { new: true }
+      { returnDocument: 'after' }
     )
     if (!invitation) {
       throw new UnauthorizedException({ code: 'INVITATION_INVALID' })
@@ -75,7 +84,9 @@ export class InvitationService {
         tenant: false,
         schoolIds: [],
         programIds: [],
-        assignmentId
+        assignmentId,
+        invitationId: invitation.id,
+        invitationVersion: invitation.version
       }
     }
     return { actor, ...(await this.sessionService.issue(actor)) }
@@ -95,42 +106,43 @@ export class InvitationService {
       })
     }
 
-    const pinHash = hashPin(
-      cleanPin,
-      this.config.get('AUTH_JWT_SECRET', { infer: true })
-    )
+    const pinHashes = [
+      hashInvitationPin(
+        cleanPin,
+        this.config.get('INVITATION_TOKEN_PEPPER', { infer: true })
+      ),
+      hashPin(cleanPin, this.config.get('AUTH_JWT_SECRET', { infer: true }))
+    ]
     const invitation = await this.invitations
       .findOne({
-        accessPinHash: pinHash,
+        accessPinHash: { $in: pinHashes },
         status: 'active',
         expiresAt: { $gt: new Date() }
       })
+      .select('+accessPinHash')
       .exec()
-    if (!invitation) {
-      throw new UnauthorizedException({
-        code: 'PIN_INVALID',
-        message: 'รหัส PIN 16 หลักไม่ถูกต้อง หรือไม่พบแบบฟอร์มที่แอดมินมอบหมาย'
-      })
+    if (!invitation?.accessPinHash) {
+      throw this.invalidPinException()
     }
 
     const assignment = await this.assignments
       .findOne({
         _id: invitation.assignmentId,
         evaluatorId: invitation.evaluatorId,
-        accessPinHash: pinHash,
+        accessPinHash: invitation.accessPinHash,
         deadlineAt: { $gt: new Date() },
         status: { $in: ['pending', 'inProgress'] }
       })
       .exec()
     if (!assignment) {
-      throw new UnauthorizedException({ code: 'PIN_INVALID' })
+      throw this.invalidPinException()
     }
 
     const evaluator = await this.evaluators
       .findOne({ _id: assignment.evaluatorId, status: 'active' })
       .exec()
     if (!evaluator) {
-      throw new UnauthorizedException({ code: 'PIN_INVALID' })
+      throw this.invalidPinException()
     }
     const assignmentIdStr = assignment._id.toString()
     const actor: AuthenticatedActor = {
@@ -143,7 +155,9 @@ export class InvitationService {
         tenant: false,
         schoolIds: [],
         programIds: [],
-        assignmentId: assignmentIdStr
+        assignmentId: assignmentIdStr,
+        invitationId: invitation.id,
+        invitationVersion: invitation.version
       }
     }
 
@@ -154,5 +168,12 @@ export class InvitationService {
       refreshToken: tokens.refreshToken,
       assignmentId: assignmentIdStr
     }
+  }
+
+  private invalidPinException(): UnauthorizedException {
+    return new UnauthorizedException({
+      code: 'PIN_INVALID',
+      message: 'รหัส PIN 16 หลักไม่ถูกต้อง หรือไม่พบแบบฟอร์มที่แอดมินมอบหมาย'
+    })
   }
 }

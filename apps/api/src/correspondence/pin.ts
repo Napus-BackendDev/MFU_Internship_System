@@ -8,6 +8,14 @@ export function hashPin(pin: string, secret: string): string {
   return createHmac('sha256', secret).update(normalizePin(pin)).digest('hex')
 }
 
+export function hashInvitationPin(pin: string, pepper: string): string {
+  const digest = createHmac('sha256', pepper)
+    .update(`internship-evaluation-pin:v2\0${normalizePin(pin)}`)
+    .digest('hex')
+
+  return `v2:${digest}`
+}
+
 export function generatePin(): string {
   let pin = ''
   for (let index = 0; index < 16; index += 1) {

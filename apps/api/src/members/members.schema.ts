@@ -12,6 +12,7 @@ const schemaOptions = {
     transform: (_document: unknown, result: Record<string, unknown>) => {
       delete result._id
       delete result.__v
+      delete result.evaluationStatus
       return result
     }
   }
@@ -29,7 +30,7 @@ export class StudentRecord {
   @Prop({ required: true, type: LocalizedTextSchema })
   public name!: LocalizedText
 
-  @Prop({ index: true, lowercase: true, required: true })
+  @Prop({ index: true, lowercase: true, trim: true, required: true })
   public email!: string
 
   @Prop({ index: true, lowercase: true, trim: true })
@@ -78,17 +79,26 @@ export class StudentRecord {
   public status!: 'active' | 'archived'
 
   @Prop({
-    default: 'awaiting_evaluator',
     enum: [
       'awaiting_evaluator',
       'awaiting_response',
       'submitted',
-      'email_error'
-    ],
-    index: true
+      'email_error',
+      'pending',
+      'inProgress',
+      'expired',
+      'assignment_ambiguous'
+    ]
   })
-  public evaluationStatus!:
-    'awaiting_evaluator' | 'awaiting_response' | 'submitted' | 'email_error'
+  public evaluationStatus?:
+    | 'awaiting_evaluator'
+    | 'awaiting_response'
+    | 'submitted'
+    | 'email_error'
+    | 'pending'
+    | 'inProgress'
+    | 'expired'
+    | 'assignment_ambiguous'
 
   @Prop()
   public archivedAt?: Date

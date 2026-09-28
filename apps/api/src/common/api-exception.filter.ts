@@ -25,13 +25,17 @@ function isDuplicateKeyError(exception: unknown): boolean {
   )
 }
 
-function isUploadLimitError(exception: unknown): boolean {
-  return (
+function uploadLimitCode(exception: unknown): string | undefined {
+  if (
     typeof exception === 'object' &&
     exception !== null &&
     'code' in exception &&
-    exception.code === 'LIMIT_FILE_SIZE'
-  )
+    typeof exception.code === 'string' &&
+    exception.code.startsWith('LIMIT_')
+  ) {
+    return exception.code
+  }
+  return undefined
 }
 
 @Catch()
@@ -79,10 +83,16 @@ export class ApiExceptionFilter implements ExceptionFilter {
           message: issue.message
         }))
       }
-    } else if (isUploadLimitError(exception)) {
-      status = HttpStatus.PAYLOAD_TOO_LARGE
-      code = 'PAYLOAD_TOO_LARGE'
-      message = 'Uploaded file exceeds the allowed size.'
+    } else if (uploadLimitCode(exception)) {
+      if (uploadLimitCode(exception) === 'LIMIT_FILE_SIZE') {
+        status = HttpStatus.PAYLOAD_TOO_LARGE
+        code = 'PAYLOAD_TOO_LARGE'
+        message = 'Uploaded file exceeds the allowed size.'
+      } else {
+        status = HttpStatus.UNPROCESSABLE_ENTITY
+        code = 'MULTIPART_INVALID'
+        message = 'Multipart upload is malformed or exceeds a request limit.'
+      }
     } else if (isDuplicateKeyError(exception)) {
       status = HttpStatus.CONFLICT
       code = 'DUPLICATE_RESOURCE'

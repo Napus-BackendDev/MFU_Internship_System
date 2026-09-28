@@ -9,11 +9,22 @@ export default tseslint.config(
       '**/.output/**',
       '**/coverage/**',
       '**/dist/**',
-      '**/node_modules/**'
+      '**/node_modules/**',
+      // The meta-test runs this fixture explicitly with ESLint's --no-ignore flag.
+      '**/test/fixtures/quality-gates/lint-failure.ts'
     ]
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
+  {
+    files: ['**/*.{js,mjs,cjs}'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      globals: {
+        ...globals.node
+      }
+    }
+  },
   {
     files: ['**/*.ts'],
     languageOptions: {

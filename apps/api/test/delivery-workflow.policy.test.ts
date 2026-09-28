@@ -60,12 +60,34 @@ describe('campaign target policy', () => {
       campaignTargetIssue({
         ...openWindow,
         type: 'reminder',
+        assignmentStatus: 'pending',
+        invitation: {
+          status: 'active',
+          evaluatorId: 'evaluator-a',
+          expiresAt: new Date('2026-10-01T00:00:00Z')
+        }
+      })
+    ).toBeUndefined()
+    expect(
+      campaignTargetIssue({
+        ...openWindow,
+        type: 'reminder',
         assignmentStatus: 'inProgress',
         invitation: {
           status: 'active',
           evaluatorId: 'evaluator-b',
           expiresAt: new Date('2026-10-01T00:00:00Z')
         }
+      })
+    ).toBe('ACTIVE_INVITATION_REQUIRED')
+  })
+
+  it('does not allow a reminder before an active invitation exists', () => {
+    expect(
+      campaignTargetIssue({
+        ...openWindow,
+        type: 'reminder',
+        assignmentStatus: 'pending'
       })
     ).toBe('ACTIVE_INVITATION_REQUIRED')
   })

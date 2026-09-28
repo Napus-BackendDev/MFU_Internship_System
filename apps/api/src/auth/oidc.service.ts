@@ -1,6 +1,7 @@
 import type { AppEnvironment } from '@internship/config'
 import type { AuthenticatedActor } from '@internship/shared-types'
 import {
+  ForbiddenException,
   Injectable,
   ServiceUnavailableException,
   UnauthorizedException
@@ -88,15 +89,12 @@ export class OidcService {
       throw new UnauthorizedException({ code: 'OIDC_CALLBACK_INVALID' })
     }
 
-    const tokens = await authorizationCodeGrant(
-      await this.getConfiguration(),
-      callbackUrl,
-      {
-        pkceCodeVerifier: codeVerifier,
-        expectedState: state,
-        expectedNonce: nonce
-      }
-    )
+    const configuration = await this.getConfiguration()
+    const tokens = await authorizationCodeGrant(configuration, callbackUrl, {
+      pkceCodeVerifier: codeVerifier,
+      expectedState: state,
+      expectedNonce: nonce
+    })
     const claims = tokens.claims()
 
     if (
@@ -109,10 +107,32 @@ export class OidcService {
     }
 
     return this.usersService.resolveOidcActor({
+      issuer: this.getTrustedIssuer(configuration),
       subject: claims.sub,
       email: claims.email,
       displayName: typeof claims.name === 'string' ? claims.name : claims.email,
       avatarUrl: typeof claims.picture === 'string' ? claims.picture : undefined
+    })
+  }
+
+  public async linkAccount(
+    actor: AuthenticatedActor,
+    input: {
+      readonly targetUserId: string
+      readonly subject: string
+      readonly reason: string
+      readonly idempotencyKey: string
+      readonly requestId: string
+    }
+  ): Promise<{ userId: string; issuer: string; status: 'linked' }> {
+    if (!actor.roles.includes('systemAdmin')) {
+      throw new ForbiddenException({ code: 'SYSTEM_ADMIN_REQUIRED' })
+    }
+    this.assertOidcMode()
+    const configuration = await this.getConfiguration()
+    return this.usersService.linkOidcAccount(actor, {
+      ...input,
+      issuer: this.getTrustedIssuer(configuration)
     })
   }
 
@@ -135,5 +155,13 @@ export class OidcService {
 
     this.configuration = discovery(new URL(issuer), clientId, clientSecret)
     return this.configuration
+  }
+
+  private getTrustedIssuer(configuration: Configuration): string {
+    const issuer = configuration.serverMetadata().issuer
+    if (typeof issuer !== 'string' || issuer.length === 0) {
+      throw new ServiceUnavailableException({ code: 'OIDC_ISSUER_UNAVAILABLE' })
+    }
+    return issuer
   }
 }

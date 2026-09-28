@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check legacy health alias
+         * @description Compatibility alias for the process liveness endpoint.
+         */
+        get: operations["getHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -179,6 +199,28 @@ export interface paths {
         head?: never;
         /** Update a user within the caller's management scope */
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/users/{userId}/oidc-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link a verified OIDC subject to a pre-created account
+         * @description System Admin only. The issuer is resolved from the configured and discovered OIDC provider; clients cannot supply an issuer. Email is not used for account matching. Identity uniqueness uses the exact issuer and case-sensitive subject pair. The target account, identity link, and audit record are committed in one MongoDB transaction.
+         */
+        post: operations["linkOidcAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/public/invitations/exchange": {
@@ -467,7 +509,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List internship organizations */
+        /** List internship organizations within the caller's authorized placement scope; Students see only organizations linked to their own placements */
         get: operations["listOrganizations"];
         put?: never;
         /** Create an internship Organization */
@@ -485,7 +527,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List external evaluators/advisers */
+        /** List evaluators within the caller's authorized placement and assignment scope; Students see only evaluators assigned to their own assessments within their placement organizations */
         get: operations["listEvaluators"];
         put?: never;
         /** Create an external Evaluator */
@@ -524,7 +566,7 @@ export interface paths {
         /** List competency sets and current version summaries */
         get: operations["listCompetencySets"];
         put?: never;
-        /** Create a competency set with Draft version 1 */
+        /** Create a competency set; create Draft versions separately */
         post: operations["createCompetencySet"];
         delete?: never;
         options?: never;
@@ -541,7 +583,8 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        /** List competency versions visible within caller scope */
+        get: operations["listCompetencySetVersions"];
         put?: never;
         /** Create the next Draft version */
         post: operations["createCompetencySetVersion"];
@@ -617,10 +660,13 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Validate an in-scope cycle without mutation
+         * @description Only an Internship Staff assignment or System Administrator may inspect a cycle for activation; unrelated role scopes do not widen this write-management scope.
+         */
+        get: operations["previewEvaluationCycle"];
         put?: never;
-        /** Validate cycle activation without mutation */
-        post: operations["previewEvaluationCycle"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -638,8 +684,33 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Activate a valid cycle and create immutable assignment snapshots */
+        /**
+         * Activate an in-scope draft cycle
+         * @description Revalidates the published competency version, non-archived academic term, and cycle window in a transaction; cycle activation does not create assignments.
+         */
         post: operations["activateEvaluationCycle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/evaluation-cycles/{cycleId}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cycleId: components["parameters"]["CycleId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Close an in-scope evaluation cycle
+         * @description Closes a Draft or Active cycle, expires its Pending and In Progress assignments, and commits a scoped audit event atomically. Repeating the close is idempotent; no reopen operation is provided.
+         */
+        post: operations["closeEvaluationCycle"];
         delete?: never;
         options?: never;
         head?: never;
@@ -656,7 +727,10 @@ export interface paths {
         /** List assignment states within effective scope */
         get: operations["listEvaluationAssignments"];
         put?: never;
-        /** Create a scoped evaluator assignment */
+        /**
+         * Create a scoped evaluator assignment
+         * @description Creates one assignment per placement and cycle. Student, school, and program are resolved from the active Student and Placement records; the placement, evaluator organization, academic term, cycle applicability, and deadline must agree. The published competency version is snapshotted atomically with the assignment and audit event.
+         */
         post: operations["createEvaluationAssignment"];
         delete?: never;
         options?: never;
@@ -743,6 +817,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/email-templates/system": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List built-in invitation and reminder email templates */
+        get: operations["getSystemEmailTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/email-templates/system/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: "evaluation_request" | "evaluation_reminder";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Publish a new version of a built-in system email template */
+        put: operations["updateSystemEmailTemplate"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/email-templates/system/{code}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: "evaluation_request" | "evaluation_reminder";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish a new version using the built-in template defaults */
+        post: operations["resetSystemEmailTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/email-templates": {
         parameters: {
             query?: never;
@@ -811,6 +940,28 @@ export interface paths {
          * @description Requires exactly one active placement and applicable active cycle, a published competency version, and an active evaluator. Ambiguous placement/cycle and missing master data are rejected; no defaults are created.
          */
         post: operations["sendStudentInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/evaluation-assignments/{assignmentId}/invitation/reissue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                assignmentId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reissue an evaluator invitation before submission
+         * @description Rotates the invitation version, clears the previous PIN, revokes matching refresh sessions, and queues a new email without extending the assignment deadline. A reason and idempotency key are required.
+         */
+        post: operations["reissueEvaluationInvitation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1040,6 +1191,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/document-assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List privately stored document assets
+         * @description Only System Admin and tenant-scoped Internship Staff can access the shared tenant asset library.
+         */
+        get: operations["listDocumentAssets"];
+        put?: never;
+        /**
+         * Upload private document asset with rights attestation
+         * @description Only System Admin and tenant-scoped Internship Staff can upload shared tenant assets.
+         */
+        post: operations["uploadDocumentAsset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/document-templates": {
         parameters: {
             query?: never;
@@ -1047,11 +1222,43 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List document templates and version summaries */
+        /**
+         * List document templates
+         * @description Non-managers receive active templates that have a Published version, with metadata only. Drafts and canonical version content are not returned.
+         */
         get: operations["listDocumentTemplates"];
         put?: never;
-        /** Create document template and Draft version 1 */
+        /**
+         * Create document template and Draft version 1
+         * @description Shared tenant templates can be created only by System Admin or tenant-scoped Internship Staff; narrower Staff scopes are denied.
+         */
         post: operations["createDocumentTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/document-templates/{templateId}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List document template versions
+         * @description Non-managers can read Published version summaries for active templates only; Draft content and private asset keys are omitted.
+         */
+        get: operations["listDocumentTemplateVersions"];
+        put?: never;
+        /**
+         * Create the next Draft version
+         * @description Only System Admin or tenant-scoped Internship Staff can create Draft versions of shared tenant templates.
+         */
+        post: operations["createDocumentTemplateVersion"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1067,14 +1274,20 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get document template version */
+        /**
+         * Get document template version
+         * @description Managers can read full versions. Other permitted readers receive only a Published summary when its parent template is active; all other versions return 404.
+         */
         get: operations["getDocumentTemplateVersion"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Update a Draft document template version */
+        /**
+         * Update a Draft document template version
+         * @description Only System Admin or tenant-scoped Internship Staff can edit Draft versions of shared tenant templates.
+         */
         patch: operations["updateDocumentTemplateVersion"];
         trace?: never;
     };
@@ -1089,7 +1302,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Validate and publish immutable document template version */
+        /**
+         * Validate and publish immutable document template version
+         * @description Only System Admin or tenant-scoped Internship Staff can publish a Draft version of a shared tenant template.
+         */
         post: operations["publishDocumentTemplateVersion"];
         delete?: never;
         options?: never;
@@ -1143,10 +1359,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /** Authorize and create a short-lived private download URL */
-        post: operations["createGeneratedDocumentDownloadUrl"];
+        get: operations["getGeneratedDocumentDownloadUrl"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1179,6 +1395,57 @@ export interface paths {
         };
         /** Get scoped metrics grouped by Program */
         get: operations["getProgramReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request a scoped asynchronous CSV export */
+        post: operations["createReportExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/exports/{exportId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get status of an owned report export */
+        get: operations["getReportExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/exports/{exportId}/download-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Issue a short-lived private download URL for an owned export */
+        get: operations["createReportExportDownloadUrl"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1279,6 +1546,8 @@ export interface components {
             displayName: string;
             /** @enum {string} */
             status: "active" | "archived" | "suspended";
+            /** @description Whether an issuer-bound OIDC subject is linked; no subject or issuer is exposed. */
+            oidcLinked: boolean;
             studentId?: string;
             roleAssignments: {
                 /** @enum {string} */
@@ -1288,6 +1557,18 @@ export interface components {
                 programIds: string[];
                 active: boolean;
             }[];
+        };
+        OidcAccountLinkRequest: {
+            /** @description Exact, case-sensitive OIDC sub claim; leading/trailing whitespace is rejected. */
+            subject: string;
+            reason: string;
+        };
+        OidcAccountLinkResponse: {
+            userId: string;
+            /** Format: uri */
+            issuer: string;
+            /** @enum {string} */
+            status: "linked";
         };
         ManagedUserPage: {
             items: components["schemas"]["ManagedUser"][];
@@ -1382,9 +1663,12 @@ export interface components {
             meta: components["schemas"]["PageMeta"];
         };
         CourseInput: {
-            programId: components["schemas"]["ObjectId"];
-            code: string;
+            courseCode: string;
+            programIds?: components["schemas"]["ObjectId"][];
             name: components["schemas"]["LocalizedText"];
+            credits?: number;
+            /** @enum {string} */
+            status?: "active" | "archived";
         };
         Course: components["schemas"]["CourseInput"] & {
             id: components["schemas"]["ObjectId"];
@@ -1392,7 +1676,6 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
-            version: number;
         };
         CourseList: {
             items: components["schemas"]["Course"][];
@@ -1475,13 +1758,96 @@ export interface components {
             /** Format: date-time */
             updatedAt?: string;
             /** @enum {string} */
-            evaluationStatus?: "awaiting_evaluator" | "awaiting_response" | "submitted" | "email_error";
+            evaluationStatus?: "awaiting_evaluator" | "awaiting_response" | "submitted" | "email_error" | "pending" | "inProgress" | "expired" | "assignment_ambiguous";
+            directoryRelations?: components["schemas"]["StudentDirectoryRelations"];
             /** Format: date-time */
             archivedAt?: string | null;
         };
         StudentList: {
             items: components["schemas"]["Student"][];
             meta: components["schemas"]["PageMeta"];
+            directory?: components["schemas"]["StudentDirectoryData"];
+        };
+        StudentDirectoryData: {
+            summary: {
+                all: number;
+                submitted: number;
+                inProgress: number;
+                emailError: number;
+                pending: number;
+                expired: number;
+                assignmentAmbiguous: number;
+            };
+            facets: {
+                academicYears: number[];
+                semesters: string[];
+                schoolIds: string[];
+                schools: components["schemas"]["StudentDirectorySchool"][];
+                statuses: ("cycle_unselected" | "pending" | "submitted" | "inProgress" | "expired" | "email_error" | "assignment_ambiguous")[];
+            };
+        };
+        StudentDirectoryRelations: {
+            school?: components["schemas"]["StudentDirectorySchool"];
+            program?: components["schemas"]["StudentDirectoryProgram"];
+            course?: components["schemas"]["StudentDirectoryCourse"];
+            assignments: components["schemas"]["StudentDirectoryAssignment"][];
+            placements: components["schemas"]["StudentDirectoryPlacement"][];
+        };
+        StudentDirectorySchool: {
+            id: components["schemas"]["ObjectId"];
+            schoolCode: string;
+            name: components["schemas"]["LocalizedText"];
+        };
+        StudentDirectoryProgram: {
+            id: components["schemas"]["ObjectId"];
+            schoolId: components["schemas"]["ObjectId"];
+            programCode: string;
+            name: components["schemas"]["LocalizedText"];
+        };
+        StudentDirectoryCourse: {
+            id: components["schemas"]["ObjectId"];
+            courseCode?: string;
+            name: components["schemas"]["LocalizedText"];
+        };
+        StudentDirectoryAssignment: {
+            id: components["schemas"]["ObjectId"];
+            cycleId: components["schemas"]["ObjectId"];
+            placementId: components["schemas"]["ObjectId"];
+            studentId: string;
+            evaluatorId: components["schemas"]["ObjectId"];
+            status: components["schemas"]["AssignmentStatus"];
+            /** Format: date-time */
+            deadlineAt?: string;
+            evaluator?: components["schemas"]["StudentDirectoryEvaluator"];
+        };
+        StudentDirectoryEvaluator: {
+            id: components["schemas"]["ObjectId"];
+            organizationId: components["schemas"]["ObjectId"];
+            name: components["schemas"]["LocalizedText"];
+            /** Format: email */
+            email: string;
+            position: components["schemas"]["LocalizedText"];
+        };
+        StudentDirectoryPlacement: {
+            id: components["schemas"]["ObjectId"];
+            studentId: string;
+            organizationId: components["schemas"]["ObjectId"];
+            academicTermId: components["schemas"]["ObjectId"];
+            positionTitle?: components["schemas"]["LocalizedText"];
+            /** Format: date-time */
+            startsAt?: string;
+            /** Format: date-time */
+            endsAt?: string;
+            status: components["schemas"]["PlacementStatus"];
+            organization?: components["schemas"]["StudentDirectoryOrganization"];
+        };
+        StudentDirectoryOrganization: {
+            id: components["schemas"]["ObjectId"];
+            organizationCode: string;
+            name: components["schemas"]["LocalizedText"];
+            address?: {
+                [key: string]: string;
+            };
         };
         StudentImportIssue: {
             code: string;
@@ -1550,10 +1916,6 @@ export interface components {
                 /** @enum {string} */
                 outcome: "created" | "updated" | "unchanged";
             }[];
-        };
-        JobAccepted: {
-            jobId: components["schemas"]["ObjectId"];
-            status: components["schemas"]["JobStatus"];
         };
         OrganizationInput: {
             name: string;
@@ -1679,12 +2041,14 @@ export interface components {
             copyFromVersionId?: components["schemas"]["ObjectId"];
         };
         /** @enum {string} */
-        CycleStatus: "draft" | "scheduled" | "open" | "closed" | "archived";
+        CycleStatus: "draft" | "active" | "closed";
         EvaluationCycleInput: {
-            name: string;
-            termId: components["schemas"]["ObjectId"];
-            programIds: components["schemas"]["ObjectId"][];
+            code: string;
+            name: components["schemas"]["LocalizedText"];
+            academicTermId: components["schemas"]["ObjectId"];
             competencySetVersionId: components["schemas"]["ObjectId"];
+            schoolId?: string;
+            programId?: string;
             /** Format: date-time */
             opensAt: string;
             /** Format: date-time */
@@ -1693,65 +2057,142 @@ export interface components {
         EvaluationCycle: components["schemas"]["EvaluationCycleInput"] & {
             id: components["schemas"]["ObjectId"];
             status: components["schemas"]["CycleStatus"];
+            academicTerm?: components["schemas"]["CycleAcademicTermSummary"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
-            version: number;
+        };
+        CycleAcademicTermSummary: {
+            id: components["schemas"]["ObjectId"];
+            academicYear: number;
+            semester: string;
         };
         EvaluationCycleList: {
             items: components["schemas"]["EvaluationCycle"][];
             meta: components["schemas"]["PageMeta"];
         };
         CyclePreview: {
-            canActivate: boolean;
-            totals: {
-                [key: string]: number;
+            cycleId: components["schemas"]["ObjectId"];
+            valid: boolean;
+            readiness: {
+                candidateStudentCount: number;
+                eligibleStudentCount: number;
+                missingStudentDataCount: number;
+                missingPlacementCount: number;
+                missingEvaluatorCount: number;
             };
-            errors: components["schemas"]["ErrorDetail"][];
+            issues: {
+                code: string;
+            }[];
         };
         /** @enum {string} */
-        AssignmentStatus: "draft" | "scheduled" | "open" | "inProgress" | "submitted" | "reopened" | "expired" | "revoked" | "closed";
+        AssignmentStatus: "pending" | "inProgress" | "submitted" | "expired" | "reopened" | "email_error";
         EvaluationAssignmentInput: {
             cycleId: components["schemas"]["ObjectId"];
             placementId: components["schemas"]["ObjectId"];
             evaluatorId: components["schemas"]["ObjectId"];
+            studentId: string;
+            schoolId: string;
+            programId: string;
+            /** Format: date-time */
+            deadlineAt: string;
+            /**
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending";
+            /**
+             * @default 1
+             * @constant
+             */
+            evaluationVersion: 1;
         };
         EvaluationAssignment: components["schemas"]["EvaluationAssignmentInput"] & {
             id: components["schemas"]["ObjectId"];
-            studentId: components["schemas"]["ObjectId"];
+            studentId?: string;
             status: components["schemas"]["AssignmentStatus"];
-            evaluationId: components["schemas"]["ObjectId"];
+            questionSnapshot: components["schemas"]["EvaluationSectionSnapshot"][];
+            competencySetVersionId: components["schemas"]["ObjectId"];
+            evaluationVersion: number;
+            /** Format: date-time */
+            deadlineAt?: string;
             /** Format: date-time */
             createdAt: string;
-            version: number;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        EvaluationSectionSnapshot: {
+            id: string;
+            title: components["schemas"]["LocalizedText"];
+            /** @enum {string} */
+            category?: "general" | "special" | "suggestion";
+            schoolId?: string;
+            programId?: string;
+            questions: components["schemas"]["EvaluationQuestion"][];
+        };
+        EvaluationQuestion: {
+            id: string;
+            label: components["schemas"]["LocalizedText"];
+            /** @enum {string} */
+            type: "rating" | "text" | "boolean";
+            required?: boolean;
+            weight?: number;
+            scaleMin?: number;
+            scaleMax?: number;
         };
         EvaluationAssignmentList: {
             items: components["schemas"]["EvaluationAssignment"][];
             meta: components["schemas"]["PageMeta"];
         };
         EvaluationAnswer: {
-            criterionKey: string;
-            score?: number;
-            text?: string;
+            [key: string]: number | string | boolean;
         };
         Evaluation: {
             id: components["schemas"]["ObjectId"];
             assignmentId: components["schemas"]["ObjectId"];
-            studentId: components["schemas"]["ObjectId"];
-            /** @enum {string} */
-            status: "draft" | "submitted" | "reopened";
-            questionSnapshot: components["schemas"]["Criterion"][];
-            scoringRuleSnapshot?: components["schemas"]["ScoringRule"];
-            answers: components["schemas"]["EvaluationAnswer"][];
-            /** @description Deprecated compatibility field; new submissions leave it null to avoid cross-category scoring. */
+            version: number;
+            answers: components["schemas"]["EvaluationAnswer"];
+            questionSnapshot: components["schemas"]["EvaluationSectionSnapshot"][];
             aggregateScore?: number | null;
             categoryScores?: components["schemas"]["EvaluationCategoryScores"];
             /** @enum {string} */
             scoringPolicyVersion?: "mfu-category-mean-v1";
             /** Format: date-time */
-            submittedAt?: string | null;
-            version: number;
+            submittedAt: string;
+            evaluatorId: components["schemas"]["ObjectId"];
+            idempotencyKey: string;
+            idempotencyScopeKey?: string;
+            requestHash?: string;
+            /** Format: date-time */
+            supersededAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        EvaluationDetail: {
+            assignment: components["schemas"]["EvaluationAssignment"];
+            draft: components["schemas"]["EvaluationDraft"] | null;
+            evaluations: components["schemas"]["Evaluation"][];
+            student: components["schemas"]["EvaluationStudent"] | null;
+        };
+        EvaluationStudent: {
+            id: components["schemas"]["ObjectId"];
+            studentId: string;
+            name: components["schemas"]["LocalizedText"];
+            /** Format: email */
+            email: string;
+            company?: string;
+        };
+        EvaluationDraft: {
+            id: components["schemas"]["ObjectId"];
+            assignmentId: components["schemas"]["ObjectId"];
+            answers: components["schemas"]["EvaluationAnswer"];
+            revision: number;
+            updatedBy: string;
+            /** Format: date-time */
+            createdAt: string;
             /** Format: date-time */
             updatedAt: string;
         };
@@ -1768,12 +2209,11 @@ export interface components {
             scoringPolicyVersion: "mfu-category-mean-v1";
         };
         EvaluationDraftInput: {
-            version: number;
-            answers: components["schemas"]["EvaluationAnswer"][];
+            revision: number;
+            answers: components["schemas"]["EvaluationAnswer"];
         };
-        EvaluationSubmitInput: components["schemas"]["EvaluationDraftInput"] & {
-            /** @constant */
-            consent: true;
+        EvaluationSubmitInput: {
+            answers: components["schemas"]["EvaluationAnswer"];
         };
         /** @enum {string} */
         EmailAudience: "student" | "evaluator" | "staff";
@@ -1803,6 +2243,26 @@ export interface components {
             latestVersion: number;
             currentStatus: components["schemas"]["TemplateStatus"];
         };
+        SystemEmailTemplateInput: {
+            subject: string;
+            html: string;
+            text: string;
+        };
+        SystemEmailTemplate: {
+            id?: components["schemas"]["ObjectId"];
+            /** @enum {string} */
+            code: "evaluation_request" | "evaluation_reminder";
+            name: string;
+            description: string;
+            subject: string;
+            html: string;
+            text: string;
+            placeholders: string[];
+            versionId?: components["schemas"]["ObjectId"];
+            versionNumber?: number;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
         EmailTemplateList: {
             items: components["schemas"]["EmailTemplate"][];
             meta: components["schemas"]["PageMeta"];
@@ -1829,6 +2289,12 @@ export interface components {
             /** @enum {string} */
             status: "queued" | "processing" | "completed" | "partial";
             total: number;
+            /** @description Aggregate delivery counts returned by campaign detail reads. */
+            deliverySummary?: {
+                /** @enum {string} */
+                status: "queued" | "sending" | "sent" | "failed" | "uncertain";
+                count: number;
+            }[];
         };
         QueuedDelivery: {
             /** @deprecated */
@@ -1847,15 +2313,30 @@ export interface components {
             /** Format: date-time */
             deadlineAt?: string;
         };
+        InvitationReissue: {
+            /** @constant */
+            success: true;
+            /** @enum {string} */
+            status: "queued" | "processing" | "completed" | "partial";
+            campaignId: components["schemas"]["ObjectId"];
+            deliveryId: components["schemas"]["ObjectId"];
+            assignmentId: components["schemas"]["ObjectId"];
+            invitationId: components["schemas"]["ObjectId"];
+            invitationVersion: number;
+            /** Format: email */
+            recipientEmail: string;
+            /** Format: date-time */
+            deadlineAt: string;
+        };
         /** @enum {string} */
         DeliveryStatus: "queued" | "sending" | "sent" | "failed" | "uncertain";
         Delivery: {
             id: components["schemas"]["ObjectId"];
             campaignId: components["schemas"]["ObjectId"];
-            recipientMasked?: string;
+            assignmentId: components["schemas"]["ObjectId"];
+            recipientMasked: string;
             status: components["schemas"]["DeliveryStatus"];
             attempts: number;
-            providerMessageId?: string | null;
             lastErrorCode?: string | null;
             /** Format: date-time */
             createdAt: string;
@@ -1919,19 +2400,84 @@ export interface components {
             /** Format: date-time */
             completedAt: string | null;
         };
-        DocumentTemplateInput: {
-            code: string;
-            name: string;
-            /** @enum {string} */
-            documentType: "transcript" | "certificate" | "report";
-            programIds: components["schemas"]["ObjectId"][];
-        };
-        DocumentTemplate: components["schemas"]["DocumentTemplateInput"] & {
+        /** @enum {string} */
+        DocumentType: "transcript" | "certificate";
+        /** @enum {string} */
+        DocumentTemplateStatus: "active" | "archived";
+        /** @enum {string} */
+        DocumentAssetType: "font" | "emblem" | "signature" | "background";
+        DocumentAsset: {
             id: components["schemas"]["ObjectId"];
-            latestVersion: number;
-            currentStatus: components["schemas"]["TemplateStatus"];
+            key: string;
+            assetType: components["schemas"]["DocumentAssetType"];
+            originalName: string;
+            /** @description Extracted embedded family name for font assets; absent on legacy assets and non-font assets. */
+            fontFamily?: string;
+            /** @enum {string} */
+            contentType: "font/ttf" | "font/otf" | "image/png";
+            size: number;
+            sha256: string;
+            rightsBasis: string;
+            rightsConfirmedBy: string;
+            /** Format: date-time */
+            rightsConfirmedAt: string;
+            /** @enum {string} */
+            status: "active" | "revoked";
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        DocumentAssetList: {
+            items: components["schemas"]["DocumentAsset"][];
+            meta: components["schemas"]["PageMeta"];
+        };
+        DocumentTemplateCanonicalJson: {
+            width: number;
+            height: number;
+            elements: {
+                [key: string]: unknown;
+            }[];
+        } & {
+            [key: string]: unknown;
+        };
+        DocumentTemplateCreateInput: {
+            code: string;
+            name: string;
+            documentType: components["schemas"]["DocumentType"];
+            /** @enum {integer} */
+            schemaVersion: 1 | 2;
+            canonicalJson: components["schemas"]["DocumentTemplateCanonicalJson"];
+            placeholders?: string[];
+            fontAssetKeys?: string[];
+        };
+        DocumentTemplate: {
+            id: components["schemas"]["ObjectId"];
+            code: string;
+            name: string;
+            documentType?: components["schemas"]["DocumentType"] | null;
+            status: components["schemas"]["DocumentTemplateStatus"];
+            /** Format: date-time */
+            createdAt: string;
+            latestVersion?: components["schemas"]["DocumentTemplateLatestVersion"] | null;
+            versions?: components["schemas"]["DocumentTemplateVersion"][];
+        };
+        DocumentTemplateLatestVersion: {
+            id: components["schemas"]["ObjectId"];
+            versionNumber: number;
+            status: components["schemas"]["TemplateStatus"];
+            /** @enum {integer} */
+            schemaVersion: 1 | 2;
+            revision: number;
+            editorMetadata?: components["schemas"]["DocumentTemplateEditorMetadata"] | null;
+        };
+        DocumentTemplateEditorMetadata: {
+            nameTh?: string;
+            nameEn?: string;
+            description?: string;
+            /** @enum {string} */
+            backgroundType?: "watermark" | "certificate_pattern" | "geometric" | "custom" | "none";
+            bgOpacity?: number;
         };
         DocumentTemplateList: {
             items: components["schemas"]["DocumentTemplate"][];
@@ -1942,47 +2488,67 @@ export interface components {
             templateId: components["schemas"]["ObjectId"];
             versionNumber: number;
             status: components["schemas"]["TemplateStatus"];
-            schemaVersion: number;
-            /** @description Canonical validated Konva document JSON */
-            content: {
-                [key: string]: unknown;
-            };
-            thumbnailKey?: string | null;
-            placeholders?: string[];
-            version: number;
+            /** @enum {integer} */
+            schemaVersion: 1 | 2;
+            revision: number;
+            canonicalJson: components["schemas"]["DocumentTemplateCanonicalJson"];
+            placeholders: string[];
+            fontAssetKeys: string[];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             publishedAt?: string | null;
         };
+        DocumentTemplateVersionList: {
+            items: components["schemas"]["DocumentTemplateVersionRead"][];
+            meta: components["schemas"]["PageMeta"];
+        };
+        DocumentTemplateVersionSummary: {
+            id: components["schemas"]["ObjectId"];
+            templateId: components["schemas"]["ObjectId"];
+            versionNumber: number;
+            /** @enum {string} */
+            status: "published";
+            /** @enum {integer} */
+            schemaVersion: 1 | 2;
+            revision: number;
+            /** Format: date-time */
+            publishedAt?: string | null;
+        };
+        DocumentTemplateVersionRead: components["schemas"]["DocumentTemplateVersion"] | components["schemas"]["DocumentTemplateVersionSummary"];
+        DocumentTemplateVersionInput: {
+            /** @enum {integer} */
+            schemaVersion: 1 | 2;
+            canonicalJson: components["schemas"]["DocumentTemplateCanonicalJson"];
+            placeholders?: string[];
+            fontAssetKeys?: string[];
+        };
         DocumentTemplateVersionPatch: {
-            version: number;
-            schemaVersion: number;
-            content: {
-                [key: string]: unknown;
-            };
-            thumbnailKey?: string | null;
+            revision: number;
+            /** @enum {integer} */
+            schemaVersion: 1 | 2;
+            canonicalJson: components["schemas"]["DocumentTemplateCanonicalJson"];
+            placeholders?: string[];
+            fontAssetKeys?: string[];
         };
         /** @enum {string} */
         JobStatus: "queued" | "processing" | "completed" | "failed" | "cancelled";
         GenerateDocumentRequest: {
-            studentId: components["schemas"]["ObjectId"];
-            documentTemplateVersionId: components["schemas"]["ObjectId"];
-            evaluationId?: components["schemas"]["ObjectId"];
+            studentId: string;
+            templateVersionId: components["schemas"]["ObjectId"];
+            evaluationIds: components["schemas"]["ObjectId"][];
         };
         GeneratedDocument: {
             id: components["schemas"]["ObjectId"];
             studentId: components["schemas"]["ObjectId"];
-            evaluationId?: components["schemas"]["ObjectId"];
-            documentTemplateVersionId: components["schemas"]["ObjectId"];
-            status: components["schemas"]["JobStatus"];
-            checksum?: string | null;
-            rendererVersion?: string | null;
+            templateVersionId: components["schemas"]["ObjectId"];
+            evaluationIds: components["schemas"]["ObjectId"][];
+            /** @enum {string} */
+            status: "queued" | "processing" | "ready" | "failed";
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
-            completedAt?: string | null;
-            failureCode?: string | null;
+            updatedAt: string;
         };
         GeneratedDocumentList: {
             items: components["schemas"]["GeneratedDocument"][];
@@ -2015,19 +2581,63 @@ export interface components {
                 [key: string]: number;
             };
         };
-        AuditLog: {
+        ReportExportRequest: {
+            filters?: {
+                termId?: components["schemas"]["ObjectId"];
+                schoolId?: components["schemas"]["ObjectId"];
+                programId?: components["schemas"]["ObjectId"];
+            };
+            fields?: ("studentNumber" | "studentName" | "studentEmail" | "schoolId" | "programId" | "termId" | "cycleId" | "status" | "deadlineAt")[];
+            /**
+             * @default csv
+             * @enum {string}
+             */
+            format: "csv";
+        };
+        ReportExport: {
             id: components["schemas"]["ObjectId"];
-            /** Format: date-time */
-            occurredAt: string;
-            actorId: components["schemas"]["ObjectId"];
-            action: string;
-            targetType: string;
-            targetId: components["schemas"]["ObjectId"];
-            requestId: string;
-            scope?: {
+            /** @enum {string} */
+            reportType: "assignments";
+            filters: {
                 [key: string]: unknown;
             };
-            /** @description Redacted safe metadata only */
+            fields: ("studentNumber" | "studentName" | "studentEmail" | "schoolId" | "programId" | "termId" | "cycleId" | "status" | "deadlineAt")[];
+            /** @enum {string} */
+            format: "csv";
+            /** @enum {string} */
+            status: "queued" | "processing" | "ready" | "failed" | "expired";
+            rowCount: number;
+            /** Format: date-time */
+            snapshotAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            completedAt?: string;
+            /** @enum {string} */
+            failureCode?: "EXPORT_GENERATION_FAILED";
+        };
+        ReportExportDownload: {
+            /** Format: uri */
+            url: string;
+            expiresIn: number;
+        };
+        AuditLog: {
+            id: string;
+            /** Format: date-time */
+            occurredAt: string;
+            actorId: string;
+            action: string;
+            route: string;
+            method: string;
+            /** @enum {string} */
+            outcome: "success" | "failure";
+            requestId: string;
+            resourceScopes?: {
+                tenant?: boolean;
+                schoolIds?: string[];
+                programIds?: string[];
+            }[];
+            /** @description Internal event metadata; contents are limited by the same audit scope. */
             metadata?: {
                 [key: string]: unknown;
             };
@@ -2133,11 +2743,48 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description Upload exceeds the maximum document asset size */
+        PayloadTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Private asset storage is unavailable */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description PDF generation quotas for the authenticated actor or client IP are exhausted */
+        RateLimited: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Shared rate-limit storage is unavailable; generation fails closed */
+        RateLimiterUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         Page: number;
         Limit: number;
         Search: string;
+        /** @description Set true to include archived records; false excludes them. Omission preserves the endpoint's default. */
         Archived: boolean;
         IdempotencyKey: string;
         SchoolId: components["schemas"]["ObjectId"];
@@ -2156,6 +2803,33 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Process is alive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthStatus"];
+                };
+            };
+            /** @description Health checks are rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getLiveness: {
         parameters: {
             query?: never;
@@ -2383,6 +3057,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     getUserSummary: {
@@ -2458,6 +3133,40 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    linkOidcAccount: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OidcAccountLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Identity linked or matching idempotent replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OidcAccountLinkResponse"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     exchangeInvitation: {
         parameters: {
             query?: never;
@@ -2527,7 +3236,11 @@ export interface operations {
             query?: {
                 page?: components["parameters"]["Page"];
                 pageSize?: number;
+                /** @description Case-sensitive School code prefix */
                 search?: string;
+                /** @description Comma-separated School record IDs; always intersected with caller scope */
+                schoolIds?: string;
+                /** @description Set true to include archived records; false excludes them. Omission preserves the endpoint's default. */
                 archived?: components["parameters"]["Archived"];
             };
             header?: never;
@@ -2602,6 +3315,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listPrograms: {
@@ -2609,8 +3323,9 @@ export interface operations {
             query?: {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
-                search?: components["parameters"]["Search"];
                 schoolId?: components["schemas"]["ObjectId"];
+                /** @description Comma-separated Program ObjectIds; at most 100 IDs. */
+                programIds?: string;
             };
             header?: never;
             path?: never;
@@ -2715,7 +3430,13 @@ export interface operations {
             query?: {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
-                academicYear?: string;
+                academicYear?: number;
+                /** @description Case-sensitive Term code or semester prefix; a numeric year also matches academicYear */
+                search?: string;
+                /** @description Comma-separated Term record IDs; always intersected with caller scope */
+                termIds?: string;
+                /** @description Set true to include archived records; false excludes them. Omission preserves the endpoint's default. */
+                archived?: components["parameters"]["Archived"];
             };
             header?: never;
             path?: never;
@@ -2787,7 +3508,9 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     updateCourse: {
@@ -2815,6 +3538,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
     };
@@ -2843,7 +3567,9 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listStudents: {
@@ -2852,10 +3578,20 @@ export interface operations {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
                 search?: components["parameters"]["Search"];
+                /** @description Include scope-bound status summary and filter facets for the Student directory view. */
+                includeDirectoryData?: boolean;
                 schoolId?: components["schemas"]["ObjectId"];
                 programId?: components["schemas"]["ObjectId"];
+                academicTermId?: components["schemas"]["ObjectId"];
+                /** @description Filters Student profiles by academic year when cycleId is omitted; with cycleId, filters against that cycle's Academic Term. Buddhist and Gregorian year equivalents are accepted. */
+                academicYear?: number;
+                /** @description Filters Student profiles by normalized semester when cycleId is omitted; with cycleId, filters against that cycle's Academic Term. */
+                semester?: string;
+                /** @description Selects the evaluation cycle used to derive status; required when evaluationStatus is provided. */
+                cycleId?: components["schemas"]["ObjectId"];
                 studentId?: string;
-                evaluationStatus?: "awaiting_evaluator" | "awaiting_response" | "submitted" | "email_error";
+                /** @description Filters the selected cycle's assignments; requires cycleId. */
+                evaluationStatus?: "awaiting_evaluator" | "awaiting_response" | "submitted" | "email_error" | "pending" | "inProgress" | "expired" | "assignment_ambiguous";
             };
             header?: never;
             path?: never;
@@ -2873,6 +3609,8 @@ export interface operations {
                 };
             };
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
         };
     };
     createStudent: {
@@ -3074,6 +3812,7 @@ export interface operations {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
                 search?: components["parameters"]["Search"];
+                /** @description Set true to include archived records; false excludes them. Omission preserves the endpoint's default. */
                 archived?: components["parameters"]["Archived"];
             };
             header?: never;
@@ -3232,8 +3971,10 @@ export interface operations {
             query?: {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
-                programId?: components["schemas"]["ObjectId"];
-                status?: components["schemas"]["TemplateStatus"];
+                /** @description Case-sensitive competency-set code prefix */
+                search?: string;
+                /** @description Set true to include archived records; false excludes them. Omission preserves the endpoint's default. */
+                archived?: components["parameters"]["Archived"];
             };
             header?: never;
             path?: never;
@@ -3276,7 +4017,33 @@ export interface operations {
                     "application/json": components["schemas"]["CompetencySet"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    listCompetencySetVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                competencySetId: components["parameters"]["CompetencySetId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped competency versions, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompetencySetVersion"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
         };
     };
     createCompetencySetVersion: {
@@ -3303,8 +4070,10 @@ export interface operations {
                     "application/json": components["schemas"]["CompetencySetVersion"];
                 };
             };
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
         };
     };
     getCompetencySetVersion: {
@@ -3354,6 +4123,9 @@ export interface operations {
                     "application/json": components["schemas"]["CompetencySetVersion"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
@@ -3378,6 +4150,9 @@ export interface operations {
                     "application/json": components["schemas"]["CompetencySetVersion"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
@@ -3431,6 +4206,9 @@ export interface operations {
                     "application/json": components["schemas"]["EvaluationCycle"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
     };
@@ -3454,15 +4232,15 @@ export interface operations {
                     "application/json": components["schemas"]["CyclePreview"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
     activateEvaluationCycle: {
         parameters: {
             query?: never;
-            header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
+            header?: never;
             path: {
                 cycleId: components["parameters"]["CycleId"];
             };
@@ -3470,17 +4248,46 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Activation accepted */
-            202: {
+            /** @description Cycle activated */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobAccepted"];
+                    "application/json": components["schemas"]["EvaluationCycle"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    closeEvaluationCycle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cycleId: components["parameters"]["CycleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cycle closed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationCycle"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listEvaluationAssignments: {
@@ -3524,7 +4331,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Assignment created */
+            /** @description Assignment created with canonical Student reference */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -3533,6 +4340,9 @@ export interface operations {
                     "application/json": components["schemas"]["EvaluationAssignment"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
@@ -3554,7 +4364,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Evaluation"];
+                    "application/json": components["schemas"]["EvaluationDetail"];
                 };
             };
             404: components["responses"]["NotFound"];
@@ -3581,7 +4391,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Evaluation"];
+                    "application/json": components["schemas"]["EvaluationDraft"];
                 };
             };
             409: components["responses"]["Conflict"];
@@ -3605,16 +4415,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Existing final result returned for idempotent retry */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Evaluation"];
-                };
-            };
-            /** @description Final evaluation created */
+            /** @description Final evaluation created or returned for an idempotent replay */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -3641,6 +4442,83 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    getSystemEmailTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Built-in system templates and current published versions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemEmailTemplate"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateSystemEmailTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: "evaluation_request" | "evaluation_reminder";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemEmailTemplateInput"];
+            };
+        };
+        responses: {
+            /** @description Updated system template and published version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemEmailTemplate"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    resetSystemEmailTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: "evaluation_request" | "evaluation_reminder";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reset system template and published version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemEmailTemplate"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listEmailTemplates: {
@@ -3774,6 +4652,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueuedDelivery"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    reissueEvaluationInvitation: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                assignmentId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Reissue transaction committed; inspect delivery for final email status */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationReissue"];
                 };
             };
             404: components["responses"]["NotFound"];
@@ -4183,12 +5094,75 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    listDocumentAssets: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["Page"];
+                limit?: components["parameters"]["Limit"];
+                assetType?: components["schemas"]["DocumentAssetType"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated private document assets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentAssetList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    uploadDocumentAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    assetType: components["schemas"]["DocumentAssetType"];
+                    rightsBasis: string;
+                    /** @enum {string} */
+                    rightsConfirmed: "true";
+                };
+            };
+        };
+        responses: {
+            /** @description Asset stored privately and rights attestation audited */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentAsset"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     listDocumentTemplates: {
         parameters: {
             query?: {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
-                status?: components["schemas"]["TemplateStatus"];
+                status?: components["schemas"]["DocumentTemplateStatus"];
+                documentType?: components["schemas"]["DocumentType"];
             };
             header?: never;
             path?: never;
@@ -4218,7 +5192,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["DocumentTemplateInput"];
+                "application/json": components["schemas"]["DocumentTemplateCreateInput"];
             };
         };
         responses: {
@@ -4231,6 +5205,67 @@ export interface operations {
                     "application/json": components["schemas"]["DocumentTemplate"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    listDocumentTemplateVersions: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["Page"];
+                limit?: components["parameters"]["Limit"];
+                status?: components["schemas"]["TemplateStatus"];
+            };
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated document template versions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentTemplateVersionList"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createDocumentTemplateVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DocumentTemplateVersionInput"];
+            };
+        };
+        responses: {
+            /** @description Draft version created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentTemplateVersion"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
     };
@@ -4251,9 +5286,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DocumentTemplateVersion"];
+                    "application/json": components["schemas"]["DocumentTemplateVersionRead"];
                 };
             };
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -4281,6 +5317,7 @@ export interface operations {
                     "application/json": components["schemas"]["DocumentTemplateVersion"];
                 };
             };
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
@@ -4305,8 +5342,17 @@ export interface operations {
                     "application/json": components["schemas"]["DocumentTemplateVersion"];
                 };
             };
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
+            /** @description Template cannot publish until renderer data, registered rights-attested assets, font mapping, and required placeholder sources are valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     listGeneratedDocuments: {
@@ -4360,8 +5406,12 @@ export interface operations {
                     "application/json": components["schemas"]["GeneratedDocument"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["RateLimiterUnavailable"];
         };
     };
     getGeneratedDocument: {
@@ -4387,7 +5437,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    createGeneratedDocumentDownloadUrl: {
+    getGeneratedDocumentDownloadUrl: {
         parameters: {
             query?: never;
             header?: never;
@@ -4462,16 +5512,101 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    createReportExport: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Export accepted for asynchronous generation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportExport"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            /** @description Invalid export selection or row limit exceeded */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getReportExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                exportId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Export metadata and current status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportExport"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createReportExportDownloadUrl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                exportId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Short-lived signed object-storage URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportExportDownload"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
     listAuditLogs: {
         parameters: {
             query?: {
                 page?: components["parameters"]["Page"];
-                limit?: components["parameters"]["Limit"];
-                actorId?: components["schemas"]["ObjectId"];
-                action?: string;
-                targetType?: string;
-                from?: string;
-                to?: string;
+                pageSize?: number;
+                /** @description Applied only to System Administrator queries; ignored for other roles. */
+                actorId?: string;
+                requestId?: string;
             };
             header?: never;
             path?: never;
@@ -4479,7 +5614,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Paginated audit events with redacted metadata */
+            /** @description Paginated audit events limited to the caller's own records and authorized resource scopes. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4488,6 +5623,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuditLogList"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
         };
     };

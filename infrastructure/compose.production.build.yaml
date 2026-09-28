@@ -1,0 +1,20 @@
+name: internship-transcript-v2-build
+
+services:
+  api:
+    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-api:${IMAGE_TAG:?Build tag is required}
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.api
+
+  worker:
+    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-worker:${IMAGE_TAG:?Build tag is required}
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.worker
+
+  web:
+    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-web:${IMAGE_TAG:?Build tag is required}
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.web

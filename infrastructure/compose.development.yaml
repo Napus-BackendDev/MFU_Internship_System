@@ -46,7 +46,7 @@ services:
       - --maxmemory-policy
       - noeviction
     ports:
-      - '6380:6379'
+      - '127.0.0.1:6380:6379'
     volumes:
       - redis-data:/data
     healthcheck:
@@ -77,7 +77,12 @@ services:
       - /bin/sh
       - -c
       - >-
-        until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 2; done;
+        attempt=0;
+        until mc alias set local http://minio:9000 minioadmin minioadmin; do
+        attempt=$$((attempt + 1));
+        if [ "$$attempt" -ge 60 ]; then echo 'MinIO did not become ready within 120 seconds' >&2; exit 1; fi;
+        sleep 2;
+        done;
         mc mb --ignore-existing local/internship-transcript-dev;
         mc anonymous set none local/internship-transcript-dev
     restart: 'no'
@@ -91,6 +96,12 @@ services:
       MP_MAX_MESSAGES: 5000
       MP_SMTP_AUTH_ACCEPT_ANY: 'true'
       MP_SMTP_AUTH_ALLOW_INSECURE: 'true'
+    healthcheck:
+      test: ['CMD', '/mailpit', 'readyz']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
     restart: unless-stopped
 
   api:
@@ -133,8 +144,22 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
     ports:
       - '127.0.0.1:8081:8081'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8081/api/v2/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   worker:
     profiles: ['full']
@@ -144,7 +169,19 @@ services:
     environment: *app-environment
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8082/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
   web:
     profiles: ['full']
@@ -153,12 +190,26 @@ services:
       dockerfile: infrastructure/docker/Dockerfile.web
     environment:
       NODE_ENV: production
+      NUXT_API_INTERNAL_BASE_URL: http://api:8081/api/v2
       NUXT_PUBLIC_API_BASE_URL: http://localhost:8081/api/v2
       NUXT_PUBLIC_APP_ENVIRONMENT: development
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - '127.0.0.1:8080:8080'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8080').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
 volumes:
   mongodb-data:

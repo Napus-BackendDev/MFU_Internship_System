@@ -80,6 +80,9 @@ const targetedEmailSchema = z.object({
   recipientEmail: flexibleEmailSchema.optional(),
   evaluatorName: z.string().min(1).optional()
 })
+const invitationReissueSchema = z.object({
+  reason: z.string().trim().min(5).max(500)
+})
 
 @Controller()
 export class CorrespondenceController {
@@ -141,6 +144,24 @@ export class CorrespondenceController {
       request.actor!,
       directInvitationSchema.parse(raw),
       z.string().min(8).max(128).parse(idempotencyKey)
+    )
+  }
+
+  @RequirePermissions('campaigns.send')
+  @Post('evaluation-assignments/:assignmentId/invitation/reissue')
+  @HttpCode(HttpStatus.ACCEPTED)
+  public reissueInvitation(
+    @Req() request: AuthenticatedRequest,
+    @Param('assignmentId') assignmentId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    return this.campaigns.reissueInvitation(
+      request.actor!,
+      assignmentId,
+      invitationReissueSchema.parse(raw),
+      z.string().min(8).max(128).parse(idempotencyKey),
+      request.requestId ?? 'unknown'
     )
   }
 
@@ -209,9 +230,15 @@ export class CorrespondenceController {
   @HttpCode(HttpStatus.ACCEPTED)
   public retryDelivery(
     @Req() request: AuthenticatedRequest,
-    @Param('deliveryId') id: string
+    @Param('deliveryId') id: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined
   ): Promise<unknown> {
-    return this.campaigns.retry(request.actor!, id)
+    return this.campaigns.retry(
+      request.actor!,
+      id,
+      z.string().trim().min(8).max(128).parse(idempotencyKey),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @Public()

@@ -7,7 +7,16 @@ interface ApiRequestOptions {
   >
 }
 
-let refreshPromise: Promise<void> | null = null
+let refreshPromise: Promise<boolean> | null = null
+
+export async function retryAfterSessionRefresh<T>(
+  originalError: unknown,
+  refresh: () => Promise<boolean>,
+  retryRequest: () => Promise<T>
+): Promise<T> {
+  if (!(await refresh())) throw originalError
+  return retryRequest()
+}
 
 export function useApi() {
   const config = useRuntimeConfig()
@@ -22,7 +31,7 @@ export function useApi() {
     path: string,
     options: ApiRequestOptions = {}
   ): Promise<T> {
-    const execute = () =>
+    const execute = (): Promise<T> =>
       $fetch<T>(path, {
         baseURL,
         body: options.body,
@@ -43,16 +52,13 @@ export function useApi() {
       const fetchError = err as { status?: number; statusCode?: number }
       const is401 = fetchError?.status === 401 || fetchError?.statusCode === 401
       const isAuthEndpoint =
+        path === '/auth/me' ||
         path.startsWith('/auth/refresh') ||
         path.startsWith('/auth/logout') ||
         path.startsWith('/auth/dev/login') ||
         path.startsWith('/public/')
 
       if (import.meta.client && is401 && !isAuthEndpoint) {
-        if (window.location.pathname.startsWith('/evaluate')) {
-          throw err
-        }
-
         if (!refreshPromise) {
           refreshPromise = $fetch('/auth/refresh', {
             baseURL,
@@ -63,7 +69,7 @@ export function useApi() {
               'x-requested-with': 'XMLHttpRequest'
             }
           })
-            .then(() => {})
+            .then(() => true)
             .catch(() => {
               if (
                 window.location.pathname !== '/login' &&
@@ -71,18 +77,18 @@ export function useApi() {
               ) {
                 window.location.href = '/login'
               }
+              return false
             })
             .finally(() => {
               refreshPromise = null
             })
         }
 
-        try {
-          await refreshPromise
-          return await execute()
-        } catch {
-          throw err
-        }
+        return retryAfterSessionRefresh(
+          err,
+          () => refreshPromise ?? Promise.resolve(false),
+          execute
+        )
       }
 
       throw err

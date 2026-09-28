@@ -1,5 +1,6 @@
 import { loadEnvironment } from '@internship/config'
 import { MongoClient, ObjectId, type Db } from 'mongodb'
+import { createDevelopmentPinCredential } from './development-pin.js'
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development'
 try {
@@ -1886,12 +1887,6 @@ try {
         province: organizationsData.find((o) => o.code === stu.org)?.province,
         admissionYear: 2565,
         status: 'active',
-        evaluationStatus:
-          stu.status === 'submitted'
-            ? 'submitted'
-            : stu.status === 'inProgress'
-              ? 'awaiting_response'
-              : 'awaiting_evaluator',
         createdAt: now,
         updatedAt: now
       }
@@ -1917,20 +1912,24 @@ try {
       }
     )
 
-    // 16-character PIN formatted as 2026-XXXX-XXXX-XXXX
-    const rawPin =
-      `2026${stu.studentId.slice(0, 8)}${stu.studentId.slice(8).padStart(4, '0')}`.slice(
-        0,
-        16
-      )
-
     // Only create evaluationAssignments if the student has been sent an evaluation (inProgress or submitted)
     // Students with 'pending' represent "รอระบุผู้ประเมิน" (ยังไม่มีผู้ประเมิน / ยังไม่ถูกส่งประเมิน)
     if (stu.status !== 'pending') {
+      const assignmentFilter = { cycleId, placementId, evaluatorId: evId }
+      const existingAssignment = await database
+        .collection('evaluationAssignments')
+        .findOne(assignmentFilter, { projection: { accessPinHash: 1 } })
+      const pinCredential = createDevelopmentPinCredential(
+        environment.INVITATION_TOKEN_PEPPER,
+        typeof existingAssignment?.accessPinHash === 'string'
+          ? existingAssignment.accessPinHash
+          : undefined
+      )
+
       await upsertId(
         database,
         'evaluationAssignments',
-        { cycleId, placementId, evaluatorId: evId },
+        assignmentFilter,
         {
           cycleId,
           placementId,
@@ -1943,10 +1942,11 @@ try {
           deadlineAt: future,
           status: stu.status,
           evaluationVersion: 1,
-          accessPin: rawPin,
+          ...pinCredential,
           createdAt: now,
           updatedAt: now
-        }
+        },
+        ['accessPin']
       )
     } else {
       await database
@@ -2204,15 +2204,19 @@ async function upsertId(
   database: Db,
   collection: string,
   filter: Readonly<Record<string, unknown>>,
-  document: Readonly<Record<string, unknown>>
+  document: Readonly<Record<string, unknown>>,
+  unsetFields: readonly string[] = []
 ): Promise<string> {
+  const update = {
+    $set: document,
+    $setOnInsert: { _id: new ObjectId() },
+    ...(unsetFields.length > 0
+      ? { $unset: Object.fromEntries(unsetFields.map((field) => [field, ''])) }
+      : {})
+  }
   const result = await database
     .collection(collection)
-    .findOneAndUpdate(
-      filter,
-      { $set: document, $setOnInsert: { _id: new ObjectId() } },
-      { upsert: true, returnDocument: 'after' }
-    )
+    .findOneAndUpdate(filter, update, { upsert: true, returnDocument: 'after' })
   if (!result) throw new Error(`Failed to seed ${collection}.`)
   return result._id.toString()
 }

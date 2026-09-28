@@ -1,6 +1,15 @@
 import type { Connection, InferSchemaType, Model } from 'mongoose'
 import { Schema } from 'mongoose'
 
+const auditResourceScopeSchema = new Schema(
+  {
+    tenant: { type: Boolean, default: false },
+    schoolIds: { type: [String], default: [] },
+    programIds: { type: [String], default: [] }
+  },
+  { _id: false }
+)
+
 const deliverySchema = new Schema(
   {
     campaignId: { type: String, required: true },
@@ -30,6 +39,7 @@ const invitationSchema = new Schema(
     evaluatorId: { type: String, required: true },
     email: { type: String, required: true },
     expiresAt: { type: Date, required: true },
+    version: { type: Number, default: 1 },
     status: { type: String, required: true },
     accessPin: { type: String, select: false },
     accessPinHash: String
@@ -51,6 +61,7 @@ const assignmentSchema = new Schema(
   {
     studentId: { type: String, required: true },
     evaluatorId: { type: String, required: true },
+    evaluationVersion: { type: Number, default: 1 },
     deadlineAt: { type: Date, required: true },
     status: { type: String, required: true },
     accessPin: { type: String, select: false },
@@ -83,17 +94,45 @@ const documentSchema = new Schema(
     studentId: { type: String, required: true },
     templateVersionId: { type: String, required: true },
     evaluationIds: { type: [String], default: [] },
+    requestedBy: String,
+    requestedByEmail: String,
+    requestId: String,
+    resourceScopes: {
+      type: [auditResourceScopeSchema],
+      default: [],
+      select: false
+    },
+    sourceSnapshot: { type: Schema.Types.Mixed, select: false },
     status: { type: String, required: true },
     objectKey: String,
     sha256: String,
     failureCode: String,
-    processingStartedAt: Date
+    processingStartedAt: Date,
+    processingLeaseUntil: Date,
+    processingToken: String
   },
   { collection: 'generatedDocuments', timestamps: true }
 )
 
+const auditLogSchema = new Schema(
+  {
+    requestId: { type: String, required: true },
+    actorId: { type: String, required: true },
+    actorEmail: { type: String, required: true },
+    action: { type: String, required: true },
+    route: { type: String, required: true },
+    method: { type: String, required: true },
+    outcome: { type: String, enum: ['success', 'failure'], required: true },
+    resourceScopes: { type: [auditResourceScopeSchema] },
+    metadata: { type: Schema.Types.Mixed }
+  },
+  { collection: 'auditLogs', timestamps: { createdAt: true, updatedAt: false } }
+)
+
 const documentVersionSchema = new Schema(
   {
+    schemaVersion: { type: Number, default: 1 },
+    revision: { type: Number, default: 1 },
     status: { type: String, required: true },
     canonicalJson: { type: Schema.Types.Mixed, required: true },
     placeholders: { type: [String], default: [] },
@@ -107,7 +146,8 @@ const evaluationSchema = new Schema(
     assignmentId: { type: String, required: true },
     version: { type: Number, required: true },
     answers: { type: Schema.Types.Mixed, required: true },
-    submittedAt: { type: Date, required: true }
+    submittedAt: { type: Date, required: true },
+    supersededAt: Date
   },
   { collection: 'evaluations', timestamps: true }
 )
@@ -120,9 +160,62 @@ const campaignSchema = new Schema(
       enum: ['queued', 'processing', 'completed', 'partial'],
       required: true
     },
+    invitationVersion: { type: Number, min: 1 },
     total: { type: Number, default: 0 }
   },
   { collection: 'campaigns', timestamps: true }
+)
+
+const reportExportSchema = new Schema(
+  {
+    requestedBy: { type: String, required: true },
+    requestId: String,
+    requestHash: { type: String, required: true },
+    filters: { type: Schema.Types.Mixed, required: true },
+    fields: { type: [String], required: true },
+    format: { type: String, enum: ['csv'], required: true },
+    status: {
+      type: String,
+      enum: ['queued', 'processing', 'ready', 'failed', 'expired'],
+      required: true
+    },
+    rowCount: { type: Number, required: true },
+    snapshotAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+    objectKey: String,
+    sha256: String,
+    failureCode: String,
+    completedAt: Date,
+    processingStartedAt: Date,
+    processingLeaseUntil: Date,
+    processingToken: String,
+    resourceScopes: { type: [auditResourceScopeSchema], default: [] }
+  },
+  { collection: 'reportExports', timestamps: true }
+)
+reportExportSchema.index(
+  { status: 1, processingLeaseUntil: 1, expiresAt: 1 },
+  { name: 'report_export_recovery' }
+)
+reportExportSchema.index({ expiresAt: 1 }, { name: 'report_export_expiry' })
+
+const reportExportSnapshotSchema = new Schema(
+  {
+    exportId: { type: String, required: true },
+    schoolId: { type: String, required: true },
+    programId: { type: String, required: true },
+    values: { type: Schema.Types.Mixed, required: true },
+    expiresAt: { type: Date, required: true }
+  },
+  { collection: 'reportExportSnapshots', timestamps: true }
+)
+reportExportSnapshotSchema.index(
+  { expiresAt: 1 },
+  { name: 'report_export_snapshot_expiry', expireAfterSeconds: 0 }
+)
+reportExportSnapshotSchema.index(
+  { exportId: 1, schoolId: 1, programId: 1 },
+  { name: 'report_export_scope' }
 )
 
 const smtpSettingSchema = new Schema(
@@ -172,11 +265,16 @@ export type Assignment = InferSchemaType<typeof assignmentSchema>
 export type Evaluator = InferSchemaType<typeof evaluatorSchema>
 export type Student = InferSchemaType<typeof studentSchema>
 export type GeneratedDocument = InferSchemaType<typeof documentSchema>
+export type AuditLog = InferSchemaType<typeof auditLogSchema>
 export type DocumentVersion = InferSchemaType<typeof documentVersionSchema>
 export type Evaluation = InferSchemaType<typeof evaluationSchema>
 export type Campaign = InferSchemaType<typeof campaignSchema>
 export type SmtpSetting = InferSchemaType<typeof smtpSettingSchema>
 export type SmtpTestDelivery = InferSchemaType<typeof smtpTestDeliverySchema>
+export type ReportExport = InferSchemaType<typeof reportExportSchema>
+export type ReportExportSnapshot = InferSchemaType<
+  typeof reportExportSnapshotSchema
+>
 
 export interface WorkerModels {
   readonly Delivery: Model<Delivery>
@@ -185,12 +283,21 @@ export interface WorkerModels {
   readonly Assignment: Model<Assignment>
   readonly Evaluator: Model<Evaluator>
   readonly Student: Model<Student>
-  readonly GeneratedDocument: Model<GeneratedDocument>
+  readonly GeneratedDocument: Model<
+    GeneratedDocument & {
+      sourceSnapshot?: unknown
+      processingLeaseUntil?: Date | null
+      processingToken?: string | null
+    }
+  >
+  readonly AuditLog: Model<AuditLog>
   readonly DocumentVersion: Model<DocumentVersion>
   readonly Evaluation: Model<Evaluation>
   readonly Campaign: Model<Campaign>
   readonly SmtpSetting: Model<SmtpSetting>
   readonly SmtpTestDelivery: Model<SmtpTestDelivery>
+  readonly ReportExport: Model<ReportExport>
+  readonly ReportExportSnapshot: Model<ReportExportSnapshot>
 }
 
 export function createModels(connection: Connection): WorkerModels {
@@ -202,6 +309,7 @@ export function createModels(connection: Connection): WorkerModels {
     Evaluator: connection.model('Evaluator', evaluatorSchema),
     Student: connection.model('Student', studentSchema),
     GeneratedDocument: connection.model('GeneratedDocument', documentSchema),
+    AuditLog: connection.model('AuditLog', auditLogSchema),
     DocumentVersion: connection.model('DocumentVersion', documentVersionSchema),
     Evaluation: connection.model('Evaluation', evaluationSchema),
     Campaign: connection.model('Campaign', campaignSchema),
@@ -209,6 +317,11 @@ export function createModels(connection: Connection): WorkerModels {
     SmtpTestDelivery: connection.model(
       'SmtpTestDelivery',
       smtpTestDeliverySchema
+    ),
+    ReportExport: connection.model('ReportExport', reportExportSchema),
+    ReportExportSnapshot: connection.model(
+      'ReportExportSnapshot',
+      reportExportSnapshotSchema
     )
   }
 }

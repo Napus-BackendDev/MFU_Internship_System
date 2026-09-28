@@ -2,7 +2,24 @@ import { BullModule } from '@nestjs/bullmq'
 import { Module } from '@nestjs/common'
 import { MongooseModule } from '@nestjs/mongoose'
 
-import { StudentRecord, StudentSchema } from '../members/members.schema.js'
+import { AuditModule } from '../audit/audit.module.js'
+import { AuthModule } from '../auth/auth.module.js'
+import {
+  AcademicTermRecord,
+  AcademicTermSchema,
+  ProgramRecord,
+  ProgramSchema,
+  SchoolRecord,
+  SchoolSchema
+} from '../academic/academic.schema.js'
+import {
+  OrganizationRecord,
+  OrganizationSchema,
+  PlacementRecord,
+  PlacementSchema,
+  StudentRecord,
+  StudentSchema
+} from '../members/members.schema.js'
 import {
   EvaluationAssignmentRecord,
   EvaluationAssignmentSchema,
@@ -10,6 +27,8 @@ import {
   EvaluationSchema
 } from '../evaluations/evaluation.schema.js'
 import {
+  DocumentAssetRecord,
+  DocumentAssetSchema,
   DocumentTemplateRecord,
   DocumentTemplateSchema,
   DocumentTemplateVersionRecord,
@@ -18,13 +37,22 @@ import {
   GeneratedDocumentSchema
 } from './document.schema.js'
 import { DocumentsController } from './documents.controller.js'
+import { DocumentGenerationRateLimitGuard } from './document-generation-rate-limit.guard.js'
 import { DocumentsService } from './documents.service.js'
 
 @Module({
   imports: [
+    AuditModule,
+    AuthModule,
     BullModule.registerQueue({ name: 'documents' }),
     MongooseModule.forFeature([
+      { name: DocumentAssetRecord.name, schema: DocumentAssetSchema },
+      { name: AcademicTermRecord.name, schema: AcademicTermSchema },
+      { name: SchoolRecord.name, schema: SchoolSchema },
+      { name: ProgramRecord.name, schema: ProgramSchema },
       { name: StudentRecord.name, schema: StudentSchema },
+      { name: PlacementRecord.name, schema: PlacementSchema },
+      { name: OrganizationRecord.name, schema: OrganizationSchema },
       {
         name: EvaluationAssignmentRecord.name,
         schema: EvaluationAssignmentSchema
@@ -39,6 +67,6 @@ import { DocumentsService } from './documents.service.js'
     ])
   ],
   controllers: [DocumentsController],
-  providers: [DocumentsService]
+  providers: [DocumentsService, DocumentGenerationRateLimitGuard]
 })
 export class DocumentsModule {}

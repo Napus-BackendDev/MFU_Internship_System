@@ -60,6 +60,12 @@ const allNavigationItems: readonly AppNavigationItem[] = [
     allowedRoles: ['systemAdmin', 'internshipStaff']
   },
   {
+    label: 'การสื่อสาร',
+    to: '/app/correspondence',
+    icon: 'i-lucide-mails',
+    allowedRoles: ['systemAdmin', 'internshipStaff', 'auditor']
+  },
+  {
     label: 'เอกสาร',
     to: '/app/documents',
     icon: 'i-lucide-file-text',
@@ -167,6 +173,10 @@ const pageMetadataMap: Readonly<Record<string, PageHeaderMeta>> = {
     title: 'การประเมิน',
     description:
       'ติดตามรอบการประเมิน มอบหมายผู้ประเมิน และตรวจสอบผลคะแนนสมรรถนะ'
+  },
+  '/app/correspondence': {
+    title: 'การสื่อสาร',
+    description: 'ติดตามสถานะอีเมลและตรวจสอบการส่งซ้ำภายในขอบเขตสิทธิ์'
   },
   '/app/documents': {
     title: 'เอกสาร',

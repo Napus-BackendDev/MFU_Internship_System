@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import * as XLSX from 'xlsx'
+import { persistStudentRows } from '~/utils/student-import-outcomes'
 
 const props = defineProps<{
   modelValue: boolean
@@ -13,6 +14,7 @@ const emit = defineEmits<{
 const api = useApi()
 const toast = useToast()
 const auth = useAuthStore()
+const showDemoData = import.meta.dev
 
 const currentStep = ref<1 | 2 | 3 | 4>(1)
 const loading = ref(false)
@@ -52,7 +54,7 @@ export interface WizardStudentRow {
   company: string
   province: string
   semester: string
-  admissionYear: number
+  admissionYear?: number
   status: 'valid' | 'invalid'
   errors: string[]
 }
@@ -61,18 +63,20 @@ const studentRows = ref<WizardStudentRow[]>([])
 const editingRow = ref<WizardStudentRow | null>(null)
 const isEditModalOpen = ref(false)
 const importedCount = ref(0)
+const academicLoadError = ref('')
 
 // Load Schools & Programs
 async function loadAcademicData(): Promise<void> {
   loading.value = true
+  academicLoadError.value = ''
   try {
     const [schoolsRes, programsRes] = await Promise.all([
       api<{ items: School[] }>('/academic/schools', {
         query: { pageSize: 100 }
-      }).catch(() => ({ items: [] })),
+      }),
       api<{ items: Program[] }>('/academic/programs', {
         query: { pageSize: 150 }
-      }).catch(() => ({ items: [] }))
+      })
     ])
     schools.value = schoolsRes.items || []
     programs.value = programsRes.items || []
@@ -80,6 +84,8 @@ async function loadAcademicData(): Promise<void> {
       selectedSchoolFilter.value = schools.value[0]?.id || ''
     }
   } catch (err) {
+    academicLoadError.value =
+      'ไม่สามารถโหลดสำนักวิชาและหลักสูตรได้ กรุณาลองใหม่'
     console.error('Failed to load academic data for wizard:', err)
   } finally {
     loading.value = false
@@ -88,7 +94,7 @@ async function loadAcademicData(): Promise<void> {
 
 onMounted(() => {
   if (props.modelValue) {
-    loadAcademicData()
+    void loadAcademicData()
   }
 })
 
@@ -96,7 +102,7 @@ watch(
   () => props.modelValue,
   (open) => {
     if (open && schools.value.length === 0) {
-      loadAcademicData()
+      void loadAcademicData()
     }
   }
 )
@@ -157,6 +163,13 @@ function validateRow(row: WizardStudentRow): {
     errors.push('กรุณาเลือกสาขาวิชา')
   }
 
+  if (
+    row.admissionYear !== undefined &&
+    (!Number.isInteger(row.admissionYear) || row.admissionYear < 2000)
+  ) {
+    errors.push('ปีที่เข้าศึกษาต้องเป็นปี ค.ศ. หรือ พ.ศ. ที่ถูกต้อง')
+  }
+
   return {
     status: errors.length === 0 ? 'valid' : 'invalid',
     errors
@@ -165,6 +178,7 @@ function validateRow(row: WizardStudentRow): {
 
 // Quick Sample Students
 function loadDemoStudents(): void {
+  if (!showDemoData) return
   const s0 = schools.value[0]?.id || ''
   const s1 = schools.value[1]?.id || s0
   const p0 = programs.value.find((p) => p.schoolId === s0)?.id || ''
@@ -289,10 +303,11 @@ function handleFileUpload(event: Event): void {
           row['company'] || row['สถานประกอบการ'] || row['บริษัท'] || ''
         ).trim()
         const prov = String(row['province'] || row['จังหวัด'] || '').trim()
-        const sem = String(
-          row['semester'] || row['ภาคการศึกษา'] || '1/2569'
+        const sem = String(row['semester'] || row['ภาคการศึกษา'] || '').trim()
+        const rawYear = String(
+          row['admissionYear'] || row['ปีที่เข้าศึกษา'] || ''
         ).trim()
-        const year = Number(row['admissionYear'] || row['ปีการศึกษา'] || 2566)
+        const year = rawYear ? Number(rawYear) : undefined
 
         // Find school & program
         const matchedSchool = schools.value.find(
@@ -301,19 +316,16 @@ function handleFileUpload(event: Event): void {
             s.name.th.includes(scCode) ||
             s.name.en.toLowerCase().includes(scCode.toLowerCase())
         )
-        const schoolId = matchedSchool?.id || schools.value[0]?.id || ''
+        const schoolId = matchedSchool?.id || ''
 
         const matchedProgram = programs.value.find(
           (p) =>
-            p.programCode.toLowerCase() === prCode.toLowerCase() ||
-            p.name.th.includes(prCode) ||
-            p.name.en.toLowerCase().includes(prCode.toLowerCase())
+            p.schoolId === schoolId &&
+            (p.programCode.toLowerCase() === prCode.toLowerCase() ||
+              p.name.th.includes(prCode) ||
+              p.name.en.toLowerCase().includes(prCode.toLowerCase()))
         )
-        const programId =
-          matchedProgram?.id ||
-          programs.value.find((p) => p.schoolId === schoolId)?.id ||
-          programs.value[0]?.id ||
-          ''
+        const programId = matchedProgram?.id || ''
 
         const item: WizardStudentRow = {
           tempId: `upload-${idx}-${Date.now()}`,
@@ -387,8 +399,6 @@ function deleteRow(tempId: string): void {
 }
 
 function addNewEmptyRow(): void {
-  const s0 = schools.value[0]?.id || ''
-  const p0 = programs.value.find((p) => p.schoolId === s0)?.id || ''
   const newRow: WizardStudentRow = {
     tempId: `manual-${Date.now()}`,
     studentId: '',
@@ -396,12 +406,12 @@ function addNewEmptyRow(): void {
     nameEn: '',
     email: '',
     personalEmail: '',
-    schoolId: s0,
-    programId: p0,
+    schoolId: '',
+    programId: '',
     company: '',
     province: '',
-    semester: '1/2569',
-    admissionYear: 2566,
+    semester: '',
+    admissionYear: undefined,
     status: 'invalid',
     errors: ['กรุณาระบุข้อมูลนักศึกษา']
   }
@@ -434,39 +444,65 @@ async function handleConfirmAndSubmit(): Promise<void> {
   }
 
   saving.value = true
-  let success = 0
-  for (const row of validRows) {
-    try {
-      await api('/students', {
-        method: 'POST',
-        body: {
-          studentId: row.studentId.trim(),
-          name: { th: row.nameTh.trim(), en: row.nameEn.trim() },
-          email: row.email.trim().toLowerCase(),
-          personalEmail: row.personalEmail?.trim()
-            ? row.personalEmail.trim().toLowerCase()
-            : undefined,
-          schoolId: row.schoolId,
-          programId: row.programId,
-          semester: row.semester || '1/2569',
-          company: row.company?.trim() || undefined,
-          province: row.province?.trim() || undefined,
-          admissionYear: row.admissionYear || 2566,
-          status: 'active'
-        }
-      })
-      success++
-    } catch {
-      // If student already exists or error, continue to record progress
-      success++
+  const outcomes = await persistStudentRows(validRows, async (row) => {
+    await api('/students', {
+      method: 'POST',
+      body: {
+        studentId: row.studentId.trim(),
+        name: { th: row.nameTh.trim(), en: row.nameEn.trim() },
+        email: row.email.trim().toLowerCase(),
+        personalEmail: row.personalEmail?.trim()
+          ? row.personalEmail.trim().toLowerCase()
+          : undefined,
+        schoolId: row.schoolId,
+        programId: row.programId,
+        semester: row.semester || undefined,
+        company: row.company?.trim() || undefined,
+        province: row.province?.trim() || undefined,
+        admissionYear: row.admissionYear,
+        status: 'active'
+      }
+    })
+  })
+  const savedTempIds = new Set(outcomes.saved.map((row) => row.tempId))
+  for (const failedRow of outcomes.failed) {
+    const current = studentRows.value.find(
+      (item) => item.tempId === failedRow.tempId
+    )
+    if (current) {
+      current.status = 'invalid'
+      current.errors = [
+        ...current.errors,
+        'บันทึกไม่สำเร็จ กรุณาตรวจรหัสนักศึกษาซ้ำและข้อมูลที่กรอก แล้วลองใหม่'
+      ]
     }
   }
 
-  importedCount.value = success
+  studentRows.value = studentRows.value.filter(
+    (row) => !savedTempIds.has(row.tempId)
+  )
+  importedCount.value += savedTempIds.size
   saving.value = false
+
+  if (outcomes.failed.length > 0 || studentRows.value.length > 0) {
+    toast.add({
+      title:
+        outcomes.failed.length > 0
+          ? 'บันทึกข้อมูลได้บางส่วน'
+          : 'ยังมีแถวที่ต้องแก้ไข',
+      description: `บันทึกสำเร็จสะสม ${importedCount.value} รายการ; เหลือ ${studentRows.value.length} รายการที่ยังไม่บันทึก ให้ตรวจแก้และลองใหม่`,
+      color: 'warning'
+    })
+    return
+  }
 
   // Advance to Step 4 (Completion)
   currentStep.value = 4
+  toast.add({
+    title: 'นำเข้าข้อมูลสำเร็จ',
+    description: `บันทึกข้อมูลนักศึกษา ${importedCount.value} รายการ`,
+    color: 'success'
+  })
 }
 
 // Finish Wizard & Enter Main Dashboard
@@ -604,6 +640,21 @@ function handleClose(): void {
 
         <!-- Body Content by Step -->
         <main class="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
+          <div
+            v-if="academicLoadError"
+            class="flex flex-col gap-3 rounded-lg border border-error/30 bg-error/5 p-3 text-sm text-error sm:flex-row sm:items-center sm:justify-between"
+            role="alert"
+          >
+            <span>{{ academicLoadError }}</span>
+            <UButton
+              :loading="loading"
+              label="ลองโหลดอีกครั้ง"
+              size="sm"
+              variant="outline"
+              @click="() => void loadAcademicData()"
+            />
+          </div>
+
           <!-- ============================================================= -->
           <!-- STEP 1: สำนักวิชา (School Structure) -->
           <!-- ============================================================= -->
@@ -821,9 +872,12 @@ function handleClose(): void {
                     Verification)
                   </p>
                   <p class="text-muted leading-relaxed">
-                    ให้อัปโหลดไฟล์ Excel/CSV หรือคลิก
-                    <strong>"โหลดข้อมูลตัวอย่างทดสอบ"</strong> เพื่อดูว่า Data
-                    ข้อมูลถูกต้องหรือไม่ มีการแก้ไขข้อมูลไหม สามารถคลิก
+                    ให้อัปโหลดไฟล์ Excel/CSV เพื่อตรวจสอบข้อมูล
+                    <strong v-if="showDemoData">
+                      หรือคลิก "โหลดข้อมูลตัวอย่างทดสอบ" (สำหรับ Development
+                      เท่านั้น)</strong
+                    >
+                    สามารถคลิก
                     <strong>แก้ไข (Edit)</strong> ได้ทันทีในตาราง
                     ก่อนกดยืนยันเพื่อบันทึกเข้าสู่หน้าหลัก
                   </p>
@@ -852,6 +906,7 @@ function handleClose(): void {
 
                 <!-- Quick Load Sample Data Button -->
                 <UButton
+                  v-if="showDemoData"
                   color="secondary"
                   icon="i-lucide-sparkles"
                   label="โหลดข้อมูลตัวอย่างนักศึกษาทดสอบ"
@@ -907,12 +962,11 @@ function handleClose(): void {
                   ยังไม่มีข้อมูลนักศึกษาในตารางตรวจสอบ
                 </p>
                 <p class="text-xs text-muted max-w-sm mx-auto mt-1">
-                  คลิกปุ่ม
-                  <strong>"โหลดข้อมูลตัวอย่างนักศึกษาทดสอบ"</strong> ด้านบน
-                  หรืออัปโหลดไฟล์ Excel เพื่อเริ่มตรวจสอบข้อมูล Data
+                  อัปโหลดไฟล์ Excel เพื่อเริ่มตรวจสอบข้อมูล
                 </p>
               </div>
               <UButton
+                v-if="showDemoData"
                 color="primary"
                 icon="i-lucide-sparkles"
                 label="โหลดข้อมูลตัวอย่างทันที"

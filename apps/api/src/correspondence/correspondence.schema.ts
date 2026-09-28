@@ -7,6 +7,8 @@ const schemaOptions = {
     transform: (_document: unknown, result: Record<string, unknown>) => {
       delete result._id
       delete result.__v
+      delete result.accessPin
+      delete result.accessPinHash
       return result
     }
   }
@@ -14,7 +16,7 @@ const schemaOptions = {
 
 @Schema({ ...schemaOptions, collection: 'emailTemplates' })
 export class EmailTemplateRecord {
-  @Prop({ required: true, unique: true })
+  @Prop({ required: true })
   public code!: string
 
   @Prop({ enum: ['evaluator', 'student', 'staff'], required: true })
@@ -26,6 +28,14 @@ export class EmailTemplateRecord {
 
 export const EmailTemplateSchema =
   SchemaFactory.createForClass(EmailTemplateRecord)
+EmailTemplateSchema.index(
+  { code: 1 },
+  {
+    unique: true,
+    name: 'uniq_email_template_code',
+    collation: { locale: 'simple' }
+  }
+)
 
 @Schema({ ...schemaOptions, collection: 'emailTemplateVersions' })
 export class EmailTemplateVersionRecord {
@@ -59,7 +69,11 @@ export const EmailTemplateVersionSchema = SchemaFactory.createForClass(
 )
 EmailTemplateVersionSchema.index(
   { templateId: 1, versionNumber: 1 },
-  { unique: true }
+  {
+    unique: true,
+    name: 'uniq_email_template_version',
+    collation: { locale: 'simple' }
+  }
 )
 
 @Schema({ ...schemaOptions, collection: 'campaigns' })
@@ -82,6 +96,9 @@ export class CampaignRecord {
   @Prop({ required: true, type: [String] })
   public assignmentIds!: string[]
 
+  @Prop({ min: 1 })
+  public invitationVersion?: number
+
   @Prop({ required: true })
   public createdBy!: string
 
@@ -96,6 +113,28 @@ export class CampaignRecord {
 }
 
 export const CampaignSchema = SchemaFactory.createForClass(CampaignRecord)
+
+@Schema({ ...schemaOptions, collection: 'deliveryRetryRequests' })
+export class DeliveryRetryRequestRecord {
+  @Prop({ required: true, index: true })
+  public deliveryId!: string
+
+  @Prop({ required: true })
+  public actorId!: string
+
+  @Prop({ required: true })
+  public requestHash!: string
+
+  @Prop({ required: true })
+  public jobId!: string
+
+  @Prop({ required: true })
+  public invitationId!: string
+}
+
+export const DeliveryRetryRequestSchema = SchemaFactory.createForClass(
+  DeliveryRetryRequestRecord
+)
 
 @Schema({ ...schemaOptions, collection: 'deliveries' })
 export class DeliveryRecord {
@@ -157,6 +196,9 @@ export class InvitationRecord {
 
   @Prop({ required: true })
   public expiresAt!: Date
+
+  @Prop({ default: 1, min: 1 })
+  public version!: number
 
   @Prop({ default: 'active', enum: ['active', 'revoked', 'expired'] })
   public status!: 'active' | 'revoked' | 'expired'

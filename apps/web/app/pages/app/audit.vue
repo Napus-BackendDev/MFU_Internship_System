@@ -48,12 +48,12 @@ function resetFilters() {
   searchQuery.value = ''
   selectedAction.value = 'all'
   page.value = 1
-  refresh()
+  void refresh()
 }
 
 function handleSearch() {
   page.value = 1
-  refresh()
+  void refresh()
 }
 
 function clearSearch() {

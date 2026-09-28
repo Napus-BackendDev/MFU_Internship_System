@@ -27,6 +27,7 @@ export type EmailJob = DeliveryEmailJob | SmtpTestJob
 const DELIVERY_LEASE_MS = 2 * 60 * 1000
 const DELIVERY_LEASE_HEARTBEAT_MS = 30 * 1000
 const DELIVERY_RECOVERY_BATCH_SIZE = 100
+const CAMPAIGN_RECONCILIATION_MAX_ATTEMPTS = 5
 const INTERRUPTED_BEFORE_SEND = 'WORKER_INTERRUPTED_BEFORE_SEND'
 
 interface ResolvedSmtpConfiguration {
@@ -258,7 +259,7 @@ export class EmailProcessor {
         $unset: { providerAttemptStartedAt: 1 },
         $inc: { attempts: 1 }
       },
-      { new: true }
+      { returnDocument: 'after' }
     )
     if (!delivery) {
       const existingDelivery = await this.models.Delivery.findById(
@@ -297,7 +298,12 @@ export class EmailProcessor {
           {
             invitationStatus: invitation.status,
             invitationAssignmentId: invitation.assignmentId,
+            invitationVersion: invitation.version ?? 1,
             invitationExpiresAt: invitation.expiresAt,
+            campaignType: campaign.type,
+            ...(typeof campaign.invitationVersion === 'number'
+              ? { campaignInvitationVersion: campaign.invitationVersion }
+              : {}),
             templatePublished: template.status === 'published',
             assignmentStatus: assignment.status,
             assignmentDeadlineAt: assignment.deadlineAt
@@ -318,41 +324,68 @@ export class EmailProcessor {
 
       let pin = ''
       if (shouldRotateInvitationPin(campaign.type)) {
+        const invitationVersion = invitation.version ?? 1
+        if ((campaign.invitationVersion ?? 1) !== invitationVersion) {
+          throw new Error('INVITATION_VERSION_STALE')
+        }
         pin = generatePin()
-        const accessPinHash = createHmac(
+        const accessPinHash = `v2:${createHmac(
           'sha256',
-          this.environment.AUTH_JWT_SECRET
+          this.environment.INVITATION_TOKEN_PEPPER
         )
-          .update(pin)
-          .digest('hex')
-        const [invitationWrite, assignmentWrite] = await Promise.all([
-          this.models.Invitation.updateOne(
-            { _id: invitation.id, status: 'active' },
-            { $set: { accessPinHash }, $unset: { accessPin: 1 } }
-          ),
-          this.models.Assignment.updateOne(
-            { _id: assignment.id, status: { $in: ['pending', 'inProgress'] } },
-            { $set: { accessPinHash }, $unset: { accessPin: 1 } }
-          )
-        ])
-        if (
-          invitationWrite.matchedCount !== 1 ||
-          assignmentWrite.matchedCount !== 1
-        ) {
-          throw new Error('INVITATION_REVOKED')
+          .update(`internship-evaluation-pin:v2\0${pin}`)
+          .digest('hex')}`
+        const session = await this.models.Invitation.db.startSession()
+        try {
+          await session.withTransaction(async () => {
+            const invitationVersionFilter =
+              invitationVersion === 1
+                ? {
+                    $or: [{ version: 1 }, { version: { $exists: false } }]
+                  }
+                : { version: invitationVersion }
+            const invitationWrite = await this.models.Invitation.updateOne(
+              {
+                _id: invitation.id,
+                assignmentId: assignment.id,
+                status: 'active',
+                ...invitationVersionFilter
+              },
+              { $set: { accessPinHash }, $unset: { accessPin: 1 } },
+              { session }
+            )
+            const assignmentWrite = await this.models.Assignment.updateOne(
+              {
+                _id: assignment.id,
+                status: { $in: ['pending', 'inProgress'] }
+              },
+              { $set: { accessPinHash }, $unset: { accessPin: 1 } },
+              { session }
+            )
+            if (
+              invitationWrite.matchedCount !== 1 ||
+              assignmentWrite.matchedCount !== 1
+            ) {
+              throw new Error('INVITATION_REVOKED')
+            }
+          })
+        } finally {
+          await session.endSession()
         }
       }
 
       const token = await new SignJWT({
         tokenUse: 'invitation',
         invitationId: invitation.id,
-        assignmentId: invitation.assignmentId
+        assignmentId: invitation.assignmentId,
+        invitationVersion: invitation.version ?? 1
       })
         .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
         .setIssuer('internship-transcript-v2')
         .setAudience('internship-transcript-api')
         .setExpirationTime(Math.floor(invitation.expiresAt.getTime() / 1000))
         .sign(this.signingKey)
+      const invitationParameters = new URLSearchParams({ token })
       const values = {
         student_name: student.name?.th ?? student.name?.en ?? student.studentId,
         student_id: student.studentId ?? student.id,
@@ -361,7 +394,7 @@ export class EmailProcessor {
           'สถานประกอบการ',
         evaluator_name:
           evaluator.name?.th ?? evaluator.name?.en ?? evaluator.email,
-        invitation_url: `${this.environment.PUBLIC_WEB_URL}/evaluate?token=${encodeURIComponent(token)}`,
+        invitation_url: `${this.environment.PUBLIC_WEB_URL}/evaluate#${invitationParameters.toString()}`,
         deadline: assignment.deadlineAt
           ? new Date(assignment.deadlineAt).toLocaleDateString('th-TH', {
               year: 'numeric',
@@ -473,38 +506,53 @@ export class EmailProcessor {
   }
 
   private async reconcileCampaign(campaignId: string): Promise<void> {
-    const [campaign, summary] = await Promise.all([
-      this.models.Campaign.findById(campaignId).select('total').lean(),
-      this.models.Delivery.aggregate<{ _id: string; count: number }>([
+    for (
+      let attempt = 0;
+      attempt < CAMPAIGN_RECONCILIATION_MAX_ATTEMPTS;
+      attempt += 1
+    ) {
+      const campaign = await this.models.Campaign.findOneAndUpdate(
+        { _id: campaignId },
+        { $inc: { __v: 1 } },
+        { returnDocument: 'after' }
+      )
+        .select('total __v')
+        .lean()
+      if (!campaign) throw new Error('CAMPAIGN_NOT_FOUND')
+
+      const summary = await this.models.Delivery.aggregate<{
+        _id: string
+        count: number
+      }>([
         { $match: { campaignId } },
         { $group: { _id: '$status', count: { $sum: 1 } } }
       ])
-    ])
-    if (!campaign) throw new Error('CAMPAIGN_NOT_FOUND')
-
-    const counts: Record<string, number> = {}
-    for (const item of summary) counts[item._id] = item.count
-    const observedCount = Object.values(counts).reduce(
-      (total, count) => total + count,
-      0
-    )
-    if (campaign.total > 0 && observedCount !== campaign.total) {
-      this.logger.error(
-        {
-          campaignId,
-          expectedDeliveries: campaign.total,
-          observedDeliveries: observedCount
-        },
-        'campaign delivery records do not match expected total'
+      const counts: Record<string, number> = {}
+      for (const item of summary) counts[item._id] = item.count
+      const observedCount = Object.values(counts).reduce(
+        (total, count) => total + count,
+        0
       )
+      if (campaign.total > 0 && observedCount !== campaign.total) {
+        this.logger.error(
+          {
+            campaignId,
+            expectedDeliveries: campaign.total,
+            observedDeliveries: observedCount
+          },
+          'campaign delivery records do not match expected total'
+        )
+      }
+
+      const status = campaignStatusFromDeliveryCounts(campaign.total, counts)
+      const result = await this.models.Campaign.updateOne(
+        { _id: campaignId, __v: campaign.__v },
+        { $set: { status }, $inc: { __v: 1 } }
+      )
+      if (result.matchedCount === 1) return
     }
 
-    const status = campaignStatusFromDeliveryCounts(campaign.total, counts)
-    const result = await this.models.Campaign.updateOne(
-      { _id: campaignId },
-      { $set: { status } }
-    )
-    if (result.matchedCount !== 1) throw new Error('CAMPAIGN_NOT_FOUND')
+    throw new Error('CAMPAIGN_RECONCILIATION_CONFLICT')
   }
 
   private async processSmtpTest(job: SmtpTestJob): Promise<void> {
@@ -517,7 +565,7 @@ export class EmailProcessor {
         $set: { status: 'sending' },
         $unset: { failureCode: 1, completedAt: 1 }
       },
-      { new: true }
+      { returnDocument: 'after' }
     )
     if (!test || test.status === 'sent') return
 
@@ -632,6 +680,9 @@ export class EmailProcessor {
       host: smtp.host,
       port: smtp.port,
       secure: smtp.secure,
+      ...(this.environment.NODE_ENV === 'production' && !smtp.secure
+        ? { requireTLS: true }
+        : {}),
       ...(smtp.username && smtp.password
         ? { auth: { user: smtp.username, pass: smtp.password } }
         : {})
@@ -710,7 +761,10 @@ export function deliverySourcesAreCurrent(
   sources: {
     invitationStatus: string
     invitationAssignmentId: string
+    invitationVersion: number
     invitationExpiresAt: Date
+    campaignType: 'invitation' | 'reminder'
+    campaignInvitationVersion?: number
     templatePublished: boolean
     assignmentStatus: string
     assignmentDeadlineAt: Date
@@ -722,6 +776,8 @@ export function deliverySourcesAreCurrent(
     sources.invitationStatus === 'active' &&
     sources.invitationExpiresAt > now &&
     sources.invitationAssignmentId === deliveryAssignmentId &&
+    (sources.campaignType !== 'invitation' ||
+      (sources.campaignInvitationVersion ?? 1) === sources.invitationVersion) &&
     sources.templatePublished &&
     ['pending', 'inProgress'].includes(sources.assignmentStatus) &&
     sources.assignmentDeadlineAt > now

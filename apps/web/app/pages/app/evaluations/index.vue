@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { createSandboxedEmailPreviewDocument } from '~/utils/email-preview'
+import { describeInvitationActionFailure } from '~/utils/invitation-action-error'
 
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
@@ -33,7 +34,6 @@ interface StudentItem {
   readonly schoolId?: string
   readonly programId?: string
   readonly courseId?: string
-  readonly evaluationStatus?: string
 }
 
 interface EvaluatorItem {
@@ -57,7 +57,13 @@ interface AssignmentPage {
 }
 
 const api = useApi()
+const auth = useAuthStore()
 const toast = useToast()
+const canManageCycles = computed(() =>
+  auth.actor?.roles.some((role) =>
+    ['systemAdmin', 'internshipStaff'].includes(role)
+  )
+)
 const status = ref<string | undefined>()
 const page = ref(1)
 const pageSize = ref(5)
@@ -80,68 +86,61 @@ watch(pageSize, () => {
 })
 
 // Fetch students to map studentId (ObjectId) to student name, email, company, and province
-const { data: studentsData } = await useAsyncData('evaluations-students', () =>
+const {
+  data: studentsData,
+  error: studentsError,
+  pending: studentsPending,
+  refresh: refreshStudents
+} = await useAsyncData('evaluations-students', () =>
   api<{ items: StudentItem[] }>('/students', {
     query: { pageSize: 500 }
-  }).catch(() => ({ items: [] }))
+  })
 )
 
 // Fetch evaluators to map evaluatorId (ObjectId) to evaluator email and name
-const { data: evaluatorsData } = await useAsyncData(
-  'evaluations-evaluators',
-  () =>
-    api<{ items: EvaluatorItem[] }>('/evaluators', {
-      query: { pageSize: 500 }
-    }).catch(() => ({ items: [] }))
+const {
+  data: evaluatorsData,
+  error: evaluatorsError,
+  pending: evaluatorsPending,
+  refresh: refreshEvaluators
+} = await useAsyncData('evaluations-evaluators', () =>
+  api<{ items: EvaluatorItem[] }>('/evaluators', {
+    query: { pageSize: 500 }
+  })
 )
 
 // Fetch organizations to map evaluator organization
-const { data: organizationsData } = await useAsyncData(
-  'evaluations-organizations',
-  () =>
-    api<{ items: OrganizationItem[] }>('/organizations', {
-      query: { pageSize: 500 }
-    }).catch(() => ({ items: [] }))
+const {
+  data: organizationsData,
+  error: organizationsError,
+  pending: organizationsPending,
+  refresh: refreshOrganizations
+} = await useAsyncData('evaluations-organizations', () =>
+  api<{ items: OrganizationItem[] }>('/organizations', {
+    query: { pageSize: 500 }
+  })
 )
 
-onMounted(async () => {
-  if (!studentsData.value?.items?.length) {
-    try {
-      const res = await api<{ items: StudentItem[] }>('/students', {
-        query: { pageSize: 500 }
-      })
-      if (res?.items?.length) {
-        studentsData.value = res
-      }
-    } catch {
-      // ignore
-    }
-  }
-  if (!evaluatorsData.value?.items?.length) {
-    try {
-      const res = await api<{ items: EvaluatorItem[] }>('/evaluators', {
-        query: { pageSize: 500 }
-      })
-      if (res?.items?.length) {
-        evaluatorsData.value = res
-      }
-    } catch {
-      // ignore
-    }
-  }
-  if (!organizationsData.value?.items?.length) {
-    try {
-      const res = await api<{ items: OrganizationItem[] }>('/organizations', {
-        query: { pageSize: 500 }
-      })
-      if (res?.items?.length) {
-        organizationsData.value = res
-      }
-    } catch {
-      // ignore
-    }
-  }
-})
+const relationDataError = computed(
+  () =>
+    Boolean(studentsError.value) ||
+    Boolean(evaluatorsError.value) ||
+    Boolean(organizationsError.value)
+)
+const relationDataPending = computed(
+  () =>
+    studentsPending.value ||
+    evaluatorsPending.value ||
+    organizationsPending.value
+)
+
+async function retryRelationData(): Promise<void> {
+  await Promise.all([
+    refreshStudents(),
+    refreshEvaluators(),
+    refreshOrganizations()
+  ])
+}
 
 function getStudent(studentId: string): StudentItem | undefined {
   if (!studentId) return undefined
@@ -153,14 +152,22 @@ function getStudent(studentId: string): StudentItem | undefined {
   )
 }
 
-function copyStudentId(id: string): void {
-  if (import.meta.client && id && id !== '-') {
-    navigator.clipboard.writeText(id)
+async function copyStudentId(id: string): Promise<void> {
+  if (!import.meta.client || !id || id === '-') return
+
+  try {
+    await navigator.clipboard.writeText(id)
     toast.add({
       title: 'คัดลอกรหัสนักศึกษาแล้ว',
       description: `รหัส: ${id}`,
       color: 'success',
       icon: 'i-lucide-check'
+    })
+  } catch {
+    toast.add({
+      title: 'ไม่สามารถคัดลอกรหัสนักศึกษาได้',
+      description: 'โปรดลองคัดลอกรหัสนักศึกษาด้วยตนเอง',
+      color: 'error'
     })
   }
 }
@@ -210,11 +217,7 @@ const statusColor = (value: Assignment['status']) =>
   )[value]
 
 function getAssignmentStatusBadge(item: Assignment) {
-  const student = getStudent(item.studentId)
-  if (
-    item.status === 'email_error' ||
-    student?.evaluationStatus === 'email_error'
-  ) {
+  if (item.status === 'email_error') {
     return {
       color: 'error' as const,
       label: 'ส่งอีเมลผิดพลาด (Email Error)',
@@ -295,13 +298,7 @@ const setStatus = (value?: string) => {
 const filteredItems = computed(() => {
   let items = data.value?.items ?? []
   if (status.value === 'email_error') {
-    items = items.filter((item) => {
-      const student = getStudent(item.studentId)
-      return (
-        item.status === 'email_error' ||
-        student?.evaluationStatus === 'email_error'
-      )
-    })
+    items = items.filter((item) => item.status === 'email_error')
   }
   if (selectedOrg.value !== 'all') {
     items = items.filter((item) => {
@@ -374,8 +371,8 @@ async function fetchSystemEmailTemplates() {
         }
       }
     }
-  } catch (err) {
-    console.error('Failed to load system email templates:', err)
+  } catch {
+    console.error('Failed to load system email templates')
   }
 }
 
@@ -383,32 +380,28 @@ const sendEmailModalOpen = ref(false)
 const selectedAssignmentForEmail = ref<Assignment | null>(null)
 const emailTargetStudent = ref<StudentItem | null>(null)
 const emailTargetEvaluator = ref<EvaluatorItem | null>(null)
+type EmailActionMode = 'request' | 'reminder' | 'reissue'
+const emailActionMode = ref<EmailActionMode>('request')
 const selectedEmailTemplateCode = ref<
   'evaluation_request' | 'evaluation_reminder'
 >('evaluation_request')
 const recipientEmailInput = ref('')
 const evaluatorNameInput = ref('')
+const invitationReissueReason = ref('')
 const sendingEmail = ref(false)
-const targetedEmailIdempotencyKey = ref('')
+const emailIdempotencyKey = ref('')
 
 function openSendEmailModal(item: Assignment): void {
-  targetedEmailIdempotencyKey.value = crypto.randomUUID()
+  emailIdempotencyKey.value = crypto.randomUUID()
   selectedAssignmentForEmail.value = item
+  invitationReissueReason.value = ''
   const student = getStudent(item.studentId) || null
   const evaluator = getEvaluator(item.evaluatorId) || null
   emailTargetStudent.value = student
   emailTargetEvaluator.value = evaluator
 
-  // Rule based on student status:
-  // If item.status === 'inProgress' || student?.evaluationStatus === 'awaiting_response' -> Reminder
-  // If item.status === 'pending' || student?.evaluationStatus === 'awaiting_evaluator' -> Request
-  const isAlreadySent =
-    item.status === 'inProgress' ||
-    (student as unknown as { evaluationStatus?: string })?.evaluationStatus ===
-      'awaiting_response'
-  selectedEmailTemplateCode.value = isAlreadySent
-    ? 'evaluation_reminder'
-    : 'evaluation_request'
+  // Assignment state does not prove whether a pending invitation was already delivered.
+  selectEmailAction(item.status === 'inProgress' ? 'reminder' : 'request')
 
   recipientEmailInput.value = evaluator?.email || ''
   evaluatorNameInput.value = evaluator?.name?.th || evaluator?.name?.en || ''
@@ -416,6 +409,32 @@ function openSendEmailModal(item: Assignment): void {
   void fetchSystemEmailTemplates()
   sendEmailModalOpen.value = true
 }
+
+function selectEmailAction(mode: EmailActionMode): void {
+  emailActionMode.value = mode
+  selectedEmailTemplateCode.value =
+    mode === 'reminder' ? 'evaluation_reminder' : 'evaluation_request'
+}
+
+function closeSendEmailModal(): void {
+  if (!sendingEmail.value) sendEmailModalOpen.value = false
+}
+
+const emailActionDisabled = computed(() => {
+  if (sendingEmail.value) return true
+  if (emailActionMode.value === 'reissue') {
+    const reasonLength = invitationReissueReason.value.trim().length
+    return (
+      reasonLength < 5 ||
+      reasonLength > 500 ||
+      !systemEmailTemplates.value.evaluation_request
+    )
+  }
+  return (
+    !recipientEmailInput.value.trim() ||
+    !systemEmailTemplates.value[selectedEmailTemplateCode.value]
+  )
+})
 
 const previewEmailSubject = computed(() => {
   const t = systemEmailTemplates.value[selectedEmailTemplateCode.value]
@@ -467,9 +486,21 @@ const previewEmailDocument = computed(() =>
 
 async function confirmSendEmail(): Promise<void> {
   if (!selectedAssignmentForEmail.value) return
+  const reissue = emailActionMode.value === 'reissue'
+  const reason = invitationReissueReason.value.trim()
+  if (reissue && (reason.length < 5 || reason.length > 500)) {
+    toast.add({
+      title: 'ระบุเหตุผลก่อนออกคำเชิญใหม่',
+      description: 'เหตุผลต้องมี 5–500 ตัวอักษร',
+      color: 'warning'
+    })
+    return
+  }
   if (
-    !recipientEmailInput.value.trim() ||
-    !systemEmailTemplates.value[selectedEmailTemplateCode.value]
+    !systemEmailTemplates.value[
+      reissue ? 'evaluation_request' : selectedEmailTemplateCode.value
+    ] ||
+    (!reissue && !recipientEmailInput.value.trim())
   ) {
     toast.add({
       title: 'ยังส่งคำเชิญไม่ได้',
@@ -481,9 +512,35 @@ async function confirmSendEmail(): Promise<void> {
   }
   sendingEmail.value = true
   try {
+    if (reissue) {
+      const result = await api<{ readonly recipientEmail: string }>(
+        `/evaluation-assignments/${encodeURIComponent(selectedAssignmentForEmail.value.id)}/invitation/reissue`,
+        {
+          method: 'POST',
+          headers: { 'idempotency-key': emailIdempotencyKey.value },
+          body: { reason }
+        }
+      )
+      toast.add({
+        title: 'เข้าคิวออกคำเชิญใหม่แล้ว',
+        description: `PIN/session เดิมถูกเพิกถอน และเข้าคิวส่งไปยัง ${result.recipientEmail}; deadline เดิมไม่เปลี่ยน ตรวจผลจาก Delivery`,
+        color: 'info',
+        icon: 'i-lucide-check-circle'
+      })
+      sendEmailModalOpen.value = false
+      if (!(await refreshAfterEmailAction())) {
+        toast.add({
+          title: 'เข้าคิวแล้ว แต่โหลดรายการไม่สำเร็จ',
+          description: 'รีเฟรชหน้าเพื่อดูสถานะล่าสุด; ไม่ต้องส่งคำสั่งซ้ำ',
+          color: 'warning'
+        })
+      }
+      return
+    }
+
     await api('/campaigns/send-targeted', {
       method: 'POST',
-      headers: { 'idempotency-key': targetedEmailIdempotencyKey.value },
+      headers: { 'idempotency-key': emailIdempotencyKey.value },
       body: {
         assignmentId: selectedAssignmentForEmail.value.id,
         studentId: selectedAssignmentForEmail.value.studentId,
@@ -495,7 +552,7 @@ async function confirmSendEmail(): Promise<void> {
 
     toast.add({
       title: 'คิวส่งอีเมลแล้ว',
-      description: `ส่งอีเมล (${
+      description: `เข้าคิวอีเมล (${
         selectedEmailTemplateCode.value === 'evaluation_reminder'
           ? 'แจ้งเตือนการประเมิน'
           : 'ขอความอนุเคราะห์ประเมิน'
@@ -505,17 +562,33 @@ async function confirmSendEmail(): Promise<void> {
     })
 
     sendEmailModalOpen.value = false
-    await refresh()
-  } catch (err: unknown) {
-    console.error('Failed to send targeted email:', err)
+    if (!(await refreshAfterEmailAction())) {
+      toast.add({
+        title: 'เข้าคิวแล้ว แต่โหลดรายการไม่สำเร็จ',
+        description: 'รีเฟรชหน้าเพื่อดูสถานะล่าสุด; ไม่ต้องส่งคำสั่งซ้ำ',
+        color: 'warning'
+      })
+    }
+  } catch (error: unknown) {
+    console.error('Failed to queue evaluation email')
+    const failure = describeInvitationActionFailure(error)
     toast.add({
-      title: 'ส่งอีเมลไม่สำเร็จ (Email Error)',
-      description: 'เข้าคิวส่งอีเมลไม่สำเร็จ ตรวจสอบ Delivery ก่อนลองซ้ำ',
+      title: failure.title,
+      description: failure.description,
       color: 'error'
     })
-    await refresh()
+    await refreshAfterEmailAction()
   } finally {
     sendingEmail.value = false
+  }
+}
+
+async function refreshAfterEmailAction(): Promise<boolean> {
+  try {
+    await refresh()
+    return true
+  } catch {
+    return false
   }
 }
 </script>
@@ -528,6 +601,14 @@ async function confirmSendEmail(): Promise<void> {
         <h1 class="mt-2 text-3xl font-bold text-highlighted">การประเมิน</h1>
       </div>
       <div class="flex items-center gap-2">
+        <UButton
+          v-if="canManageCycles"
+          color="neutral"
+          icon="i-lucide-calendar-range"
+          label="จัดการรอบประเมิน"
+          to="/app/evaluations/cycles"
+          variant="outline"
+        />
         <UButton
           color="neutral"
           icon="i-lucide-mails"
@@ -653,6 +734,28 @@ async function confirmSendEmail(): Promise<void> {
       title="โหลด Assignment ไม่สำเร็จ"
       variant="soft"
     />
+
+    <div
+      v-if="relationDataError"
+      class="flex flex-col gap-2 sm:flex-row sm:items-center"
+    >
+      <UAlert
+        class="flex-1"
+        color="warning"
+        icon="i-lucide-circle-alert"
+        title="โหลดข้อมูลประกอบไม่ครบ"
+        description="รายละเอียดนักศึกษา ผู้ประเมิน หรือสถานประกอบการอาจไม่ครบ โปรดลองโหลดข้อมูลใหม่ก่อนดำเนินการ"
+        variant="soft"
+      />
+      <UButton
+        color="neutral"
+        icon="i-lucide-refresh-cw"
+        label="ลองโหลดข้อมูลประกอบใหม่"
+        :loading="relationDataPending"
+        :disabled="relationDataPending"
+        @click="retryRelationData"
+      />
+    </div>
 
     <UCard :ui="{ body: 'p-0 sm:p-0' }">
       <div class="overflow-x-auto">
@@ -852,7 +955,7 @@ async function confirmSendEmail(): Promise<void> {
     <div
       v-if="sendEmailModalOpen"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 sm:p-6 backdrop-blur-sm"
-      @click="sendEmailModalOpen = false"
+      @click="closeSendEmailModal"
     >
       <div
         class="w-full max-w-5xl xl:max-w-6xl rounded-2xl border border-default bg-elevated shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
@@ -887,7 +990,8 @@ async function confirmSendEmail(): Promise<void> {
           <button
             type="button"
             class="rounded-lg p-1.5 text-muted hover:text-highlighted hover:bg-muted/40 transition-colors"
-            @click="sendEmailModalOpen = false"
+            :disabled="sendingEmail"
+            @click="closeSendEmailModal"
           >
             <UIcon name="i-lucide-x" class="size-5" />
           </button>
@@ -961,22 +1065,24 @@ async function confirmSendEmail(): Promise<void> {
               <label
                 class="text-xs font-semibold text-highlighted flex items-center justify-between"
               >
-                <span>เลือกประเภทของอีเมล:</span>
+                <span>เลือกการดำเนินการ:</span>
                 <span class="text-[11px] text-primary font-normal">
-                  * คัดเลือกอัตโนมัติตามสถานะ
+                  เลือกตาม invitation และสถานะ Delivery; pending
+                  อย่างเดียวบอกไม่ได้ว่าส่งแล้วหรือยัง
                 </span>
               </label>
               <div class="grid grid-cols-1 gap-2">
                 <!-- Type 1 -->
                 <button
                   type="button"
+                  :disabled="sendingEmail"
                   :class="[
                     'p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1',
-                    selectedEmailTemplateCode === 'evaluation_request'
+                    emailActionMode === 'request'
                       ? 'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-xs'
                       : 'border-default bg-default hover:border-default/80 hover:bg-muted/30'
                   ]"
-                  @click="selectedEmailTemplateCode = 'evaluation_request'"
+                  @click="selectEmailAction('request')"
                 >
                   <div class="flex items-center justify-between">
                     <span
@@ -988,29 +1094,23 @@ async function confirmSendEmail(): Promise<void> {
                       />
                       1. ขอความอนุเคราะห์ประเมิน
                     </span>
-                    <span
-                      v-if="selectedAssignmentForEmail?.status === 'pending'"
-                      class="rounded-full bg-emerald-500/20 text-emerald-600 text-[10px] px-2 py-0.5 font-semibold"
-                    >
-                      แนะนำ
-                    </span>
                   </div>
                   <p class="text-[11px] text-muted leading-tight">
-                    สำหรับนักศึกษาที่ยังไม่ได้ส่งแบบประเมิน
-                    หรือเริ่มต้นขอให้ระบุผู้ประเมิน
+                    ส่ง invitation ครั้งแรก เมื่อ assignment ยังไม่มีคำเชิญเดิม
                   </p>
                 </button>
 
                 <!-- Type 2 -->
                 <button
                   type="button"
+                  :disabled="sendingEmail"
                   :class="[
                     'p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1',
-                    selectedEmailTemplateCode === 'evaluation_reminder'
+                    emailActionMode === 'reminder'
                       ? 'border-amber-500 bg-amber-500/10 ring-2 ring-amber-500/20 shadow-xs'
                       : 'border-default bg-default hover:border-default/80 hover:bg-muted/30'
                   ]"
-                  @click="selectedEmailTemplateCode = 'evaluation_reminder'"
+                  @click="selectEmailAction('reminder')"
                 >
                   <div class="flex items-center justify-between">
                     <span
@@ -1030,7 +1130,37 @@ async function confirmSendEmail(): Promise<void> {
                     </span>
                   </div>
                   <p class="text-[11px] text-muted leading-tight">
-                    สำหรับกรณีส่งไปแล้วแต่ผู้ประเมินยังไม่ได้ตอบหรือยังไม่เสร็จสิ้น
+                    ใช้ invitation เดิมที่ยัง active; ไม่เปลี่ยน PIN หรือ
+                    deadline
+                  </p>
+                </button>
+
+                <button
+                  v-if="
+                    selectedAssignmentForEmail?.status === 'pending' ||
+                    selectedAssignmentForEmail?.status === 'inProgress'
+                  "
+                  type="button"
+                  :disabled="sendingEmail"
+                  :class="[
+                    'p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1',
+                    emailActionMode === 'reissue'
+                      ? 'border-primary bg-primary/10 ring-2 ring-primary/20 shadow-xs'
+                      : 'border-default bg-default hover:border-default/80 hover:bg-muted/30'
+                  ]"
+                  @click="selectEmailAction('reissue')"
+                >
+                  <span
+                    class="font-bold text-xs text-highlighted flex items-center gap-1.5"
+                  >
+                    <UIcon
+                      name="i-lucide-key-round"
+                      class="size-4 text-primary"
+                    />
+                    3. ออกคำเชิญ/PIN ใหม่
+                  </span>
+                  <p class="text-[11px] text-muted leading-tight">
+                    เพิกถอนลิงก์เดิมและไม่ต่อกำหนดส่ง
                   </p>
                 </button>
               </div>
@@ -1038,6 +1168,7 @@ async function confirmSendEmail(): Promise<void> {
 
             <!-- Recipient Fields Card -->
             <div
+              v-if="emailActionMode !== 'reissue'"
               class="rounded-xl border border-default bg-muted/10 p-3.5 space-y-3 shadow-xs"
             >
               <span
@@ -1053,6 +1184,7 @@ async function confirmSendEmail(): Promise<void> {
                 >
                 <input
                   v-model="recipientEmailInput"
+                  :disabled="sendingEmail"
                   type="email"
                   class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs font-mono text-highlighted focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all"
                   placeholder="evaluator@company.co.th"
@@ -1066,11 +1198,49 @@ async function confirmSendEmail(): Promise<void> {
                 >
                 <input
                   v-model="evaluatorNameInput"
+                  :disabled="sendingEmail"
                   type="text"
                   class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all"
                   placeholder="คุณสมชาย ใจดี"
                 />
               </div>
+            </div>
+
+            <div
+              v-else
+              class="rounded-xl border border-primary/30 bg-primary/5 p-3.5 space-y-3 shadow-xs"
+            >
+              <div class="space-y-1">
+                <span
+                  class="font-semibold text-highlighted text-xs flex items-center gap-1.5"
+                >
+                  <UIcon
+                    name="i-lucide-at-sign"
+                    class="size-3.5 text-primary"
+                  />
+                  อีเมลในทะเบียนผู้ประเมิน
+                </span>
+                <p class="font-mono text-xs text-highlighted">
+                  {{ emailTargetEvaluator?.email || '-' }}
+                </p>
+              </div>
+              <div class="space-y-1">
+                <label class="text-[11px] font-medium text-muted">
+                  เหตุผลที่ออกคำเชิญใหม่ * (5–500 ตัวอักษร)
+                </label>
+                <textarea
+                  v-model="invitationReissueReason"
+                  :disabled="sendingEmail"
+                  maxlength="500"
+                  rows="3"
+                  class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all"
+                  placeholder="เช่น ผู้ประเมินแจ้งว่าลิงก์เดิมใช้งานไม่ได้"
+                ></textarea>
+              </div>
+              <p class="text-[11px] text-muted leading-relaxed">
+                PIN และ session เดิมจะใช้ไม่ได้ทันที
+                ระบบส่งคำเชิญใหม่ไปยังอีเมลข้างต้น และคง deadline เดิม
+              </p>
             </div>
           </div>
 
@@ -1081,13 +1251,13 @@ async function confirmSendEmail(): Promise<void> {
                 class="text-xs font-semibold text-highlighted flex items-center gap-1.5"
               >
                 <UIcon name="i-lucide-eye" class="size-4 text-primary" />
-                ตัวอย่างอีเมลจริงที่จะถูกส่งออก
+                ตัวอย่างจากแม่แบบอีเมล
               </label>
               <UBadge
                 color="neutral"
                 variant="subtle"
                 size="xs"
-                label="ดึงจากแม่แบบที่ตั้งค่าไว้"
+                label="แสดงตัวอย่าง placeholder"
                 icon="i-lucide-layers"
               />
             </div>
@@ -1111,7 +1281,11 @@ async function confirmSendEmail(): Promise<void> {
                   <span
                     class="font-mono text-highlighted bg-muted/40 px-2 py-0.5 rounded text-[11px]"
                   >
-                    {{ recipientEmailInput || '-' }}
+                    {{
+                      emailActionMode === 'reissue'
+                        ? emailTargetEvaluator?.email || '-'
+                        : recipientEmailInput || '-'
+                    }}
                   </span>
                 </div>
               </div>
@@ -1141,10 +1315,15 @@ async function confirmSendEmail(): Promise<void> {
               name="i-lucide-shield-check"
               class="size-4 text-emerald-600"
             />
-            <span
-              >ระบบจะแนบลิงก์และรหัส PIN
-              สำหรับเข้าประเมินให้นักศึกษาและสถานประกอบการโดยอัตโนมัติ</span
-            >
+            <span v-if="emailActionMode === 'reissue'">
+              ระบบเพิกถอน PIN/session เดิมทันทีและคง deadline เดิม
+            </span>
+            <span v-else-if="emailActionMode === 'reminder'">
+              Reminder ใช้ลิงก์และ PIN เดิม ไม่หมุน PIN และไม่ต่อ deadline
+            </span>
+            <span v-else>
+              ระบบแนบลิงก์และ PIN ให้ผู้ประเมินโดยอัตโนมัติเมื่อเข้าคิวส่ง
+            </span>
           </div>
 
           <div class="flex items-center gap-2 self-end sm:self-auto">
@@ -1153,22 +1332,22 @@ async function confirmSendEmail(): Promise<void> {
               label="ยกเลิก"
               size="md"
               variant="ghost"
-              @click="sendEmailModalOpen = false"
+              :disabled="sendingEmail"
+              @click="closeSendEmailModal"
             />
             <UButton
               color="primary"
               icon="i-lucide-send"
               :label="
-                selectedEmailTemplateCode === 'evaluation_reminder'
-                  ? 'ส่งอีเมลแจ้งเตือน'
-                  : 'ส่งอีเมลขอความอนุเคราะห์'
+                emailActionMode === 'reissue'
+                  ? 'ออกคำเชิญใหม่'
+                  : emailActionMode === 'reminder'
+                    ? 'ส่งอีเมลแจ้งเตือน'
+                    : 'ส่งอีเมลขอความอนุเคราะห์'
               "
               size="md"
               :loading="sendingEmail"
-              :disabled="
-                !recipientEmailInput.trim() ||
-                !systemEmailTemplates[selectedEmailTemplateCode]
-              "
+              :disabled="emailActionDisabled"
               @click="confirmSendEmail"
             />
           </div>

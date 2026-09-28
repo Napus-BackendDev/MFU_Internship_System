@@ -25,19 +25,33 @@ const nameSchema = z.object({ th: z.string().min(1), en: z.string().min(1) })
 const listSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(500).default(25),
+  includeDirectoryData: z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .default(false),
   search: z.string().trim().max(100).optional(),
   schoolId: z.string().optional(),
   programId: z.string().optional(),
   organizationId: z.string().optional(),
   studentId: z.string().optional(),
   academicTermId: z.string().optional(),
+  academicYear: z.coerce.number().int().min(2000).max(3000).optional(),
+  semester: z.string().trim().min(1).max(40).optional(),
+  cycleId: z
+    .string()
+    .regex(/^[a-f0-9]{24}$/i)
+    .optional(),
   status: z.enum(['planned', 'active', 'completed', 'cancelled']).optional(),
   evaluationStatus: z
     .enum([
       'awaiting_evaluator',
       'awaiting_response',
       'submitted',
-      'email_error'
+      'email_error',
+      'pending',
+      'inProgress',
+      'expired',
+      'assignment_ambiguous'
     ])
     .optional()
 })
@@ -226,7 +240,11 @@ export class MembersController {
     @Req() request: AuthenticatedRequest,
     @Body() raw: unknown
   ): Promise<unknown> {
-    return this.service.createStudent(request.actor!, studentSchema.parse(raw))
+    return this.service.createStudent(
+      request.actor!,
+      studentSchema.parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('students.manage')
@@ -240,7 +258,8 @@ export class MembersController {
     return this.service.updateStudent(
       request.actor!,
       id,
-      updateSchema.parse(raw)
+      updateSchema.parse(raw),
+      request.requestId ?? 'unknown'
     )
   }
 
@@ -251,31 +270,55 @@ export class MembersController {
     @Req() request: AuthenticatedRequest,
     @Param('studentId') id: string
   ): Promise<void> {
-    return this.service.archiveStudent(request.actor!, id)
+    return this.service.archiveStudent(
+      request.actor!,
+      id,
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('organizations.read')
   @Get('organizations')
-  public listOrganizations(@Query() raw: unknown): Promise<unknown> {
-    return this.service.listOrganizations(listSchema.parse(raw))
+  public listOrganizations(
+    @Req() request: AuthenticatedRequest,
+    @Query() raw: unknown
+  ): Promise<unknown> {
+    return this.service.listOrganizations(request.actor!, listSchema.parse(raw))
   }
 
   @RequirePermissions('organizations.manage')
   @Post('organizations')
-  public createOrganization(@Body() raw: unknown): Promise<unknown> {
-    return this.service.createOrganization(organizationSchema.parse(raw))
+  public createOrganization(
+    @Req() request: AuthenticatedRequest,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    return this.service.createOrganization(
+      request.actor!,
+      organizationSchema.parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('organizations.read')
   @Get('evaluators')
-  public listEvaluators(@Query() raw: unknown): Promise<unknown> {
-    return this.service.listEvaluators(listSchema.parse(raw))
+  public listEvaluators(
+    @Req() request: AuthenticatedRequest,
+    @Query() raw: unknown
+  ): Promise<unknown> {
+    return this.service.listEvaluators(request.actor!, listSchema.parse(raw))
   }
 
   @RequirePermissions('organizations.manage')
   @Post('evaluators')
-  public createEvaluator(@Body() raw: unknown): Promise<unknown> {
-    return this.service.createEvaluator(evaluatorSchema.parse(raw))
+  public createEvaluator(
+    @Req() request: AuthenticatedRequest,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    return this.service.createEvaluator(
+      request.actor!,
+      evaluatorSchema.parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('placements.read')
@@ -295,7 +338,8 @@ export class MembersController {
   ): Promise<unknown> {
     return this.service.createPlacement(
       request.actor!,
-      placementSchema.parse(raw)
+      placementSchema.parse(raw),
+      request.requestId ?? 'unknown'
     )
   }
 }

@@ -77,8 +77,8 @@ MongoDB ไม่มี foreign key enforcement แบบ relational database �
 ```js
 {
   _id: ObjectId,
-  provider: "mfu-oidc",
-  providerSubject: "opaque-subject",
+  oidcIssuer: "https://issuer.example.edu", // absent for an unlinked pre-created account
+  oidcSubject: "opaque-subject", // exact, case-sensitive OIDC sub
   email: "user@example.edu",
   displayName: { th: "...", en: "..." },
   status: "active", // active | suspended | archived
@@ -92,9 +92,10 @@ MongoDB ไม่มี foreign key enforcement แบบ relational database �
 
 Indexes:
 
-- unique `{ provider: 1, providerSubject: 1 }`
+- case-sensitive unique `{ oidcIssuer: 1, oidcSubject: 1 }`; missing issuer is the unlinked-account namespace, so its subject remains unique too
+- do not create a globally unique subject-only index: provider identity is the exact `(issuer, subject)` pair
 - unique partial `{ email: 1 }` เมื่อ email ไม่ null
-- `{ status: 1, updatedAt: -1 }`
+- the account-link migration creates the tuple index before dropping the legacy `oidcSubject_1` unique index
 
 ### 5.2 `roles` และ `userRoleAssignments`
 
@@ -523,29 +524,27 @@ Indexes:
 ```js
 // emailTemplates
 {
-  code: "EVALUATOR_INVITATION",
+  code: "evaluation_request",
   audience: "evaluator",
-  name: { th: String, en: String },
-  latestVersion: 2,
-  archivedAt: null
+  status: "active"
 }
 
 // emailTemplateVersions
 {
-  emailTemplateId: ObjectId,
-  version: 2,
+  templateId: String,
+  versionNumber: 2,
   status: "published",
-  locale: "th",
   subject: String,
-  textBody: String,
-  htmlBody: String,
-  allowedPlaceholders: ["evaluator.name", "student.name", "evaluation.url"],
-  publishedAt: ISODate,
-  publishedBy: ObjectId
+  html: String,
+  text: String,
+  placeholders: ["student_name", "invitation_url"],
+  publishedAt: ISODate
 }
 ```
 
-- unique `{ emailTemplateId: 1, version: 1, locale: 1 }`
+- unique, simple-collation `{ code: 1 }` and `{ templateId: 1, versionNumber: 1 }`.
+- Provision Production indexes with the guarded `migrate:email-template-indexes` command; it defaults to dry-run and blocks on duplicate or malformed rows.
+- Built-in system-template reads return defaults without database writes. The invitation workflow transactionally creates the persisted published default on first use.
 
 ### 8.3 `notificationJobs`
 
@@ -835,6 +834,13 @@ Migration steps:
 10. reconcile counts, relations และ samples
 11. quarantine invalid records พร้อม reason
 12. sign-off ก่อน cutover
+
+OIDC identity-index migration:
+
+- `pnpm --filter @internship/api migrate:oidc-identity-index` is read-only by default; set `OIDC_IDENTITY_INDEX_MIGRATION_URI` for the explicitly selected target.
+- Review duplicate-pair hashes and malformed-identity counts. The migration stops without changing indexes when conflicts exist.
+- Apply only after review with `--apply --confirm-db=<exact-database-name>`. It creates and verifies the unique `(oidcIssuer, oidcSubject)` index first, then drops the legacy globally unique `oidcSubject` index. A rerun is safe.
+- Test with an isolated database, then rehearse against a production-like restored backup. Do not run against Production without a separately approved release window and backup.
 
 ## 16. Environment and connection
 

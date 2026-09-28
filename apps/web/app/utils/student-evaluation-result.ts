@@ -21,6 +21,9 @@ export interface EvaluationSectionSnapshot {
 }
 
 export interface StudentEvaluationRecord {
+  readonly id?: string
+  readonly version?: number
+  readonly supersededAt?: string | null
   readonly answers?: Readonly<Record<string, unknown>>
   readonly questionSnapshot?: readonly EvaluationSectionSnapshot[]
   readonly categoryScores?: {
@@ -44,13 +47,24 @@ export interface EvaluationTextAnswer {
   readonly value: string | null
 }
 
+export interface StudentEvaluationResult {
+  readonly hardSkillScore: EvaluationCategoryScore | null
+  readonly softSkillScore: EvaluationCategoryScore | null
+  readonly hardSkillQuestions: readonly EvaluationRatingAnswer[]
+  readonly softSkillQuestions: readonly EvaluationRatingAnswer[]
+  readonly suggestions: readonly EvaluationTextAnswer[]
+  readonly hasQuestionSnapshot: boolean
+}
+
 export function buildStudentEvaluationResult(
   evaluation: StudentEvaluationRecord | null | undefined
-) {
+): StudentEvaluationResult {
   const answers = evaluation?.answers ?? {}
   const sections = evaluation?.questionSnapshot ?? []
 
-  const ratingAnswers = (category: 'general' | 'special') =>
+  const ratingAnswers = (
+    category: 'general' | 'special'
+  ): EvaluationRatingAnswer[] =>
     sections
       .filter((section) => section.category === category)
       .flatMap((section) =>

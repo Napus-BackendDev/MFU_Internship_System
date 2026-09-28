@@ -64,7 +64,7 @@ export class AuthRateLimitGuard implements CanActivate {
 
   private policyFor(request: Request): RatePolicy | undefined {
     if (!['GET', 'POST'].includes(request.method)) return undefined
-    const path = (request.path ?? '').replace(/\/+$/u, '')
+    const path = this.normalizedPath(request)
     if (
       path.endsWith('/public/evaluations/verify-pin') ||
       path.endsWith('/public/invitations/exchange') ||
@@ -83,15 +83,18 @@ export class AuthRateLimitGuard implements CanActivate {
     if (/\/students\/imports\/[^/]+\/commit$/u.test(path)) {
       return { limit: 60, windowMs: 15 * 60 * 1000 }
     }
+    if (
+      /\/documents\/generated-documents\/:documentId(?:\/download-url)?$/u.test(
+        path
+      )
+    ) {
+      return { limit: 60, windowMs: 60 * 1000 }
+    }
     return undefined
   }
 
   private keysFor(request: Request): string[] {
-    const rawPath = (request.path ?? '').replace(/\/+$/u, '')
-    const path = rawPath.replace(
-      /\/students\/imports\/[^/]+\/commit$/u,
-      '/students/imports/:batchId/commit'
-    )
+    const path = this.normalizedPath(request)
     const baseKey = `${request.method}:${path}`
     const keys = [`${baseKey}:ip:${getClientIp(request)}`]
     const body = request.body as Record<string, unknown> | undefined
@@ -108,5 +111,18 @@ export class AuthRateLimitGuard implements CanActivate {
       keys.push(`${baseKey}:credential:${credential.trim().toLowerCase()}`)
     }
     return keys
+  }
+
+  private normalizedPath(request: Request): string {
+    return (request.path ?? '')
+      .replace(/\/+$/u, '')
+      .replace(
+        /\/students\/imports\/[^/]+\/commit$/u,
+        '/students/imports/:batchId/commit'
+      )
+      .replace(
+        /(\/documents\/generated-documents\/)[a-f\d]{24}(?=\/|$)/iu,
+        '$1:documentId'
+      )
   }
 }

@@ -8,6 +8,7 @@ const ROUTE_ROLE_PERMISSIONS: Readonly<Record<string, readonly RoleKey[]>> = {
   '/app/settings/academic': ['systemAdmin', 'internshipStaff'],
   '/app/settings/email': ['systemAdmin', 'internshipStaff'],
   '/app/settings/general': ['systemAdmin', 'internshipStaff'],
+  '/app/evaluations/cycles': ['systemAdmin', 'internshipStaff'],
   '/app/students': ['systemAdmin', 'internshipStaff', 'coordinator', 'auditor'],
   '/app/documents': [
     'systemAdmin',

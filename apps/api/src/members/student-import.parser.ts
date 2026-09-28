@@ -278,23 +278,35 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
 
   if (rows.length === 0) throw new Error('WORKBOOK_NO_STUDENT_ROWS')
   const counts = new Map<string, number>()
+  const emailCounts = new Map<string, number>()
   for (const row of rows) {
     if (/^\d{7,20}$/.test(row.studentId)) {
       counts.set(row.studentId, (counts.get(row.studentId) ?? 0) + 1)
     }
+    if (row.email) {
+      emailCounts.set(row.email, (emailCounts.get(row.email) ?? 0) + 1)
+    }
   }
   const rowsWithDuplicates = rows.map((row) => {
-    if ((counts.get(row.studentId) ?? 0) < 2) return row
+    const issues = [...row.issues]
+    if ((counts.get(row.studentId) ?? 0) > 1) {
+      issues.push({
+        code: 'DUPLICATE_SOURCE_ID',
+        field: 'studentId',
+        message: 'This student ID occurs more than once in the workbook.'
+      })
+    }
+    if ((emailCounts.get(row.email) ?? 0) > 1) {
+      issues.push({
+        code: 'DUPLICATE_SOURCE_EMAIL',
+        field: 'email',
+        message: 'This student email occurs more than once in the workbook.'
+      })
+    }
+    if (issues.length === row.issues.length) return row
     return {
       ...row,
-      issues: [
-        ...row.issues,
-        {
-          code: 'DUPLICATE_SOURCE_ID',
-          field: 'studentId',
-          message: 'This student ID occurs more than once in the workbook.'
-        }
-      ]
+      issues
     }
   })
 

@@ -125,7 +125,7 @@ export class SmtpSettingsService {
           $set: nextValues,
           ...(Object.keys(unset).length > 0 ? { $unset: unset } : {})
         },
-        { new: true }
+        { returnDocument: 'after' }
       )
       .select(SECRET_FIELDS)
       .exec()

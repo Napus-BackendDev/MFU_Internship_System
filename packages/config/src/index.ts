@@ -6,6 +6,12 @@ export {
   parseSmtpSettingsEncryptionKey,
   type EncryptedSmtpSecret
 } from './smtp-secret.js'
+export {
+  isBullMqRedisReady,
+  supportsBullMqRedisVersion,
+  type RedisHealthClient
+} from './redis-capability.js'
+export { supportsMongoTransactions } from './mongo-capability.js'
 
 export const RUNTIME_BASELINE = Object.freeze({
   nodeMajor: 24,
@@ -30,6 +36,7 @@ const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
   CONTAINERIZED: booleanString.default(false),
   PORT: z.coerce.number().int().min(1).max(65_535).default(8081),
+  WORKER_HEALTH_PORT: z.coerce.number().int().min(1).max(65_535).default(8082),
   MONGODB_URI: z.url(),
   REDIS_URL: z.url(),
   TRUSTED_PROXY_CIDRS: z.string().default(''),
@@ -82,18 +89,90 @@ export type AppEnvironment = z.infer<typeof environmentSchema> & {
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 
 function hostname(value: string): string {
-  return new URL(value).hostname
+  return new URL(value).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+}
+
+function parseCorsOrigins(value: string): string[] {
+  return value
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+}
+
+function isExactProductionCorsOrigin(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (
+      url.protocol === 'https:' &&
+      url.origin === value &&
+      !LOCAL_HOSTS.has(hostname(value))
+    )
+  } catch {
+    return false
+  }
+}
+
+function mongoConnectionUsesValidatedTls(value: string): boolean {
+  const url = new URL(value)
+  const options: Array<[string, string]> = [...url.searchParams.entries()].map(
+    ([key, option]) => [key.toLowerCase(), option.toLowerCase()]
+  )
+  const tlsOptions = options
+    .filter(([key]) => ['tls', 'ssl'].includes(key))
+    .map(([, option]) => option)
+  const validationBypassOptions = new Set([
+    'tlsinsecure',
+    'tlsallowinvalidcertificates',
+    'tlsallowinvalidhostnames'
+  ])
+
+  if (
+    tlsOptions.some((option) => !['true', 'false'].includes(option)) ||
+    tlsOptions.includes('false') ||
+    options.some(
+      ([key, option]) => validationBypassOptions.has(key) && option === 'true'
+    )
+  ) {
+    return false
+  }
+
+  if (tlsOptions.includes('true')) return true
+  return url.protocol === 'mongodb+srv:'
+}
+
+function assertServiceUrlSchemes(
+  environment: z.infer<typeof environmentSchema>
+): void {
+  if (
+    !['mongodb:', 'mongodb+srv:'].includes(
+      new URL(environment.MONGODB_URI).protocol
+    )
+  ) {
+    throw new Error('MONGODB_URI must use a supported service URL scheme.')
+  }
+
+  if (
+    !['redis:', 'rediss:'].includes(new URL(environment.REDIS_URL).protocol)
+  ) {
+    throw new Error('REDIS_URL must use a supported service URL scheme.')
+  }
 }
 
 function containsPlaceholder(value: string): boolean {
-  return (
-    value.includes('<') || value.includes('SET_') || value.includes('CHANGE_ME')
+  return /<\s*(?:SET_|CHANGE_ME|YOUR_)[^>]*>|(?:^|[^A-Z0-9])(?:SET_[A-Z0-9_]+|CHANGE_ME)(?:[^A-Z0-9]|$)/i.test(
+    value
   )
 }
 
 function assertEnvironmentIsolation(
   environment: z.infer<typeof environmentSchema>
 ): void {
+  if (environment.AUTH_JWT_SECRET === environment.INVITATION_TOKEN_PEPPER) {
+    throw new Error(
+      'AUTH_JWT_SECRET and INVITATION_TOKEN_PEPPER must be different.'
+    )
+  }
+
   if (environment.NODE_ENV === 'development') {
     if (
       !LOCAL_HOSTS.has(hostname(environment.MONGODB_URI)) &&
@@ -114,17 +193,35 @@ function assertEnvironmentIsolation(
 
   if (environment.NODE_ENV !== 'production') return
 
-  const protectedValues = [
+  const productionValues: Array<string | undefined> = [
     environment.MONGODB_URI,
     environment.REDIS_URL,
+    environment.PUBLIC_WEB_URL,
+    environment.NUXT_PUBLIC_API_BASE_URL,
     environment.AUTH_JWT_SECRET,
     environment.INVITATION_TOKEN_PEPPER,
+    environment.OIDC_ISSUER_URL,
+    environment.OIDC_CLIENT_ID,
+    environment.OIDC_CLIENT_SECRET,
+    environment.OIDC_REDIRECT_URI,
+    environment.CORS_ORIGINS,
+    environment.SMTP_HOST,
+    environment.SMTP_USER,
+    environment.SMTP_PASSWORD,
+    environment.SMTP_FROM,
     environment.SMTP_SETTINGS_ENCRYPTION_KEY,
+    environment.S3_ENDPOINT,
+    environment.S3_REGION,
+    environment.S3_BUCKET,
     environment.S3_ACCESS_KEY_ID,
     environment.S3_SECRET_ACCESS_KEY
   ]
 
-  if (protectedValues.some(containsPlaceholder)) {
+  if (
+    productionValues.some(
+      (value) => value !== undefined && containsPlaceholder(value)
+    )
+  ) {
     throw new Error(
       'Production configuration contains an unresolved placeholder.'
     )
@@ -135,6 +232,42 @@ function assertEnvironmentIsolation(
     LOCAL_HOSTS.has(hostname(environment.REDIS_URL))
   ) {
     throw new Error('Production data services must not use localhost.')
+  }
+
+  const productionEndpoints = [
+    environment.PUBLIC_WEB_URL,
+    environment.NUXT_PUBLIC_API_BASE_URL,
+    environment.OIDC_ISSUER_URL,
+    environment.OIDC_REDIRECT_URI,
+    environment.S3_ENDPOINT
+  ].filter((value): value is string => value !== undefined)
+
+  if (productionEndpoints.some((value) => LOCAL_HOSTS.has(hostname(value)))) {
+    throw new Error('Production endpoints must not use localhost.')
+  }
+
+  if (
+    parseCorsOrigins(environment.CORS_ORIGINS).some(
+      (origin) => !isExactProductionCorsOrigin(origin)
+    )
+  ) {
+    throw new Error(
+      'Production CORS_ORIGINS must contain exact HTTPS origins without localhost.'
+    )
+  }
+
+  if (!mongoConnectionUsesValidatedTls(environment.MONGODB_URI)) {
+    throw new Error(
+      'Production MongoDB connection must use TLS with certificate validation.'
+    )
+  }
+
+  if (new URL(environment.REDIS_URL).protocol !== 'rediss:') {
+    throw new Error('Production Redis connection must use TLS.')
+  }
+
+  if (new URL(environment.S3_ENDPOINT).protocol !== 'https:') {
+    throw new Error('Production S3 endpoint must use HTTPS.')
   }
 
   if (
@@ -154,6 +287,13 @@ function assertEnvironmentIsolation(
     throw new Error('Production requires complete OIDC configuration.')
   }
 
+  if (
+    new URL(environment.OIDC_ISSUER_URL).protocol !== 'https:' ||
+    new URL(environment.OIDC_REDIRECT_URI).protocol !== 'https:'
+  ) {
+    throw new Error('Production OIDC URLs must use HTTPS.')
+  }
+
   if (!environment.COOKIE_SECURE) {
     throw new Error('Production cookies must be secure.')
   }
@@ -165,11 +305,10 @@ function assertEnvironmentIsolation(
 
 export function loadEnvironment(source: NodeJS.ProcessEnv): AppEnvironment {
   const environment = environmentSchema.parse(source)
+  assertServiceUrlSchemes(environment)
   assertEnvironmentIsolation(environment)
 
-  const corsOrigins = environment.CORS_ORIGINS.split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean)
+  const corsOrigins = parseCorsOrigins(environment.CORS_ORIGINS)
 
   if (corsOrigins.length === 0) {
     throw new Error('At least one CORS origin is required.')

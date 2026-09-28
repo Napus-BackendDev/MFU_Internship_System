@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import type { AppEnvironment } from '@internship/config'
 import {
@@ -7,30 +7,44 @@ import {
   S3Client
 } from '@aws-sdk/client-s3'
 import fontkit from '@pdf-lib/fontkit'
-import type { Job } from 'bullmq'
-import { PDFDocument, rgb } from 'pdf-lib'
+import type { Job, Queue } from 'bullmq'
+import { PDFDocument } from 'pdf-lib'
+import type { PDFFont } from 'pdf-lib'
 import type { Logger } from 'pino'
+import type { Types } from 'mongoose'
+import {
+  parseCanonicalDocumentV1,
+  parseCanonicalDocumentV2,
+  type DocumentIssueSnapshotV1,
+  type CanonicalDocumentV1,
+  type CanonicalDocumentV2
+} from '@internship/shared-types'
 
 import type { WorkerModels } from './models.js'
-import { studentReferenceFilter } from './student-reference.js'
+import { persistDocumentIssue } from './document-issue.js'
+import { renderDocumentTemplate } from './document-renderer.js'
 
 export interface DocumentJob {
   readonly documentId: string
 }
 
-interface TextElement {
-  readonly type: 'text'
-  readonly x: number
-  readonly y: number
-  readonly fontSize: number
-  readonly text: string
-}
+export type DocumentFontEmbedder = (
+  pdf: unknown,
+  fontBytes: Uint8Array
+) => Promise<unknown>
 
-interface CanonicalDocument {
-  readonly width: number
-  readonly height: number
-  readonly elements: readonly TextElement[]
-}
+const DOCUMENT_LEASE_MS = 5 * 60 * 1000
+const DOCUMENT_LEASE_HEARTBEAT_MS = 60 * 1000
+const DOCUMENT_RECOVERY_BATCH_SIZE = 100
+const QUEUE_RETRYABLE_FAILURE = 'QUEUE_ENQUEUE_FAILED'
+const ACTIVE_QUEUE_STATES = new Set([
+  'active',
+  'waiting',
+  'delayed',
+  'waiting-children',
+  'paused',
+  'prioritized'
+])
 
 export class DocumentProcessor {
   private readonly s3: S3Client
@@ -38,7 +52,10 @@ export class DocumentProcessor {
   public constructor(
     private readonly environment: AppEnvironment,
     private readonly models: WorkerModels,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly documentQueue?: Queue<DocumentJob>,
+    private readonly embedDocumentFont: DocumentFontEmbedder = (pdf, bytes) =>
+      (pdf as PDFDocument).embedFont(bytes, { subset: true })
   ) {
     this.s3 = new S3Client({
       endpoint: environment.S3_ENDPOINT,
@@ -52,82 +69,135 @@ export class DocumentProcessor {
   }
 
   public async process(job: Job<DocumentJob>): Promise<void> {
+    const startedAt = new Date()
+    const processingToken = randomUUID()
     const document = await this.models.GeneratedDocument.findOneAndUpdate(
       {
         _id: job.data.documentId,
         status: { $in: ['queued', 'failed'] }
       },
       {
-        $set: { status: 'processing', processingStartedAt: new Date() },
+        $set: {
+          status: 'processing',
+          processingStartedAt: startedAt,
+          processingLeaseUntil: new Date(
+            startedAt.getTime() + DOCUMENT_LEASE_MS
+          ),
+          processingToken
+        },
         $unset: { failureCode: 1 }
       },
-      { new: true }
-    )
+      { returnDocument: 'after' }
+    ).select('+resourceScopes +sourceSnapshot')
     if (!document || document.status === 'ready') return
 
+    const leaseHeartbeat = setInterval(() => {
+      void this.extendLease(document.id, processingToken)
+    }, DOCUMENT_LEASE_HEARTBEAT_MS)
+    leaseHeartbeat.unref?.()
+
     try {
-      const [template, student, evaluations] = await Promise.all([
-        this.models.DocumentVersion.findOne({
-          _id: document.templateVersionId,
-          status: 'published'
-        }),
-        this.models.Student.findOne(studentReferenceFilter(document.studentId)),
-        this.models.Evaluation.find({ _id: { $in: document.evaluationIds } })
-          .sort({ version: 1 })
-          .lean()
-      ])
-      if (!template || !student) throw new Error('DOCUMENT_SOURCE_INVALID')
-      if (evaluations.length !== new Set(document.evaluationIds).size) {
-        throw new Error('DOCUMENT_EVALUATION_SOURCE_INVALID')
-      }
-      const assignments = await this.models.Assignment.find({
-        _id: { $in: evaluations.map((evaluation) => evaluation.assignmentId) },
-        studentId: { $in: [student.id, student.studentId] }
-      })
-        .select('_id')
-        .lean()
+      const snapshot = parseDocumentIssueSnapshot(document.sourceSnapshot)
       if (
-        assignments.length !==
-        new Set(evaluations.map((evaluation) => evaluation.assignmentId)).size
+        snapshot.student.recordId !== document.studentId ||
+        snapshot.template.versionId !== document.templateVersionId ||
+        !sameStringSet(
+          snapshot.evaluations.map((evaluation) => evaluation.id),
+          document.evaluationIds
+        )
       ) {
-        throw new Error('DOCUMENT_EVALUATION_SOURCE_INVALID')
+        throw new Error('DOCUMENT_SOURCE_INVALID')
       }
-      const canonical = parseCanonicalDocument(template.canonicalJson)
-      const fontKey = template.fontAssetKeys[0]
-      if (!fontKey) throw new Error('FONT_ASSET_REQUIRED')
+      if (!snapshot.evaluations.length) {
+        throw new Error('DOCUMENT_EVALUATION_REQUIRED')
+      }
+      const canonical = parseCanonicalDocument(
+        snapshot.template.canonicalJson,
+        snapshot.template.schemaVersion,
+        snapshot.template.placeholders
+      )
+      if (snapshot.template.fontAssets.length !== 1) {
+        throw new Error('DOCUMENT_FONT_MAPPING_UNSUPPORTED')
+      }
+      const fontAsset = snapshot.template.fontAssets[0]
+      if (!fontAsset) throw new Error('FONT_ASSET_REQUIRED')
       const fontResponse = await this.s3.send(
         new GetObjectCommand({
           Bucket: this.environment.S3_BUCKET,
-          Key: fontKey
+          Key: fontAsset.key
         })
       )
       if (!fontResponse.Body) throw new Error('FONT_ASSET_NOT_FOUND')
       const fontBytes = await fontResponse.Body.transformToByteArray()
+      if (
+        createHash('sha256').update(fontBytes).digest('hex') !==
+        fontAsset.sha256
+      ) {
+        throw new Error('FONT_ASSET_CHECKSUM_MISMATCH')
+      }
+
+      const imageBytes = new Map<string, Uint8Array>()
+      if (snapshot.template.schemaVersion === 2) {
+        const requiredImageAssets = collectImageAssetRequirements(canonical)
+        const registeredImageAssets = snapshot.template.imageAssets ?? []
+        if (
+          requiredImageAssets.size !== registeredImageAssets.length ||
+          new Set(registeredImageAssets.map((asset) => asset.key)).size !==
+            registeredImageAssets.length
+        ) {
+          throw new Error('DOCUMENT_IMAGE_ASSET_SOURCE_INVALID')
+        }
+        for (const asset of registeredImageAssets) {
+          if (requiredImageAssets.get(asset.key) !== asset.assetType) {
+            throw new Error('DOCUMENT_IMAGE_ASSET_SOURCE_INVALID')
+          }
+        }
+        const images = await Promise.all(
+          registeredImageAssets.map(async (asset) => {
+            const response = await this.s3.send(
+              new GetObjectCommand({
+                Bucket: this.environment.S3_BUCKET,
+                Key: asset.key
+              })
+            )
+            if (!response.Body)
+              throw new Error('DOCUMENT_IMAGE_ASSET_NOT_FOUND')
+            const bytes = await response.Body.transformToByteArray()
+            if (
+              createHash('sha256').update(bytes).digest('hex') !== asset.sha256
+            ) {
+              throw new Error('DOCUMENT_IMAGE_ASSET_CHECKSUM_MISMATCH')
+            }
+            return [asset.key, bytes] as const
+          })
+        )
+        for (const [key, bytes] of images) imageBytes.set(key, bytes)
+      } else if ((snapshot.template.imageAssets?.length ?? 0) > 0) {
+        throw new Error('DOCUMENT_IMAGE_ASSET_SOURCE_INVALID')
+      }
 
       const pdf = await PDFDocument.create()
       pdf.registerFontkit(fontkit)
-      pdf.setTitle('Internship Transcript')
+      pdf.setTitle(
+        snapshot.template.documentType === 'certificate'
+          ? 'Internship Certificate'
+          : 'Internship Transcript'
+      )
       pdf.setCreator('Internship Transcript System V2')
       pdf.setProducer('Internship Transcript System V2')
       pdf.setCreationDate(new Date(0))
       pdf.setModificationDate(new Date(0))
-      const font = await pdf.embedFont(fontBytes, { subset: true })
+      const font = (await this.embedDocumentFont(pdf, fontBytes)) as PDFFont
       const page = pdf.addPage([canonical.width, canonical.height])
-      const values = {
-        student_id: student.studentId,
-        student_name: student.name?.th ?? student.name?.en ?? student.studentId,
-        evaluation_count: String(evaluations.length)
-      }
-
-      for (const element of canonical.elements) {
-        page.drawText(render(element.text, values), {
-          x: element.x,
-          y: canonical.height - element.y - element.fontSize,
-          size: element.fontSize,
-          font,
-          color: rgb(0.12, 0.15, 0.2)
-        })
-      }
+      await renderDocumentTemplate(
+        pdf,
+        page,
+        canonical,
+        snapshot.template.schemaVersion,
+        snapshot,
+        font,
+        imageBytes
+      )
 
       const bytes = await pdf.save({
         addDefaultPage: false,
@@ -146,73 +216,263 @@ export class DocumentProcessor {
           Metadata: { sha256 }
         })
       )
-      await this.models.GeneratedDocument.updateOne(
-        { _id: document.id, status: 'processing' },
+      await persistDocumentIssue(
+        this.models,
         {
-          $set: { status: 'ready', objectKey, sha256 },
-          $unset: { processingStartedAt: 1 }
-        }
+          id: document.id,
+          studentId: document.studentId,
+          templateVersionId: document.templateVersionId,
+          evaluationIds: document.evaluationIds,
+          requestedBy: document.requestedBy,
+          requestedByEmail: document.requestedByEmail,
+          requestId: document.requestId,
+          resourceScopes: document.resourceScopes,
+          processingToken
+        },
+        objectKey,
+        sha256
       )
       this.logger.info({ documentId: document.id, sha256 }, 'PDF generated')
     } catch (error: unknown) {
       const code =
         error instanceof Error ? error.message.slice(0, 100) : 'PDF_FAILED'
       await this.models.GeneratedDocument.updateOne(
-        { _id: document.id },
+        {
+          _id: document.id,
+          status: 'processing',
+          processingToken
+        },
         {
           $set: { status: 'failed', failureCode: code },
-          $unset: { processingStartedAt: 1 }
+          $unset: {
+            processingStartedAt: 1,
+            processingLeaseUntil: 1,
+            processingToken: 1
+          }
         }
       )
       throw error
+    } finally {
+      clearInterval(leaseHeartbeat)
+    }
+  }
+
+  public async recoverStuckDocuments(now = new Date()): Promise<void> {
+    if (!this.documentQueue) return
+
+    const legacyCutoff = new Date(now.getTime() - DOCUMENT_LEASE_MS)
+    let afterId: Types.ObjectId | undefined
+    while (true) {
+      const stale = await this.models.GeneratedDocument.find({
+        status: 'processing',
+        $or: [
+          { processingLeaseUntil: { $lte: now } },
+          {
+            processingLeaseUntil: { $exists: false },
+            processingStartedAt: { $lte: legacyCutoff }
+          }
+        ],
+        ...(afterId ? { _id: { $gt: afterId } } : {})
+      })
+        .select('_id processingLeaseUntil processingStartedAt processingToken')
+        .sort({ _id: 1 })
+        .limit(DOCUMENT_RECOVERY_BATCH_SIZE)
+        .lean()
+        .exec()
+      if (stale.length === 0) break
+
+      for (const document of stale) {
+        afterId = document._id
+        const legacyLease = !document.processingLeaseUntil
+        const recovered = await this.models.GeneratedDocument.updateOne(
+          {
+            _id: document._id,
+            status: 'processing',
+            ...(document.processingToken
+              ? { processingToken: document.processingToken }
+              : {}),
+            ...(legacyLease
+              ? {
+                  processingLeaseUntil: { $exists: false },
+                  processingStartedAt: { $lte: legacyCutoff }
+                }
+              : { processingLeaseUntil: { $lte: now } })
+          },
+          {
+            $set: { status: 'queued' },
+            $unset: {
+              processingStartedAt: 1,
+              processingLeaseUntil: 1,
+              processingToken: 1
+            }
+          }
+        )
+        if (recovered.matchedCount === 1) {
+          this.logger.warn(
+            { documentId: document._id.toString() },
+            'stale PDF generation returned to queue'
+          )
+        }
+      }
+    }
+
+    await this.enqueueRecoverableDocuments()
+  }
+
+  private async enqueueRecoverableDocuments(): Promise<void> {
+    const queue = this.documentQueue
+    if (!queue) return
+    let afterId: Types.ObjectId | undefined
+    while (true) {
+      const documents = await this.models.GeneratedDocument.find({
+        $or: [
+          { status: 'queued' },
+          {
+            status: 'failed',
+            failureCode: QUEUE_RETRYABLE_FAILURE
+          }
+        ],
+        ...(afterId ? { _id: { $gt: afterId } } : {})
+      })
+        .select('_id')
+        .sort({ _id: 1 })
+        .limit(DOCUMENT_RECOVERY_BATCH_SIZE)
+        .lean()
+        .exec()
+      if (documents.length === 0) break
+
+      for (const document of documents) {
+        afterId = document._id
+        const jobId = `document-${document._id.toString()}`
+        try {
+          const existingJob = await queue.getJob(jobId)
+          if (existingJob) {
+            const state = await existingJob.getState()
+            if (ACTIVE_QUEUE_STATES.has(state)) continue
+            await existingJob.remove()
+          }
+          await queue.add(
+            'generate-pdf',
+            { documentId: document._id.toString() },
+            {
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 10_000 },
+              jobId,
+              removeOnComplete: 500,
+              removeOnFail: 1000
+            }
+          )
+        } catch (error: unknown) {
+          this.logger.error(
+            {
+              documentId: document._id.toString(),
+              error: error instanceof Error ? error.message : 'QUEUE_FAILED'
+            },
+            'could not re-enqueue pending PDF generation'
+          )
+        }
+      }
+    }
+  }
+
+  private async extendLease(
+    documentId: string,
+    processingToken: string
+  ): Promise<void> {
+    try {
+      const result = await this.models.GeneratedDocument.updateOne(
+        {
+          _id: documentId,
+          status: 'processing',
+          processingToken
+        },
+        {
+          $set: {
+            processingLeaseUntil: new Date(Date.now() + DOCUMENT_LEASE_MS)
+          }
+        }
+      )
+      if (result.matchedCount !== 1) {
+        this.logger.warn(
+          { documentId },
+          'PDF generation lease is no longer owned'
+        )
+      }
+    } catch {
+      this.logger.error({ documentId }, 'PDF generation lease heartbeat failed')
     }
   }
 }
 
-function parseCanonicalDocument(input: unknown): CanonicalDocument {
-  if (typeof input !== 'object' || input === null) {
-    throw new Error('DOCUMENT_TEMPLATE_INVALID')
-  }
-  const value = input as Record<string, unknown>
+function parseDocumentIssueSnapshot(value: unknown): DocumentIssueSnapshotV1 {
   if (
-    typeof value.width !== 'number' ||
-    typeof value.height !== 'number' ||
-    !Array.isArray(value.elements)
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    (value as { snapshotVersion?: unknown }).snapshotVersion !== 1
   ) {
-    throw new Error('DOCUMENT_TEMPLATE_INVALID')
+    throw new Error('DOCUMENT_SOURCE_SNAPSHOT_REQUIRED')
   }
-  const elements = value.elements.map((element: unknown) => {
-    if (typeof element !== 'object' || element === null) {
-      throw new Error('DOCUMENT_TEMPLATE_INVALID')
-    }
-    const item = element as Record<string, unknown>
-    if (
-      item.type !== 'text' ||
-      typeof item.x !== 'number' ||
-      typeof item.y !== 'number' ||
-      typeof item.fontSize !== 'number' ||
-      typeof item.text !== 'string'
-    ) {
-      throw new Error('DOCUMENT_TEMPLATE_INVALID')
-    }
-    return {
-      type: 'text' as const,
-      x: item.x,
-      y: item.y,
-      fontSize: item.fontSize,
-      text: item.text
-    }
-  })
-  return { width: value.width, height: value.height, elements }
+  return value as DocumentIssueSnapshotV1
 }
 
-function render(
-  template: string,
-  values: Readonly<Record<string, string>>
-): string {
-  return template.replace(/{{\s*([a-z_]+)\s*}}/g, (_match, key: string) => {
-    const value = values[key]
-    if (value === undefined) throw new Error('UNKNOWN_DOCUMENT_PLACEHOLDER')
-    return value
-  })
+function sameStringSet(
+  left: readonly string[],
+  right: readonly string[]
+): boolean {
+  return (
+    left.length === right.length &&
+    new Set(left).size === left.length &&
+    new Set(right).size === right.length &&
+    left.every((value) => right.includes(value))
+  )
+}
+
+function parseCanonicalDocument(
+  input: unknown,
+  schemaVersion: number,
+  declaredPlaceholders: readonly string[]
+): CanonicalDocumentV1 | CanonicalDocumentV2 {
+  if (schemaVersion === 1) {
+    const document = parseCanonicalDocumentV1(
+      input,
+      schemaVersion,
+      declaredPlaceholders
+    )
+    if (!document) throw new Error('DOCUMENT_TEMPLATE_INVALID')
+    return document
+  }
+  const document = parseCanonicalDocumentV2(
+    input,
+    schemaVersion,
+    declaredPlaceholders
+  )
+  if (!document) throw new Error('DOCUMENT_TEMPLATE_INVALID')
+  return document
+}
+
+function collectImageAssetRequirements(
+  canonical: CanonicalDocumentV1 | CanonicalDocumentV2
+): Map<string, 'emblem' | 'signature'> {
+  if (
+    !('elements' in canonical) ||
+    !canonical.elements.some((element) => 'id' in element)
+  ) {
+    return new Map()
+  }
+  const requirements = new Map<string, 'emblem' | 'signature'>()
+  for (const element of canonical.elements as CanonicalDocumentV2['elements']) {
+    if (element.type === 'emblem' && element.assetKey) {
+      requirements.set(element.assetKey, 'emblem')
+    }
+    if (element.type === 'signature' && element.assetKeys) {
+      for (const key of element.assetKeys) {
+        if (requirements.has(key)) {
+          throw new Error('DOCUMENT_IMAGE_ASSET_SOURCE_INVALID')
+        }
+        requirements.set(key, 'signature')
+      }
+    }
+  }
+  return requirements
 }

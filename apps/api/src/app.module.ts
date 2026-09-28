@@ -18,6 +18,7 @@ import { AuthRateLimitGuard } from './auth/auth-rate-limit.guard.js'
 import { CsrfGuard } from './auth/csrf.guard.js'
 import { AuthModule } from './auth/auth.module.js'
 import { redisConnectionOptions } from './common/redis.js'
+import { HTTP_LOG_REDACT_PATHS } from './common/http-logger-redaction.js'
 import { RequestIdMiddleware } from './common/request-id.middleware.js'
 import { CorrespondenceModule } from './correspondence/correspondence.module.js'
 import { DocumentsModule } from './documents/documents.module.js'
@@ -48,17 +49,7 @@ import { SmtpSettingsModule } from './system-settings/smtp-settings.module.js'
         pinoHttp: {
           level: config.get('LOG_LEVEL', { infer: true }),
           redact: {
-            paths: [
-              'req.headers.authorization',
-              'req.headers.cookie',
-              'res.headers.set-cookie',
-              '*.token',
-              '*.accessToken',
-              '*.password',
-              '*.passwordCiphertext',
-              '*.passwordIv',
-              '*.passwordAuthTag'
-            ],
+            paths: [...HTTP_LOG_REDACT_PATHS],
             censor: '[REDACTED]'
           }
         }

@@ -1,5 +1,5 @@
 import type { HealthStatus } from '@internship/shared-types'
-import type { AppEnvironment } from '@internship/config'
+import { isBullMqRedisReady, type AppEnvironment } from '@internship/config'
 import { Injectable, type OnModuleDestroy } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { InjectConnection } from '@nestjs/mongoose'
@@ -76,11 +76,7 @@ export class HealthService implements OnModuleDestroy {
       if (['wait', 'close', 'end'].includes(this.redis.status)) {
         await this.redis.connect()
       }
-      if ((await this.redis.ping()) !== 'PONG') return 'unavailable'
-      const info = await this.redis.info('server')
-      const match = /^redis_version:(\d+)\./mu.exec(info)
-      const major = match?.[1] ? Number.parseInt(match[1], 10) : 0
-      return major >= 5 ? 'ok' : 'unavailable'
+      return (await isBullMqRedisReady(this.redis)) ? 'ok' : 'unavailable'
     } catch {
       return 'unavailable'
     }

@@ -131,6 +131,39 @@ describe('user management authorization', () => {
     expect(userManagementScope(student, 'manage')).toEqual({ _id: null })
   })
 
+  it('does not use role scopes whose role is no longer active for the actor', () => {
+    const studentWithStaleStaffScope: AuthenticatedActor = {
+      id: 'student-user',
+      email: 'student@example.test',
+      displayName: 'Student',
+      roles: ['student'],
+      scope: {
+        tenant: false,
+        schoolIds: [],
+        programIds: [],
+        studentId: 'student-number'
+      },
+      roleScopes: staff.roleScopes
+    }
+
+    expect(userManagementScope(studentWithStaleStaffScope, 'read')).toEqual({
+      _id: 'student-user'
+    })
+    expect(
+      roleAssignmentWithinScope(
+        studentWithStaleStaffScope,
+        {
+          role: 'internshipStaff',
+          tenant: false,
+          schoolIds: ['school-a'],
+          programIds: ['program-a'],
+          active: true
+        },
+        'read'
+      )
+    ).toBe(false)
+  })
+
   it('excludes role assignments that span outside the actor scope', () => {
     expect(
       roleAssignmentWithinScope(
@@ -166,5 +199,21 @@ describe('user management authorization', () => {
       ]
     }
     expect(userManagementScope(tenantStaff, 'read')).toEqual({ _id: null })
+  })
+
+  it('fails closed for legacy multi-role actors without role-specific scopes', () => {
+    const ambiguousActor: AuthenticatedActor = {
+      ...staff,
+      roles: ['internshipStaff', 'auditor'],
+      scope: {
+        tenant: false,
+        schoolIds: ['school-a', 'school-b'],
+        programIds: ['program-a', 'program-b']
+      },
+      roleScopes: undefined
+    }
+
+    expect(userManagementScope(ambiguousActor, 'read')).toEqual({ _id: null })
+    expect(userManagementScope(ambiguousActor, 'manage')).toEqual({ _id: null })
   })
 })

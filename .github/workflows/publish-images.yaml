@@ -1,0 +1,159 @@
+name: Publish trusted Production images
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: Confirm publishing signed images from the protected main branch
+        required: true
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.14.0
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.0.7 --activate
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Audit dependencies
+        run: pnpm audit
+      - name: Verify release commit
+        run: pnpm verify
+
+  security:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan repository history for leaked secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - name: Analyze with CodeQL
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          output: ${{ github.workspace }}/codeql-results
+          upload: never
+          upload-database: false
+
+  publish:
+    needs: [quality, security]
+    if: github.ref == 'refs/heads/main' && inputs.confirm_publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: production-images
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: api
+            repository: ghcr.io/napus-backenddev/mfu-internship-system-api
+          - target: worker
+            repository: ghcr.io/napus-backenddev/mfu-internship-system-worker
+          - target: web
+            repository: ghcr.io/napus-backenddev/mfu-internship-system-web
+    env:
+      IMAGE_REPOSITORY: ${{ matrix.repository }}
+      IMAGE_TAG: run-${{ github.run_id }}-${{ github.run_attempt }}
+      SIGNER_IDENTITY: https://github.com/Napus-BackendDev/MFU_Internship_System/.github/workflows/publish-images.yaml@refs/heads/main
+      SIGNER_OIDC_ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - name: Authenticate to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
+      - name: Build and publish candidate with provenance and SBOM
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.${{ matrix.target }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=release-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.target }}
+      - name: Pull the exact candidate digest for scanning
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: docker pull "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
+      - name: Scan exact candidate digest
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_REPOSITORY }}@${{ steps.image.outputs.digest }}
+          version: v0.71.1
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+      - name: Sign and verify the scanned digest
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          image_ref="$IMAGE_REPOSITORY@$IMAGE_DIGEST"
+          cosign sign --yes "$image_ref"
+          cosign verify \
+            --certificate-identity "$SIGNER_IDENTITY" \
+            --certificate-oidc-issuer "$SIGNER_OIDC_ISSUER" \
+            "$image_ref" >/dev/null
+      - name: Record verified immutable image reference
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          image_ref="$IMAGE_REPOSITORY@$IMAGE_DIGEST"
+          printf '| %s | `%s` |\n' "$TARGET" "$image_ref" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s_IMAGE=%s\n' "${TARGET^^}" "$image_ref" >> "$GITHUB_OUTPUT"

@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common'
 import { z } from 'zod'
 
-import { Authenticated, RequireAnyPermission } from '../auth/auth.decorators.js'
+import { Authenticated, RequirePermissions } from '../auth/auth.decorators.js'
 import { GeneralSettingsService } from './general-settings.service.js'
 
 const provinceCreateSchema = z.object({
@@ -59,14 +59,14 @@ export class GeneralSettingsController {
   }
 
   @Post('provinces')
-  @RequireAnyPermission('academic.manage', 'system.config.manage')
+  @RequirePermissions('system.config.manage')
   public createProvince(@Body() raw: unknown): Promise<unknown> {
     const input = provinceCreateSchema.parse(raw)
     return this.service.createProvince(input)
   }
 
   @Patch('provinces/:id')
-  @RequireAnyPermission('academic.manage', 'system.config.manage')
+  @RequirePermissions('system.config.manage')
   public updateProvince(
     @Param('id') id: string,
     @Body() raw: unknown
@@ -76,13 +76,13 @@ export class GeneralSettingsController {
   }
 
   @Delete('provinces/:id')
-  @RequireAnyPermission('academic.manage', 'system.config.manage')
+  @RequirePermissions('system.config.manage')
   public deleteProvince(@Param('id') id: string): Promise<unknown> {
     return this.service.deleteProvince(id)
   }
 
   @Post('provinces/reset')
-  @RequireAnyPermission('academic.manage', 'system.config.manage')
+  @RequirePermissions('system.config.manage')
   @HttpCode(HttpStatus.OK)
   public resetProvinces(): Promise<unknown> {
     return this.service.resetProvinces()
@@ -95,7 +95,7 @@ export class GeneralSettingsController {
   }
 
   @Put('general')
-  @RequireAnyPermission('academic.manage', 'system.config.manage')
+  @RequirePermissions('system.config.manage')
   public updateGeneralConfig(@Body() raw: unknown): Promise<unknown> {
     const input = generalConfigUpdateSchema.parse(raw)
     return this.service.updateGeneralConfig(input)

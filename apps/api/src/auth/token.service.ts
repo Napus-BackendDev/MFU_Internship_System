@@ -7,6 +7,11 @@ import { Injectable, UnauthorizedException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose'
 
+export interface VerifiedAccessToken {
+  readonly actor: AuthenticatedActor
+  readonly sessionId: string
+}
+
 @Injectable()
 export class TokenService {
   private readonly key: Uint8Array
@@ -60,8 +65,11 @@ export class TokenService {
     }
   }
 
-  public async issueAccessToken(actor: AuthenticatedActor): Promise<string> {
-    return new SignJWT({ actor, tokenUse: 'access' })
+  public async issueAccessToken(
+    actor: AuthenticatedActor,
+    sessionId: string
+  ): Promise<string> {
+    return new SignJWT({ actor, tokenUse: 'access', sessionId })
       .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
       .setIssuer('internship-transcript-v2')
       .setAudience('internship-transcript-api')
@@ -85,12 +93,21 @@ export class TokenService {
       .sign(this.key)
   }
 
-  public async verifyAccessToken(token: string): Promise<AuthenticatedActor> {
+  public async verifyAccessToken(token: string): Promise<VerifiedAccessToken> {
     const { payload } = await this.verify(token)
-    if (payload.tokenUse !== 'access' || typeof payload.actor !== 'object') {
+    if (
+      payload.tokenUse !== 'access' ||
+      typeof payload.actor !== 'object' ||
+      payload.actor === null ||
+      typeof payload.sessionId !== 'string' ||
+      payload.sessionId.length === 0
+    ) {
       throw new UnauthorizedException({ code: 'AUTHENTICATION_REQUIRED' })
     }
-    return payload.actor as unknown as AuthenticatedActor
+    return {
+      actor: payload.actor as unknown as AuthenticatedActor,
+      sessionId: payload.sessionId
+    }
   }
 
   public async verifyTransientToken(

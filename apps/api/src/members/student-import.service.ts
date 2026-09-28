@@ -23,6 +23,7 @@ import {
   ProgramRecord,
   SchoolRecord
 } from '../academic/academic.schema.js'
+import { lockActiveAcademicScope } from '../academic/academic-reference-lock.js'
 import { AuditService } from '../audit/audit.service.js'
 import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
 import { StudentRecord } from './members.schema.js'
@@ -124,7 +125,13 @@ export class StudentImportService {
         .lean()
         .exec(),
       this.students
-        .find({ studentId: { $in: parsed.rows.map((row) => row.studentId) } })
+        .find({
+          $or: [
+            { studentId: { $in: parsed.rows.map((row) => row.studentId) } },
+            { email: { $in: parsed.rows.map((row) => row.email) } }
+          ]
+        })
+        .collation({ locale: 'en', strength: 2 })
         .exec()
     ])
     const schools = schoolDocuments as unknown as readonly Record<
@@ -143,6 +150,9 @@ export class StudentImportService {
     const existingByStudentId = new Map(
       existingStudents.map((student) => [student.studentId, student])
     )
+    const existingByEmail = new Map(
+      existingStudents.map((student) => [student.email.toLowerCase(), student])
+    )
     const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS)
     const checksum = createHash('sha256').update(file).digest('hex')
     const safeName = sanitizeSourceName(sourceName)
@@ -157,6 +167,7 @@ export class StudentImportService {
         courses,
         terms,
         existingByStudentId,
+        existingByEmail,
         expiresAt
       )
       prepared.push(result)
@@ -203,17 +214,17 @@ export class StudentImportService {
         details: { maximum: MAX_COMMIT_DECISIONS }
       })
     }
-    const uniqueRowIds = new Set(decisions.map((decision) => decision.rowId))
-    if (uniqueRowIds.size !== decisions.length) {
+    const normalizedDecisions = decisions
+      .map((decision) => ({ ...decision, rowId: decision.rowId.toLowerCase() }))
+      .sort((left, right) => left.rowId.localeCompare(right.rowId))
+    const uniqueRowIds = new Set(normalizedDecisions.map(({ rowId }) => rowId))
+    if (uniqueRowIds.size !== normalizedDecisions.length) {
       throw new UnprocessableEntityException({ code: 'IMPORT_ROW_DUPLICATED' })
     }
 
     const batch = await this.findActiveBatch(actor.id, batchId)
     if (!batch) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
 
-    const normalizedDecisions = [...decisions].sort((left, right) =>
-      left.rowId.localeCompare(right.rowId)
-    )
     const scopedKey = idempotencyScopeKey(
       actor.id,
       `student-import:${batchId}`,
@@ -284,6 +295,7 @@ export class StudentImportService {
     courses: readonly Record<string, unknown>[],
     terms: readonly Record<string, unknown>[],
     existingByStudentId: ReadonlyMap<string, HydratedDocument<StudentRecord>>,
+    existingByEmail: ReadonlyMap<string, HydratedDocument<StudentRecord>>,
     expiresAt: Date
   ): Record<string, unknown> {
     const issues: StudentImportIssue[] = [...source.issues]
@@ -440,6 +452,16 @@ export class StudentImportService {
     }
 
     const existing = existingByStudentId.get(source.studentId)
+    const emailOwner = existingByEmail.get(source.email)
+    if (emailOwner && emailOwner.id !== existing?.id) {
+      issues.push(
+        issue(
+          'STUDENT_EMAIL_ALREADY_USED',
+          'email',
+          'This email is already assigned to another student record.'
+        )
+      )
+    }
     if (
       existing &&
       !actorCanManageStudentScope(actor, existing.schoolId, existing.programId)
@@ -581,6 +603,12 @@ export class StudentImportService {
         }
 
         const payload = row.payload as ImportPayload
+        const resourceScopes = [
+          {
+            schoolIds: [payload.schoolId],
+            programIds: [payload.programId]
+          }
+        ]
         if (
           !actorCanManageStudentScope(
             actor,
@@ -590,10 +618,14 @@ export class StudentImportService {
         ) {
           throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
         }
+        await this.assertCurrentReferences(payload, session)
         let outcome: 'created' | 'updated'
         if (decision.action === 'create') {
           const exists = await this.students
-            .findOne({ studentId: payload.studentId })
+            .findOne({
+              $or: [{ studentId: payload.studentId }, { email: payload.email }]
+            })
+            .collation({ locale: 'en', strength: 2 })
             .session(session)
             .exec()
           if (exists) {
@@ -601,11 +633,21 @@ export class StudentImportService {
           }
           await new this.students({
             ...payload,
-            status: 'active',
-            evaluationStatus: 'awaiting_evaluator'
+            status: 'active'
           }).save({ session })
           outcome = 'created'
         } else {
+          const emailOwner = await this.students
+            .findOne({
+              email: payload.email,
+              _id: { $ne: row.expectedStudentId }
+            })
+            .collation({ locale: 'en', strength: 2 })
+            .session(session)
+            .exec()
+          if (emailOwner) {
+            throw new ConflictException({ code: 'IMPORT_EMAIL_ALREADY_USED' })
+          }
           const existing = await this.students
             .findOne({
               _id: row.expectedStudentId,
@@ -626,6 +668,10 @@ export class StudentImportService {
           ) {
             throw new ConflictException({ code: 'IMPORT_ROW_CHANGED' })
           }
+          resourceScopes.push({
+            schoolIds: [existing.schoolId],
+            programIds: [existing.programId]
+          })
           const update = toStudentUpdate(payload)
           const result = await this.students.updateOne(
             { _id: existing.id, updatedAt: row.expectedUpdatedAt },
@@ -673,6 +719,7 @@ export class StudentImportService {
             action: `students.import.${outcome}`,
             route: 'POST /api/v2/students/imports/:batchId/commit',
             method: 'POST',
+            resourceScopes,
             metadata: { batchId, rowId: row.id, commitId, outcome }
           },
           session
@@ -700,6 +747,89 @@ export class StudentImportService {
     )
     if (result.matchedCount !== 1) {
       throw new ConflictException({ code: 'IMPORT_COMMIT_RETRY' })
+    }
+  }
+
+  private async assertCurrentReferences(
+    payload: ImportPayload,
+    session: ClientSession
+  ): Promise<void> {
+    const school = await this.schools
+      .exists({ _id: payload.schoolId, status: 'active' })
+      .session(session)
+    const program = await this.programs
+      .exists({
+        _id: payload.programId,
+        schoolId: payload.schoolId,
+        status: 'active'
+      })
+      .session(session)
+    if (!school || !program) {
+      throw new ConflictException({
+        code: 'IMPORT_REFERENCES_CHANGED',
+        message:
+          'ข้อมูลสำนักวิชาหรือหลักสูตรเปลี่ยนหลังตรวจไฟล์ กรุณาตรวจไฟล์อีกครั้ง'
+      })
+    }
+    try {
+      await lockActiveAcademicScope(
+        this.schools,
+        this.programs,
+        { schoolId: payload.schoolId, programId: payload.programId },
+        session
+      )
+    } catch (error) {
+      if (
+        error instanceof ConflictException ||
+        error instanceof UnprocessableEntityException
+      ) {
+        throw new ConflictException({
+          code: 'IMPORT_REFERENCES_CHANGED',
+          message:
+            'ข้อมูลสำนักวิชาหรือหลักสูตรเปลี่ยนหลังตรวจไฟล์ กรุณาตรวจไฟล์อีกครั้ง'
+        })
+      }
+      throw error
+    }
+
+    if (payload.courseId) {
+      const course = await this.courses
+        .exists({
+          _id: payload.courseId,
+          programIds: payload.programId,
+          status: 'active'
+        })
+        .session(session)
+      if (!course) {
+        throw new ConflictException({
+          code: 'IMPORT_REFERENCES_CHANGED',
+          message: 'ข้อมูลรายวิชาเปลี่ยนหลังตรวจไฟล์ กรุณาตรวจไฟล์อีกครั้ง'
+        })
+      }
+    }
+
+    if (payload.academicTermId) {
+      const term = await this.terms
+        .findOne({
+          _id: payload.academicTermId,
+          status: { $ne: 'archived' }
+        })
+        .select('academicYear semester')
+        .session(session)
+        .lean()
+        .exec()
+      if (
+        !term ||
+        payload.academicYear === undefined ||
+        payload.semester === undefined ||
+        term.academicYear !== payload.academicYear ||
+        normalizeSemester(term.semester) !== normalizeSemester(payload.semester)
+      ) {
+        throw new ConflictException({
+          code: 'IMPORT_REFERENCES_CHANGED',
+          message: 'ข้อมูลภาคการศึกษาเปลี่ยนหลังตรวจไฟล์ กรุณาตรวจไฟล์อีกครั้ง'
+        })
+      }
     }
   }
 
@@ -828,7 +958,9 @@ function findMaster(
       }
       return [candidate]
     })
-    return candidates.some((candidate) => normalizeLabel(toText(candidate)) === needle)
+    return candidates.some(
+      (candidate) => normalizeMasterText(candidate) === needle
+    )
   })
   return matches.length === 1 ? matches[0] : undefined
 }
@@ -842,7 +974,7 @@ function normalizeLabel(value: string): string {
 }
 
 function normalizeSemester(value: unknown): string {
-  const normalized = normalizeLabel(toText(value))
+  const normalized = normalizeMasterText(value)
   if (['1', 'first', 'ต้น', 'ภาคการศึกษาต้น'].includes(normalized)) return '1'
   if (['2', 'second', 'ปลาย', 'ภาคการศึกษาปลาย'].includes(normalized))
     return '2'
@@ -853,6 +985,14 @@ function normalizeSemester(value: unknown): string {
     return '3'
   }
   return normalized
+}
+
+function normalizeMasterText(value: unknown): string {
+  if (typeof value === 'string') return normalizeLabel(value)
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return normalizeLabel(String(value))
+  }
+  return ''
 }
 
 function parseSemesterYear(
@@ -906,8 +1046,12 @@ function actorCanManageStudentScope(
 ): boolean {
   if (actor.roles.includes('systemAdmin')) return true
   const scopes = actor.roleScopes
-    ? actor.roleScopes.filter((scope) => scope.role === 'internshipStaff')
-    : actor.roles.includes('internshipStaff')
+    ? actor.roleScopes.filter(
+        (scope) =>
+          scope.role === 'internshipStaff' &&
+          actor.roles.includes('internshipStaff')
+      )
+    : actor.roles.length === 1 && actor.roles[0] === 'internshipStaff'
       ? [
           {
             tenant: actor.scope.tenant,

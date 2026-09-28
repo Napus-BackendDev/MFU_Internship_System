@@ -36,10 +36,7 @@ x-app-environment: &app-environment
 
 services:
   api:
-    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-api:${IMAGE_TAG:?Image tag is required}
-    build:
-      context: ..
-      dockerfile: infrastructure/docker/Dockerfile.api
+    image: '${API_IMAGE:?API_IMAGE must be a digest-pinned image reference}'
     environment:
       <<: *app-environment
       PORT: 8081
@@ -63,11 +60,10 @@ services:
       - no-new-privileges:true
 
   worker:
-    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-worker:${IMAGE_TAG:?Image tag is required}
-    build:
-      context: ..
-      dockerfile: infrastructure/docker/Dockerfile.worker
-    environment: *app-environment
+    image: '${WORKER_IMAGE:?WORKER_IMAGE must be a digest-pinned image reference}'
+    environment:
+      <<: *app-environment
+      WORKER_HEALTH_PORT: 8082
     depends_on:
       api:
         condition: service_healthy
@@ -77,14 +73,22 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8082/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   web:
-    image: ${IMAGE_PREFIX:?Container registry prefix is required}/internship-web:${IMAGE_TAG:?Image tag is required}
-    build:
-      context: ..
-      dockerfile: infrastructure/docker/Dockerfile.web
+    image: '${WEB_IMAGE:?WEB_IMAGE must be a digest-pinned image reference}'
     environment:
       NODE_ENV: production
+      NUXT_API_INTERNAL_BASE_URL: http://api:8081/api/v2
       NUXT_PUBLIC_API_BASE_URL: ${NUXT_PUBLIC_API_BASE_URL}
       NUXT_PUBLIC_APP_ENVIRONMENT: production
       PORT: 8080

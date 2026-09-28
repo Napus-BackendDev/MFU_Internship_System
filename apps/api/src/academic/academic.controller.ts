@@ -18,6 +18,44 @@ const pageSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(500).default(25)
 })
+const objectIdCsvSchema = (maximum: number): z.ZodType<string[] | undefined> =>
+  z
+    .string()
+    .max(maximum * 25 - 1)
+    .optional()
+    .transform((value) => value?.split(','))
+    .pipe(
+      z
+        .array(z.string().regex(/^[a-f\d]{24}$/i))
+        .max(maximum)
+        .optional()
+    )
+    .transform((ids) =>
+      ids === undefined
+        ? undefined
+        : [...new Set(ids.map((id) => id.toLowerCase()))]
+    )
+const optionalSearchSchema = z
+  .string()
+  .trim()
+  .max(100)
+  .optional()
+  .transform((value) => value || undefined)
+const archivedQuerySchema = z
+  .enum(['true', 'false'])
+  .transform((value) => value === 'true')
+  .optional()
+const schoolListSchema = pageSchema.extend({
+  search: optionalSearchSchema,
+  schoolIds: objectIdCsvSchema(100),
+  archived: archivedQuerySchema
+})
+const termListSchema = pageSchema.extend({
+  academicYear: z.coerce.number().int().min(2000).optional(),
+  search: optionalSearchSchema,
+  termIds: objectIdCsvSchema(100),
+  archived: archivedQuerySchema
+})
 const nameSchema = z.object({ th: z.string().min(1), en: z.string().min(1) })
 const schoolSchema = z.object({
   schoolCode: z.string().min(1).max(20),
@@ -31,15 +69,26 @@ const programSchema = z.object({
   status: z.enum(['active', 'archived']).default('active')
 })
 const programQuerySchema = pageSchema.extend({
-  schoolId: z.string().optional()
+  schoolId: z.string().optional(),
+  programIds: z
+    .string()
+    .max(2499)
+    .optional()
+    .transform((value) => value?.split(','))
+    .pipe(
+      z
+        .array(z.string().regex(/^[a-f\d]{24}$/i))
+        .max(100)
+        .optional()
+    )
+    .transform((ids) =>
+      ids === undefined
+        ? undefined
+        : [...new Set(ids.map((id) => id.toLowerCase()))]
+    )
 })
 const courseSchema = z.object({
-  courseCode: z
-    .string()
-    .min(1)
-    .max(30)
-    .optional()
-    .transform((val) => val || `CRS-${Date.now().toString(36).toUpperCase()}`),
+  courseCode: z.string().trim().min(1).max(30),
   programIds: z.array(z.string()).default([]),
   name: nameSchema,
   credits: z.number().min(0).optional(),
@@ -72,22 +121,44 @@ export class AcademicController {
     @Req() request: AuthenticatedRequest,
     @Query() raw: unknown
   ): Promise<unknown> {
-    return this.service.listSchools(request.actor!, pageSchema.parse(raw))
+    const query = schoolListSchema.parse(raw)
+    return this.service.listSchools(
+      request.actor!,
+      { page: query.page, pageSize: query.pageSize },
+      {
+        search: query.search,
+        schoolIds: query.schoolIds,
+        archived: query.archived
+      }
+    )
   }
 
   @RequirePermissions('academic.manage')
   @Post('schools')
-  public createSchool(@Body() raw: unknown): Promise<unknown> {
-    return this.service.createSchool(schoolSchema.parse(raw))
+  public createSchool(
+    @Req() request: AuthenticatedRequest,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    return this.service.createSchool(
+      request.actor!,
+      schoolSchema.parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('academic.manage')
   @Patch('schools/:schoolId')
   public updateSchool(
+    @Req() request: AuthenticatedRequest,
     @Param('schoolId') id: string,
     @Body() raw: unknown
   ): Promise<unknown> {
-    return this.service.updateSchool(id, schoolSchema.partial().parse(raw))
+    return this.service.updateSchool(
+      request.actor!,
+      id,
+      schoolSchema.partial().parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('academic.read')
@@ -97,63 +168,123 @@ export class AcademicController {
     @Query() raw: unknown
   ): Promise<unknown> {
     const query = programQuerySchema.parse(raw)
-    return this.service.listPrograms(request.actor!, query, query.schoolId)
+    return this.service.listPrograms(
+      request.actor!,
+      query,
+      query.schoolId,
+      query.programIds
+    )
   }
 
   @RequirePermissions('academic.manage')
   @Post('programs')
-  public createProgram(@Body() raw: unknown): Promise<unknown> {
-    return this.service.createProgram(programSchema.parse(raw))
+  public createProgram(
+    @Req() request: AuthenticatedRequest,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    return this.service.createProgram(
+      request.actor!,
+      programSchema.parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('academic.manage')
   @Patch('programs/:programId')
   public updateProgram(
+    @Req() request: AuthenticatedRequest,
     @Param('programId') id: string,
     @Body() raw: unknown
   ): Promise<unknown> {
-    return this.service.updateProgram(id, programSchema.partial().parse(raw))
+    return this.service.updateProgram(
+      request.actor!,
+      id,
+      programSchema.partial().parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('academic.read')
   @Get('courses')
-  public listCourses(@Query() raw: unknown): Promise<unknown> {
-    return this.service.listCourses(pageSchema.parse(raw))
+  public listCourses(
+    @Req() request: AuthenticatedRequest,
+    @Query() raw: unknown
+  ): Promise<unknown> {
+    return this.service.listCourses(request.actor!, pageSchema.parse(raw))
   }
 
   @RequirePermissions('academic.manage')
   @Post('courses')
-  public createCourse(@Body() raw: unknown): Promise<unknown> {
-    return this.service.createCourse(courseSchema.parse(raw))
+  public createCourse(
+    @Req() request: AuthenticatedRequest,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    return this.service.createCourse(
+      request.actor!,
+      courseSchema.parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('academic.manage')
   @Patch('courses/:courseId')
   public updateCourse(
+    @Req() request: AuthenticatedRequest,
     @Param('courseId') id: string,
     @Body() raw: unknown
   ): Promise<unknown> {
-    return this.service.updateCourse(id, courseSchema.partial().parse(raw))
+    return this.service.updateCourse(
+      request.actor!,
+      id,
+      courseSchema.partial().parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('academic.read')
   @Get('terms')
-  public listTerms(@Query() raw: unknown): Promise<unknown> {
-    return this.service.listTerms(pageSchema.parse(raw))
+  public listTerms(
+    @Req() request: AuthenticatedRequest,
+    @Query() raw: unknown
+  ): Promise<unknown> {
+    const query = termListSchema.parse(raw)
+    return this.service.listTerms(
+      request.actor!,
+      { page: query.page, pageSize: query.pageSize },
+      query.academicYear,
+      {
+        search: query.search,
+        termIds: query.termIds,
+        archived: query.archived
+      }
+    )
   }
 
   @RequirePermissions('academic.manage')
   @Post('terms')
-  public createTerm(@Body() raw: unknown): Promise<unknown> {
-    return this.service.createTerm(termSchema.parse(raw))
+  public createTerm(
+    @Req() request: AuthenticatedRequest,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    return this.service.createTerm(
+      request.actor!,
+      termSchema.parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('academic.manage')
   @Patch('terms/:termId')
   public updateTerm(
+    @Req() request: AuthenticatedRequest,
     @Param('termId') id: string,
     @Body() raw: unknown
   ): Promise<unknown> {
-    return this.service.updateTerm(id, termBaseSchema.partial().parse(raw))
+    return this.service.updateTerm(
+      request.actor!,
+      id,
+      termBaseSchema.partial().parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 }

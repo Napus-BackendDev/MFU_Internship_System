@@ -30,7 +30,7 @@ Frontend route middleware may hide unavailable actions, but only NestJS policy c
 | `evaluator`       | External Evaluator/Adviser | Active invitation/assignment only                               |
 | `auditor`         | Auditor / Read-only        | Approved tenant/School/Program audit scope                      |
 
-A user may have multiple role assignments. Effective access is the union of active assignments, constrained by explicit deny/immutability and tenant/resource boundaries.
+A user may have multiple active role assignments. For a permission-protected route, at least one role must independently satisfy the route's complete required/any-permission policy; request scope includes only those permission-granting roles and preserves each School/Program pairing. Authenticated-only routes retain the actor's complete active-role context. Explicit deny/immutability and tenant/resource boundaries still apply.
 
 ## 4. Resource scopes
 
@@ -62,17 +62,17 @@ Scope must be applied in the database query or repository filter. Fetch-then-che
 
 ### Academic and internship data
 
-| Permission             | Meaning                                          |
-| ---------------------- | ------------------------------------------------ |
-| `academic.read`        | Read School, Program, Course, Term               |
-| `academic.manage`      | Create, update, archive academic master data     |
-| `students.read`        | Read Student records within scope                |
-| `students.manage`      | Create, update, archive Student records          |
-| `students.import`      | Preview and commit bulk Student import           |
-| `organizations.read`   | Read Organizations and Evaluators within scope   |
-| `organizations.manage` | Create, update, archive Organizations/Evaluators |
-| `placements.read`      | Read Placements and Evaluator Assignments        |
-| `placements.manage`    | Create, update, archive Placements/Assignments   |
+| Permission             | Meaning                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `academic.read`        | Read School, Program, Course, Term                                                                                                                                                    |
+| `academic.manage`      | Create, update, archive academic master data                                                                                                                                          |
+| `students.read`        | Read Student records within scope                                                                                                                                                     |
+| `students.manage`      | Create, update, archive Student records                                                                                                                                               |
+| `students.import`      | Preview and commit bulk Student import                                                                                                                                                |
+| `organizations.read`   | Read Organizations and Evaluators within scope; Students see only Organizations linked to own Placements and Evaluators assigned to own assessments for that Placement's Organization |
+| `organizations.manage` | Create, update, archive Organizations/Evaluators                                                                                                                                      |
+| `placements.read`      | Read Placements and Evaluator Assignments                                                                                                                                             |
+| `placements.manage`    | Create, update, archive Placements/Assignments                                                                                                                                        |
 
 ### Competency and evaluation
 
@@ -90,79 +90,83 @@ Scope must be applied in the database query or repository filter. Fetch-then-che
 
 ### Correspondence
 
-| Permission               | Meaning                                                      |
-| ------------------------ | ------------------------------------------------------------ |
-| `emailTemplates.read`    | Read approved email templates/versions                       |
-| `emailTemplates.manage`  | Create/edit/archive Draft email template versions            |
-| `emailTemplates.publish` | Publish validated email template version                     |
-| `campaigns.read`         | Read campaign and delivery status within scope               |
-| `campaigns.send`         | Preview/create invitation or reminder campaign               |
-| `deliveries.retry`       | Retry eligible failed delivery without bypassing idempotency |
+| Permission               | Meaning                                                                                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `emailTemplates.read`    | Read approved email templates/versions                                                                                                                           |
+| `emailTemplates.manage`  | Create/edit/archive Draft email template versions                                                                                                                |
+| `emailTemplates.publish` | Publish validated email template version                                                                                                                         |
+| `campaigns.read`         | Read campaign status in scope; row-level delivery details are limited to System Admin, scoped Internship Staff, and Auditor; Coordinator receives summaries only |
+| `campaigns.send`         | Preview/create invitation or reminder campaign                                                                                                                   |
+| `deliveries.retry`       | Retry eligible failed delivery without bypassing idempotency                                                                                                     |
 
 ### Documents and reporting
 
-| Permission                  | Meaning                                                    |
-| --------------------------- | ---------------------------------------------------------- |
-| `documentTemplates.read`    | Read document templates/versions within scope              |
-| `documentTemplates.manage`  | Create/edit/archive Draft document template versions       |
-| `documentTemplates.publish` | Publish validated document template version                |
-| `documents.generateOwn`     | Request generated document for own Student record          |
-| `documents.generateScoped`  | Request generated document for authorized Student scope    |
-| `documents.readOwn`         | Read/download own generated document                       |
-| `documents.readScoped`      | Read/download generated documents within operational scope |
-| `reports.read`              | Read dashboards/reports within scope                       |
-| `exports.create`            | Request scoped asynchronous export                         |
-| `exports.download`          | Download own or explicitly authorized export               |
+| Permission                  | Meaning                                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `documentTemplates.read`    | Read active shared templates; non-managers receive Published metadata/version summaries only         |
+| `documentTemplates.manage`  | Create/edit Draft versions of tenant-wide shared templates; System Admin or tenant-scoped Staff only |
+| `documentTemplates.publish` | Publish validated shared-template version; System Admin or tenant-scoped Staff only                  |
+| `documents.generateOwn`     | Request generated document for own Student record                                                    |
+| `documents.generateScoped`  | Request generated document for authorized Student scope                                              |
+| `documents.readOwn`         | Read/download own generated document                                                                 |
+| `documents.readScoped`      | Read/download generated documents within operational scope                                           |
+| `reports.read`              | Read dashboards/reports within scope                                                                 |
+| `exports.create`            | Request scoped asynchronous export                                                                   |
+| `exports.download`          | Download own or explicitly authorized export                                                         |
 
 ## 6. Role-to-permission matrix
 
 Legend: `T` tenant, `S/P` assigned School/Program, `Own` own Student, `Assign` own evaluator assignment, `A` approved audit scope, `—` denied.
 
-| Permission                  | systemAdmin             | internshipStaff | coordinator               | student                                   | evaluator                                   | auditor                 |
-| --------------------------- | ----------------------- | --------------- | ------------------------- | ----------------------------------------- | ------------------------------------------- | ----------------------- |
-| `system.config.manage`      | T                       | —               | —                         | —                                         | —                                           | —                       |
-| `users.read`                | T                       | S/P             | —                         | Own                                       | —                                           | A                       |
-| `users.manage`              | T                       | limited S/P     | —                         | —                                         | —                                           | —                       |
-| `sessions.read`             | T                       | —               | —                         | Own                                       | Own                                         | A                       |
-| `sessions.revoke`           | T                       | —               | —                         | Own                                       | Own                                         | —                       |
-| `audit.read`                | T                       | operational S/P | S/P                       | own security events only                  | —                                           | A                       |
-| `audit.export`              | T                       | —               | —                         | —                                         | —                                           | A                       |
-| `academic.read`             | T                       | T/S/P           | S/P                       | linked records                            | linked records                              | A                       |
-| `academic.manage`           | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `students.read`             | T                       | T/S/P           | S/P                       | Own                                       | assigned Student summary                    | A                       |
-| `students.manage`           | T                       | T/S/P           | —                         | correction request only                   | —                                           | —                       |
-| `students.import`           | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `organizations.read`        | T                       | T/S/P           | S/P                       | —                                         | —                                           | A                       |
-| `organizations.manage`      | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `placements.read`           | T                       | T/S/P           | S/P                       | Own                                       | Assign                                      | A                       |
-| `placements.manage`         | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `competencies.read`         | T                       | T/S/P           | S/P                       | published own Program                     | Assign snapshot                             | A                       |
-| `competencies.manage`       | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `competencies.publish`      | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `cycles.read`               | T                       | T/S/P           | S/P                       | eligible own cycle                        | Assign                                      | A                       |
-| `cycles.manage`             | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `evaluations.read`          | T with visibility rules | T/S/P           | S/P after visibility gate | Own after visibility gate                 | Assign before/after submit as policy allows | A after visibility gate |
-| `evaluations.draft`         | —                       | —               | —                         | only if self-evaluation is later approved | Assign                                      | —                       |
-| `evaluations.submit`        | —                       | —               | —                         | only if self-evaluation is later approved | Assign                                      | —                       |
-| `evaluations.reopen`        | —                       | —               | —                         | —                                         | —                                           | —                       |
-| `emailTemplates.read`       | T                       | T/S/P           | —                         | —                                         | —                                           | A                       |
-| `emailTemplates.manage`     | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `emailTemplates.publish`    | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `campaigns.read`            | T                       | T/S/P           | S/P summary only          | —                                         | own invitation status only                  | A                       |
-| `campaigns.send`            | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `deliveries.retry`          | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `documentTemplates.read`    | T                       | T/S/P           | published S/P             | published eligible                        | —                                           | A                       |
-| `documentTemplates.manage`  | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `documentTemplates.publish` | T                       | T/S/P           | —                         | —                                         | —                                           | —                       |
-| `documents.generateOwn`     | —                       | —               | —                         | Own                                       | —                                           | —                       |
-| `documents.generateScoped`  | T                       | T/S/P           | S/P if policy permits     | —                                         | —                                           | —                       |
-| `documents.readOwn`         | —                       | —               | —                         | Own                                       | —                                           | —                       |
-| `documents.readScoped`      | T                       | T/S/P           | S/P after visibility gate | —                                         | —                                           | A                       |
-| `reports.read`              | T                       | T/S/P           | S/P                       | own dashboard                             | —                                           | A                       |
-| `exports.create`            | T                       | T/S/P           | S/P                       | —                                         | —                                           | A                       |
-| `exports.download`          | own/authorized          | own/authorized  | own/authorized            | —                                         | —                                           | own/authorized          |
+| Permission                  | systemAdmin             | internshipStaff   | coordinator               | student                                   | evaluator                                                | auditor                  |
+| --------------------------- | ----------------------- | ----------------- | ------------------------- | ----------------------------------------- | -------------------------------------------------------- | ------------------------ |
+| `system.config.manage`      | T                       | —                 | —                         | —                                         | —                                                        | —                        |
+| `users.read`                | T                       | S/P               | —                         | Own                                       | —                                                        | A                        |
+| `users.manage`              | T                       | limited S/P       | —                         | —                                         | —                                                        | —                        |
+| `sessions.read`             | T                       | —                 | —                         | Own                                       | Own                                                      | A                        |
+| `sessions.revoke`           | T                       | —                 | —                         | Own                                       | Own                                                      | —                        |
+| `audit.read`                | T                       | operational S/P   | S/P                       | own security events only                  | —                                                        | A                        |
+| `audit.export`              | T                       | —                 | —                         | —                                         | —                                                        | A                        |
+| `academic.read`             | T                       | T/S/P             | S/P                       | linked records                            | linked records                                           | A                        |
+| `academic.manage`           | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `students.read`             | T                       | T/S/P             | S/P                       | Own                                       | assigned Student summary                                 | A                        |
+| `students.manage`           | T                       | T/S/P             | —                         | correction request only                   | —                                                        | —                        |
+| `students.import`           | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `organizations.read`        | T                       | T/S/P             | S/P                       | Own placement only                        | —                                                        | A                        |
+| `organizations.manage`      | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `placements.read`           | T                       | T/S/P             | S/P                       | Own                                       | Assign                                                   | A                        |
+| `placements.manage`         | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `competencies.read`         | T                       | T/S/P             | S/P                       | published own Program                     | — (reads own assignment snapshot via `evaluations.read`) | A                        |
+| `competencies.manage`       | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `competencies.publish`      | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `cycles.read`               | T                       | T/S/P             | S/P                       | eligible own cycle                        | Assign                                                   | A                        |
+| `cycles.manage`             | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `evaluations.read`          | T with visibility rules | T/S/P             | S/P after visibility gate | Own after visibility gate                 | Assign before/after submit as policy allows              | A after visibility gate  |
+| `evaluations.draft`         | —                       | —                 | —                         | only if self-evaluation is later approved | Assign                                                   | —                        |
+| `evaluations.submit`        | —                       | —                 | —                         | only if self-evaluation is later approved | Assign                                                   | —                        |
+| `evaluations.reopen`        | —                       | —                 | —                         | —                                         | —                                                        | —                        |
+| `emailTemplates.read`       | T                       | T/S/P             | —                         | —                                         | —                                                        | A                        |
+| `emailTemplates.manage`     | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `emailTemplates.publish`    | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `campaigns.read`            | T                       | T/S/P             | S/P summary only          | —                                         | own invitation status only                               | A (scoped delivery rows) |
+| `campaigns.send`            | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `deliveries.retry`          | T                       | T/S/P             | —                         | —                                         | —                                                        | —                        |
+| `documentTemplates.read`    | T                       | Published summary | Published summary         | Published summary                         | —                                                        | Published summary        |
+| `documentTemplates.manage`  | T                       | T only            | —                         | —                                         | —                                                        | —                        |
+| `documentTemplates.publish` | T                       | T only            | —                         | —                                         | —                                                        | —                        |
+| `documents.generateOwn`     | —                       | —                 | —                         | Own                                       | —                                                        | —                        |
+| `documents.generateScoped`  | T                       | T/S/P             | S/P if policy permits     | —                                         | —                                                        | —                        |
+| `documents.readOwn`         | —                       | —                 | —                         | Own                                       | —                                                        | —                        |
+| `documents.readScoped`      | T                       | T/S/P             | S/P after visibility gate | —                                         | —                                                        | A                        |
+| `reports.read`              | T                       | T/S/P             | S/P                       | own dashboard                             | —                                                        | A                        |
+| `exports.create`            | T                       | T/S/P             | S/P                       | —                                         | —                                                        | A                        |
+| `exports.download`          | own/authorized          | own/authorized    | own/authorized            | —                                         | —                                                        | own/authorized           |
 
 `limited S/P` user management means Staff may manage operational accounts explicitly delegated by policy, never create `systemAdmin` or expand scope beyond their own assignment.
+
+OIDC account linking is stricter than the general `users.manage` permission: only System Admin may link a pre-created account, and only to the exact subject under the issuer discovered from the configured provider. Email matching is prohibited. A reason, actor-scoped idempotency key, and transaction-coupled audit record are required.
+
+Audit read always includes the authenticated actor's own log records. Staff and Auditors may additionally read events tagged with persisted `resourceScopes` matching one of their active role assignments that grants `audit.read`; School and Program constraints within an assignment are ANDed, while separate assignments remain separate OR branches. System Administrators may query across actors. Non-admin `actorId` filters are ignored. Legacy and generic mutation logs without trustworthy `resourceScopes` remain visible only to their actor, and tenant-scoped readers see only explicitly scoped events. No scope is inferred from request query or body data.
 
 ## 7. Resource rules by domain
 
@@ -170,6 +174,7 @@ Legend: `T` tenant, `S/P` assigned School/Program, `Own` own Student, `Assign` o
 
 - `student` identity maps to exactly one active Student record unless an approved exception exists.
 - Student may read own profile, placement summary, eligible results, and own generated documents.
+- Student may read only Organizations linked to their own Placements and Evaluators assigned to their own assessments whose Organization matches that exact Placement; search and organization filters only narrow this result and never broaden it.
 - Student cannot directly edit authoritative academic fields; use a correction-request workflow if implemented.
 - Staff/Coordinator query filters must include permitted School/Program scope.
 - Cross-student direct lookup by Student/evaluator returns `404` and records a security event.
@@ -193,7 +198,10 @@ Legend: `T` tenant, `S/P` assigned School/Program, `Own` own Student, `Assign` o
 
 ### 7.4 Templates
 
-- Draft competency/email/document template may be modified by authorized Staff in scope.
+- Draft competency/email templates may be modified by authorized Staff in scope.
+- Document templates and registered assets are shared tenant-wide and have no School/Program scope fields. Only System Admin and tenant-scoped Internship Staff may list the asset library, create/edit Draft versions, or publish. School/Program-scoped Staff cannot manage these shared artifacts.
+- Other roles with `documentTemplates.read` see active templates with Published versions and Published summaries only. Template summaries whitelist display names, description, background type, and opacity; Draft content, canonical JSON, arbitrary metadata, placeholders, and private asset keys are not returned. Published version IDs for archived templates are concealed as `404`.
+- Introducing scope-specific document templates/assets requires explicit scope fields, migration, and authorization tests; do not infer scope from an actor's combined role scopes.
 - Published versions are immutable even for System Administrator.
 - Publishing is a separate permission from editing.
 - Retired versions remain readable for records that reference them but are unavailable for new cycles/jobs.
@@ -202,6 +210,8 @@ Legend: `T` tenant, `S/P` assigned School/Program, `Own` own Student, `Assign` o
 
 - Generated files remain private.
 - Download endpoint verifies access every time before issuing a short-lived signed URL.
+- Missing and out-of-scope document identifiers return the same `404`; denial is durably audited without storing the requested identifier. A signed URL is returned only after its issuance audit persists.
+- Document-detail and download-url lookups share a Redis-backed per-IP rate limit so changing document IDs cannot bypass the limit or create unbounded denial-audit writes.
 - Possession of database/file ID alone grants no access.
 - Export ownership does not bypass requested-data permission; scope is fixed at job creation.
 - Audit export requires `audit.export`, not only `exports.create`.
@@ -210,23 +220,24 @@ Legend: `T` tenant, `S/P` assigned School/Program, `Own` own Student, `Assign` o
 
 The OpenAPI file carries matching `x-permissions` metadata. Minimum mapping:
 
-| Endpoint family                          | Read permission                | Mutation permission                                        |
-| ---------------------------------------- | ------------------------------ | ---------------------------------------------------------- |
-| `/academic/*`                            | `academic.read`                | `academic.manage`                                          |
-| `/students`                              | `students.read`                | `students.manage` / `students.import`                      |
-| `/organizations`, `/evaluators`          | `organizations.read`           | `organizations.manage`                                     |
-| `/placements`, `/evaluation-assignments` | `placements.read`              | `placements.manage` / `cycles.manage`                      |
-| `/competency-sets`                       | `competencies.read`            | `competencies.manage` / `competencies.publish`             |
-| `/evaluation-cycles`                     | `cycles.read`                  | `cycles.manage`                                            |
-| `/evaluations`                           | `evaluations.read`             | `evaluations.draft`, `evaluations.submit`; reopen disabled |
-| `/email-templates`                       | `emailTemplates.read`          | `emailTemplates.manage`, `emailTemplates.publish`          |
-| `/campaigns`, `/deliveries`              | `campaigns.read`               | `campaigns.send`, `deliveries.retry`                       |
-| `/system-settings/smtp*`                 | `system.config.manage`         | `system.config.manage`                                     |
-| `/document-templates`                    | `documentTemplates.read`       | `documentTemplates.manage`, `documentTemplates.publish`    |
-| `/generated-documents`                   | own/scoped document permission | own/scoped generate permission                             |
-| `/reports`                               | `reports.read`                 | —                                                          |
-| `/exports`                               | job read through ownership     | `exports.create`, `exports.download`                       |
-| `/audit-logs`                            | `audit.read`                   | `audit.export` for export                                  |
+| Endpoint family                          | Read permission                                                       | Mutation permission                                        |
+| ---------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `/academic/*`                            | `academic.read`                                                       | `academic.manage`                                          |
+| `/students`                              | `students.read`                                                       | `students.manage` / `students.import`                      |
+| `/organizations`, `/evaluators`          | `organizations.read`                                                  | `organizations.manage`                                     |
+| `/placements`, `/evaluation-assignments` | `placements.read`                                                     | `placements.manage` / `cycles.manage`                      |
+| `/competency-sets`                       | `competencies.read`                                                   | `competencies.manage` / `competencies.publish`             |
+| `/evaluation-cycles`                     | `cycles.read`                                                         | `cycles.manage`                                            |
+| `/evaluations`                           | `evaluations.read`                                                    | `evaluations.draft`, `evaluations.submit`; reopen disabled |
+| `/email-templates`                       | `emailTemplates.read`                                                 | `emailTemplates.manage`, `emailTemplates.publish`          |
+| `/campaigns`                             | `campaigns.read`                                                      | `campaigns.send`                                           |
+| `/deliveries`                            | `campaigns.read` (Admin/Staff/Auditor rows; Coordinator summary only) | `deliveries.retry` (Admin/Staff, assignment scope)         |
+| `/system-settings/smtp*`                 | `system.config.manage`                                                | `system.config.manage`                                     |
+| `/document-templates`                    | `documentTemplates.read`                                              | `documentTemplates.manage`, `documentTemplates.publish`    |
+| `/generated-documents`                   | own/scoped document permission                                        | own/scoped generate permission                             |
+| `/reports`                               | `reports.read`                                                        | —                                                          |
+| `/exports`                               | job read through ownership                                            | `exports.create`, `exports.download`                       |
+| `/audit-logs`                            | `audit.read`                                                          | `audit.export` for export                                  |
 
 ## 9. HTTP denial behavior
 

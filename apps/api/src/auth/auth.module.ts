@@ -7,6 +7,15 @@ import { DevAuthController } from './dev-auth.controller.js'
 import { UsersController } from './users.controller.js'
 import { OidcService } from './oidc.service.js'
 import { SessionService } from './session.service.js'
+import { AuditModule } from '../audit/audit.module.js'
+import {
+  EvaluationAssignmentRecord,
+  EvaluationAssignmentSchema
+} from '../evaluations/evaluation.schema.js'
+import {
+  InvitationRecord,
+  InvitationSchema
+} from '../correspondence/correspondence.schema.js'
 import { StudentRecord, StudentSchema } from '../members/members.schema.js'
 import { TokenService } from './token.service.js'
 import {
@@ -19,10 +28,16 @@ import { UsersService } from './users.service.js'
 
 @Module({
   imports: [
+    AuditModule,
     MongooseModule.forFeature([
       { name: UserRecord.name, schema: UserSchema },
       { name: SessionRecord.name, schema: SessionSchema },
-      { name: StudentRecord.name, schema: StudentSchema }
+      { name: StudentRecord.name, schema: StudentSchema },
+      { name: InvitationRecord.name, schema: InvitationSchema },
+      {
+        name: EvaluationAssignmentRecord.name,
+        schema: EvaluationAssignmentSchema
+      }
     ])
   ],
   controllers: [

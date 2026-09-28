@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import * as XLSX from 'xlsx'
 import { createSandboxedEmailPreviewDocument } from '~/utils/email-preview'
+import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
+import { toSafeInvitationPath } from '~/utils/safe-invitation-path'
 
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
@@ -13,8 +15,10 @@ interface Student {
   readonly schoolId: string
   readonly programId: string
   readonly courseId?: string
+  readonly course?: string
   readonly academicTermId?: string
   readonly semester?: string
+  readonly academicYear?: number
   readonly company?: string
   readonly companyAddress?: string
   readonly province?: string
@@ -26,6 +30,9 @@ interface Student {
   readonly admissionYear?: number
   readonly createdAt?: string
   readonly updatedAt?: string
+  readonly directoryRelations?: {
+    readonly placements?: readonly PlacementItem[]
+  }
 }
 
 interface StudentPage {
@@ -58,6 +65,14 @@ interface TermItem {
   readonly code: string
   readonly semester: string
   readonly academicYear: number
+}
+
+interface EvaluationCycleItem {
+  readonly id: string
+  readonly code: string
+  readonly name: { readonly th: string; readonly en: string }
+  readonly academicTermId: string
+  readonly status: 'draft' | 'active' | 'closed'
 }
 
 interface OrganizationItem {
@@ -106,6 +121,7 @@ interface ParsedStudentRow {
 
 interface StudentImportBatchResponse {
   readonly batchId: string
+  readonly sourceName: string
   readonly status: 'preview' | 'committed'
   readonly questionFieldsDetected: readonly string[]
   readonly summary: {
@@ -126,9 +142,29 @@ const toast = useToast()
 const search = ref('')
 const selectedSchool = ref('all')
 const selectedProgram = ref('all')
+const selectedCycleId = ref('all')
 const selectedEvaluationStatus = ref('all')
 const page = ref(1)
 const pageSize = ref(5)
+
+const {
+  data: cyclesData,
+  error: cyclesError,
+  pending: cyclesPending,
+  refresh: refreshCycles
+} = await useAsyncData('students-evaluation-cycles', () =>
+  loadAllPages((cyclePage, cyclePageSize) =>
+    api<PaginatedItems<EvaluationCycleItem>>('/evaluation-cycles', {
+      query: { page: cyclePage, pageSize: cyclePageSize }
+    })
+  )
+)
+const activeCycles = (cyclesData.value?.items ?? []).filter(
+  (cycle) => cycle.status === 'active'
+)
+if (activeCycles.length === 1) {
+  selectedCycleId.value = activeCycles[0]!.id
+}
 
 // Fetch students list with school, program, evaluationStatus, and search filters
 const { data, error, pending, refresh } = await useAsyncData(
@@ -143,7 +179,10 @@ const { data, error, pending, refresh } = await useAsyncData(
           selectedSchool.value !== 'all' ? selectedSchool.value : undefined,
         programId:
           selectedProgram.value !== 'all' ? selectedProgram.value : undefined,
+        cycleId:
+          selectedCycleId.value !== 'all' ? selectedCycleId.value : undefined,
         evaluationStatus:
+          selectedCycleId.value !== 'all' &&
           selectedEvaluationStatus.value !== 'all'
             ? selectedEvaluationStatus.value
             : undefined
@@ -156,6 +195,7 @@ const { data, error, pending, refresh } = await useAsyncData(
       pageSize,
       selectedSchool,
       selectedProgram,
+      selectedCycleId,
       selectedEvaluationStatus
     ]
   }
@@ -172,49 +212,76 @@ watch(selectedSchool, () => {
   page.value = 1
 })
 
-watch([search, pageSize, selectedProgram, selectedEvaluationStatus], () => {
-  page.value = 1
-})
+watch(
+  [
+    search,
+    pageSize,
+    selectedProgram,
+    selectedCycleId,
+    selectedEvaluationStatus
+  ],
+  () => {
+    if (selectedCycleId.value === 'all') {
+      selectedEvaluationStatus.value = 'all'
+    }
+    page.value = 1
+  }
+)
 
 function resetFilters(): void {
   search.value = ''
   selectedSchool.value = 'all'
   selectedProgram.value = 'all'
+  selectedCycleId.value = 'all'
   selectedEvaluationStatus.value = 'all'
   page.value = 1
 }
 
 // Fetch schools and programs for dropdowns and matching
-const { data: schoolsData } = await useAsyncData('students-schools', () =>
-  api<{ items: SchoolItem[] }>('/academic/schools', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
+function loadReferencePages<T extends { readonly id: string }>(
+  path: string
+): Promise<PaginatedItems<T>> {
+  return loadAllPages((referencePage, referencePageSize) =>
+    api<PaginatedItems<T>>(path, {
+      query: { page: referencePage, pageSize: referencePageSize }
+    })
+  )
+}
+
+const {
+  data: schoolsData,
+  error: schoolsError,
+  pending: schoolsPending,
+  refresh: refreshSchools
+} = await useAsyncData('students-schools', () =>
+  loadReferencePages<SchoolItem>('/academic/schools')
 )
 
-const { data: programsData } = await useAsyncData('students-programs', () =>
-  api<{ items: ProgramItem[] }>('/academic/programs', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
+const {
+  data: programsData,
+  error: programsError,
+  pending: programsPending,
+  refresh: refreshPrograms
+} = await useAsyncData('students-programs', () =>
+  loadReferencePages<ProgramItem>('/academic/programs')
 )
 
-const { data: coursesData } = await useAsyncData('students-courses', () =>
-  api<{ items: CourseItem[] }>('/academic/courses', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
+const {
+  data: coursesData,
+  error: coursesError,
+  pending: coursesPending,
+  refresh: refreshCourses
+} = await useAsyncData('students-courses', () =>
+  loadReferencePages<CourseItem>('/academic/courses')
 )
 
-const { data: termsData } = await useAsyncData('students-terms', () =>
-  api<{ items: TermItem[] }>('/academic/terms', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
-)
-
-const { data: organizationsData } = await useAsyncData(
-  'students-organizations',
-  () =>
-    api<{ items: OrganizationItem[] }>('/organizations', {
-      query: { pageSize: 100 }
-    }).catch(() => ({ items: [] }))
+const {
+  data: termsData,
+  error: termsError,
+  pending: termsPending,
+  refresh: refreshTerms
+} = await useAsyncData('students-terms', () =>
+  loadReferencePages<TermItem>('/academic/terms')
 )
 
 interface ProvinceMasterItem {
@@ -226,12 +293,15 @@ interface ProvinceMasterItem {
   status?: string
 }
 
-const { data: provincesMasterData } = await useAsyncData(
-  'students-master-provinces',
-  () =>
-    api<{ items: ProvinceMasterItem[] }>('/system-settings/provinces', {
-      query: { status: 'active' }
-    }).catch(() => ({ items: [] }))
+const {
+  data: provincesMasterData,
+  error: provincesError,
+  pending: provincesPending,
+  refresh: refreshProvinces
+} = await useAsyncData('students-master-provinces', () =>
+  api<{ items: ProvinceMasterItem[] }>('/system-settings/provinces', {
+    query: { status: 'active' }
+  })
 )
 
 const REGIONS_ORDER = [
@@ -282,13 +352,8 @@ interface PlacementItem {
   readonly organizationId?: string
   readonly academicTermId: string
   readonly courseId?: string
+  readonly organization?: OrganizationItem
 }
-
-const { data: placementsData } = await useAsyncData('students-placements', () =>
-  api<{ items: PlacementItem[] }>('/placements', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
-)
 
 interface CompetencySetItem {
   readonly id: string
@@ -322,13 +387,45 @@ interface CompetencyVersionItem {
   readonly sections: readonly SectionPreview[]
 }
 
-const { data: evaluationFormsData } = await useAsyncData(
-  'students-eval-forms',
-  () =>
-    api<{ items: CompetencySetItem[] }>('/competency-sets', {
-      query: { pageSize: 100 }
-    }).catch(() => ({ items: [] }))
+const {
+  data: evaluationFormsData,
+  error: evaluationFormsError,
+  pending: evaluationFormsPending,
+  refresh: refreshEvaluationForms
+} = await useAsyncData('students-eval-forms', () =>
+  loadReferencePages<CompetencySetItem>('/competency-sets')
 )
+
+const referenceDataError = computed(() =>
+  Boolean(
+    schoolsError.value ||
+    programsError.value ||
+    coursesError.value ||
+    termsError.value ||
+    provincesError.value ||
+    evaluationFormsError.value
+  )
+)
+const referenceDataPending = computed(
+  () =>
+    schoolsPending.value ||
+    programsPending.value ||
+    coursesPending.value ||
+    termsPending.value ||
+    provincesPending.value ||
+    evaluationFormsPending.value
+)
+
+async function retryReferenceData(): Promise<void> {
+  await Promise.allSettled([
+    refreshSchools(),
+    refreshPrograms(),
+    refreshCourses(),
+    refreshTerms(),
+    refreshProvinces(),
+    refreshEvaluationForms()
+  ])
+}
 
 const activeCompetencyForms = computed(() =>
   (evaluationFormsData.value?.items ?? []).filter(
@@ -353,9 +450,26 @@ function getProgramDisplay(programId: string): string {
   return (programId || '-').replace(/^[A-Za-z0-9_]+\s*[-—]\s*/, '')
 }
 
+function getStudentPlacement(student: Student): PlacementItem | undefined {
+  const matches = student.directoryRelations?.placements ?? []
+  const selectedCycle = cyclesData.value?.items.find(
+    (cycle) => cycle.id === selectedCycleId.value
+  )
+  const termId =
+    selectedCycle?.academicTermId ??
+    (selectedCycleId.value === 'all' ? student.academicTermId : undefined)
+  if (termId) {
+    return matches.find((placement) => placement.academicTermId === termId)
+  }
+  return selectedCycleId.value === 'all' && matches.length === 1
+    ? matches[0]
+    : undefined
+}
+
 function getCourseDisplay(student: Student): string {
   // 1. Direct course on student
-  const directId = student.courseId
+  const directId =
+    selectedCycleId.value === 'all' ? student.courseId : undefined
   if (directId) {
     const c = coursesData.value?.items?.find(
       (item) => item.id === directId || item.courseCode === directId
@@ -365,9 +479,7 @@ function getCourseDisplay(student: Student): string {
   }
 
   // 2. From student's placement
-  const placement = placementsData.value?.items?.find(
-    (p) => p.studentId === student.id || p.studentId === student.studentId
-  )
+  const placement = getStudentPlacement(student)
   if (placement?.courseId) {
     const c = coursesData.value?.items?.find(
       (item) =>
@@ -377,13 +489,7 @@ function getCourseDisplay(student: Student): string {
     return placement.courseId
   }
 
-  // 3. If courses exist in DB, fallback to the main course
-  const defaultCourse = coursesData.value?.items?.[0]
-  if (defaultCourse) {
-    return defaultCourse.name.th
-  }
-
-  return '-'
+  return selectedCycleId.value === 'all' ? student.course?.trim() || '-' : '-'
 }
 
 function getStudentCourseTrack(student: Student): {
@@ -391,15 +497,14 @@ function getStudentCourseTrack(student: Student): {
   color: 'primary' | 'neutral'
   icon: string
 } {
-  const directId = student.courseId
+  const directId =
+    selectedCycleId.value === 'all' ? student.courseId : undefined
   const c = directId
     ? coursesData.value?.items?.find(
         (item) => item.id === directId || item.courseCode === directId
       )
     : null
-  const placement = placementsData.value?.items?.find(
-    (p) => p.studentId === student.id || p.studentId === student.studentId
-  )
+  const placement = getStudentPlacement(student)
   const placementCourse = placement?.courseId
     ? coursesData.value?.items?.find(
         (item) =>
@@ -408,8 +513,9 @@ function getStudentCourseTrack(student: Student): {
       )
     : null
 
-  const resolvedCourse = c || placementCourse || coursesData.value?.items?.[0]
-  const rawCourse = (student as unknown as { course?: string }).course || ''
+  const resolvedCourse = c || placementCourse
+  const rawCourse =
+    selectedCycleId.value === 'all' ? student.course?.trim() || '' : ''
 
   if (rawCourse) {
     if (
@@ -446,9 +552,15 @@ function getStudentCourseTrack(student: Student): {
         color: 'primary',
         icon: 'i-lucide-briefcase'
       }
-    } else {
+    } else if (en.toLowerCase().includes('intern') || th.includes('ฝึกงาน')) {
       return {
         display: 'Internship',
+        color: 'neutral',
+        icon: 'i-lucide-graduation-cap'
+      }
+    } else {
+      return {
+        display: en || th || '-',
         color: 'neutral',
         icon: 'i-lucide-graduation-cap'
       }
@@ -456,9 +568,9 @@ function getStudentCourseTrack(student: Student): {
   }
 
   return {
-    display: 'Cooperative Education',
-    color: 'primary',
-    icon: 'i-lucide-briefcase'
+    display: '-',
+    color: 'neutral',
+    icon: 'i-lucide-graduation-cap'
   }
 }
 
@@ -467,11 +579,14 @@ function getSemesterDisplay(student: Student): string {
   if (student.semester) return student.semester
 
   // 2. From student academicTermId or placement
+  const selectedCycle = cyclesData.value?.items.find(
+    (cycle) => cycle.id === selectedCycleId.value
+  )
   const termId =
-    student.academicTermId ||
-    placementsData.value?.items?.find(
-      (p) => p.studentId === student.id || p.studentId === student.studentId
-    )?.academicTermId
+    selectedCycle?.academicTermId ||
+    (selectedCycleId.value === 'all'
+      ? student.academicTermId || getStudentPlacement(student)?.academicTermId
+      : undefined)
 
   if (termId) {
     const t = termsData.value?.items?.find(
@@ -480,20 +595,19 @@ function getSemesterDisplay(student: Student): string {
     if (t) return t.code
   }
 
-  // 3. Fallback to first available term in DB
-  const defaultTerm = termsData.value?.items?.[0]
-  if (defaultTerm) return defaultTerm.code
-
   return '-'
 }
 
 function getAcademicYearDisplay(student: Student): string {
   // 1. From academicTermId linked term
+  const selectedCycle = cyclesData.value?.items.find(
+    (cycle) => cycle.id === selectedCycleId.value
+  )
   const termId =
-    student.academicTermId ||
-    placementsData.value?.items?.find(
-      (p) => p.studentId === student.id || p.studentId === student.studentId
-    )?.academicTermId
+    selectedCycle?.academicTermId ||
+    (selectedCycleId.value === 'all'
+      ? student.academicTermId || getStudentPlacement(student)?.academicTermId
+      : undefined)
 
   if (termId) {
     const t = termsData.value?.items?.find(
@@ -505,28 +619,13 @@ function getAcademicYearDisplay(student: Student): string {
     }
   }
 
-  // 2. Admission year calculation (admissionYear + 4, matching Dashboard)
-  const admitBE =
-    student.admissionYear ||
-    (student.studentId && /^\d{2}/.test(student.studentId)
-      ? 2500 + parseInt(student.studentId.slice(0, 2), 10)
-      : undefined)
-
-  if (admitBE) {
-    if (admitBE >= 2566) {
-      return String(admitBE)
-    }
-    return String(admitBE + 4)
+  const explicitYear =
+    selectedCycleId.value === 'all' ? Number(student.academicYear) : Number.NaN
+  if (Number.isFinite(explicitYear) && explicitYear > 0) {
+    return String(explicitYear > 2400 ? explicitYear : explicitYear + 543)
   }
 
-  // 3. Fallback to default term academicYear or 2566
-  const defaultTerm = termsData.value?.items?.[0]
-  if (defaultTerm?.academicYear) {
-    const y = Number(defaultTerm.academicYear)
-    return String(y > 2400 ? y : y + 543)
-  }
-
-  return '2566'
+  return '-'
 }
 
 function formatSemesterText(rawSemester?: string): string {
@@ -579,51 +678,37 @@ function formatSemesterText(rawSemester?: string): string {
 }
 
 function getCompanyDisplay(student: Student): string {
-  if (student.company) return student.company
-  const placement = placementsData.value?.items?.find(
-    (p) => p.studentId === student.id || p.studentId === student.studentId
-  )
+  if (selectedCycleId.value === 'all' && student.company) return student.company
+  const placement = getStudentPlacement(student)
   if (placement?.organizationId) {
-    const org = organizationsData.value?.items?.find(
-      (o) =>
-        o.id === placement.organizationId ||
-        o.organizationCode === placement.organizationId
-    )
+    const org = placement.organization
     if (org) return org.name.th || org.name.en
     return placement.organizationId
   }
-  return '-'
+  return selectedCycleId.value === 'all' ? student.company || '-' : '-'
 }
 
 function getProvinceDisplay(student: Student): string {
-  if (student.province) return student.province
-  const placement = placementsData.value?.items?.find(
-    (p) => p.studentId === student.id || p.studentId === student.studentId
-  )
+  if (selectedCycleId.value === 'all' && student.province)
+    return student.province
+  const placement = getStudentPlacement(student)
   if (placement?.organizationId) {
-    const org = organizationsData.value?.items?.find(
-      (o) =>
-        o.id === placement.organizationId ||
-        o.organizationCode === placement.organizationId
-    )
+    const org = placement.organization
     if (org?.address?.province) return org.address.province
   }
-  return '-'
+  return selectedCycleId.value === 'all' ? student.province || '-' : '-'
 }
 
 function getCompanyAddressDisplay(student: Student): string {
-  if ((student as unknown as { companyAddress?: string }).companyAddress) {
+  if (
+    selectedCycleId.value === 'all' &&
+    (student as unknown as { companyAddress?: string }).companyAddress
+  ) {
     return (student as unknown as { companyAddress?: string }).companyAddress!
   }
-  const placement = placementsData.value?.items?.find(
-    (p) => p.studentId === student.id || p.studentId === student.studentId
-  )
+  const placement = getStudentPlacement(student)
   if (placement?.organizationId) {
-    const org = organizationsData.value?.items?.find(
-      (o) =>
-        o.id === placement.organizationId ||
-        o.organizationCode === placement.organizationId
-    )
+    const org = placement.organization
     if (org?.address) {
       const addr =
         org.address.street ||
@@ -634,7 +719,8 @@ function getCompanyAddressDisplay(student: Student): string {
       if (addr) return addr
     }
   }
-  if (student.province) return student.province
+  if (selectedCycleId.value === 'all' && student.province)
+    return student.province
   return '-'
 }
 
@@ -664,7 +750,17 @@ function formatDateTime(isoStr?: string): string {
 // 2. ส่งคำขอประเมินแล้ว (awaiting_response)
 // 3. ส่งผลประเมินแล้ว (submitted)
 function getStudentEvaluationStatus(student: Student) {
-  const status = student.evaluationStatus || 'awaiting_evaluator'
+  const status = student.evaluationStatus
+
+  if (!status) {
+    return {
+      code: 'cycle_unselected',
+      label: 'เลือกรอบประเมิน',
+      color: 'neutral' as const,
+      icon: 'i-lucide-calendar-clock',
+      description: 'เลือกปีการประเมินเพื่อดูสถานะล่าสุดของนักศึกษา'
+    }
+  }
 
   if (status === 'submitted') {
     return {
@@ -723,8 +819,8 @@ const editForm = ref({
   province: '',
   evaluatorName: '',
   evaluatorEmail: '',
-  academicYear: 2569,
-  admissionYear: 2565
+  academicYear: '' as number | string,
+  admissionYear: '' as number | string
 })
 
 const availableProgramsForEditSchool = computed(() => {
@@ -747,19 +843,15 @@ function openEditStudentModal(student: Student) {
     schoolId: student.schoolId,
     programId: student.programId,
     courseId: student.courseId || '',
-    semester: student.semester
-      ? formatSemesterText(student.semester) !== '-'
-        ? formatSemesterText(student.semester)
-        : student.semester
-      : 'ภาคการศึกษาต้น',
+    semester: student.semester || '',
     company: student.company || '',
     companyAddress:
       (student as unknown as { companyAddress?: string }).companyAddress || '',
     province: student.province || '',
     evaluatorName: student.evaluatorName || '',
     evaluatorEmail: student.evaluatorEmail || '',
-    academicYear: Number(getAcademicYearDisplay(student)) || 2569,
-    admissionYear: student.admissionYear || 2565
+    academicYear: student.academicYear ?? '',
+    admissionYear: student.admissionYear ?? ''
   }
   isEditModalOpen.value = true
 }
@@ -789,8 +881,8 @@ async function handleEditSubmit() {
         evaluatorName: editForm.value.evaluatorName?.trim() || undefined,
         evaluatorEmail:
           editForm.value.evaluatorEmail?.trim()?.toLowerCase() || undefined,
-        academicYear: Number(editForm.value.academicYear) || undefined,
-        admissionYear: Number(editForm.value.admissionYear) || undefined
+        academicYear: optionalYear(editForm.value.academicYear),
+        admissionYear: optionalYear(editForm.value.admissionYear)
       }
     })
 
@@ -813,6 +905,14 @@ async function handleEditSubmit() {
   } finally {
     isEditSubmitting.value = false
   }
+}
+
+function optionalYear(value: number | string): number | undefined {
+  if (value === '' || (typeof value === 'string' && value.trim() === '')) {
+    return undefined
+  }
+  const year = Number(value)
+  return Number.isInteger(year) ? year : undefined
 }
 
 // =========================================================================
@@ -977,6 +1077,10 @@ const paginatedParsedRows = computed(() => {
 })
 
 function openExcelImportModal() {
+  if (studentImportBatchId.value) {
+    isExcelModalOpen.value = true
+    return
+  }
   parsedRows.value = []
   selectedFileName.value = ''
   studentImportBatchId.value = null
@@ -988,38 +1092,22 @@ function openExcelImportModal() {
 
 // Download Excel Template for Students
 function downloadStudentExcelTemplate() {
-  const templateData = [
-    {
-      'รหัสนักศึกษา (studentId)': '6631503001',
-      'ชื่อ-นามสกุลไทย (nameTh)': 'นายสมชาย ใจดี',
-      'ชื่อ-นามสกุลอังกฤษ (nameEn)': 'Mr. Somchai Jaidee',
-      'อีเมลนักศึกษา (email)': 'somchai.jai@lamduan.mfu.ac.th',
-      'อีเมลส่วนตัว (personalEmail)': 'somchai.jai@gmail.com',
-      'รหัสสำนักวิชา (schoolCode)': 'ADT',
-      'รหัสหลักสูตร (programCode)': 'SE',
-      'รหัสวิชา (courseCode)': 'SWE491',
-      'ภาคการศึกษา (semester)': '1/2566',
-      'สถานประกอบการ (company)': 'บริษัท นวัตกรรมดิจิทัล จำกัด',
-      'จังหวัด (province)': 'กรุงเทพมหานคร',
-      'ปีการศึกษา (admissionYear)': 2566
-    },
-    {
-      'รหัสนักศึกษา (studentId)': '6631503002',
-      'ชื่อ-นามสกุลไทย (nameTh)': 'นางสาวสุดารัตน์ มีสุข',
-      'ชื่อ-นามสกุลอังกฤษ (nameEn)': 'Ms. Sudarat Meesook',
-      'อีเมลนักศึกษา (email)': 'sudarat.mee@lamduan.mfu.ac.th',
-      'อีเมลส่วนตัว (personalEmail)': 'sudarat.mee@gmail.com',
-      'รหัสสำนักวิชา (schoolCode)': 'ADT',
-      'รหัสหลักสูตร (programCode)': 'SE',
-      'รหัสวิชา (courseCode)': 'SWE491',
-      'ภาคการศึกษา (semester)': '1/2566',
-      'สถานประกอบการ (company)': 'บริษัท เชียงใหม่ซอฟต์แวร์ จำกัด',
-      'จังหวัด (province)': 'เชียงใหม่',
-      'ปีการศึกษา (admissionYear)': 2566
-    }
-  ]
-
-  const ws = XLSX.utils.json_to_sheet(templateData)
+  const ws = XLSX.utils.aoa_to_sheet([
+    [
+      'รหัสนักศึกษา (studentId)',
+      'ชื่อ-นามสกุลไทย (nameTh)',
+      'ชื่อ-นามสกุลอังกฤษ (nameEn)',
+      'อีเมลนักศึกษา (email)',
+      'อีเมลส่วนตัว (personalEmail)',
+      'รหัสสำนักวิชา (schoolCode)',
+      'รหัสหลักสูตร (programCode)',
+      'รหัสวิชา (courseCode)',
+      'ภาคการศึกษา (semester)',
+      'สถานประกอบการ (company)',
+      'จังหวัด (province)',
+      'ปีที่เข้าศึกษา'
+    ]
+  ])
   // Set column widths
   ws['!cols'] = [
     { wch: 22 }, // studentId
@@ -1043,7 +1131,7 @@ function downloadStudentExcelTemplate() {
   toast.add({
     title: 'ดาวน์โหลดเทมเพลตสำเร็จ',
     description:
-      'ไฟล์ MFU_Internship_Student_Template.xlsx พร้อมกรอกข้อมูลแล้ว',
+      'ไฟล์ MFU_Internship_Student_Template.xlsx มีเฉพาะหัวคอลัมน์ ไม่มีข้อมูลตัวอย่าง',
     color: 'success'
   })
 }
@@ -1052,12 +1140,40 @@ function downloadStudentExcelTemplate() {
 function applyStudentImportBatch(batch: StudentImportBatchResponse) {
   studentImportBatchId.value = batch.batchId
   importQuestionFields.value = [...batch.questionFieldsDetected]
+  if (import.meta.client) {
+    if (batch.status === 'committed') {
+      sessionStorage.removeItem('student-import-batch-id')
+    } else {
+      sessionStorage.setItem('student-import-batch-id', batch.batchId)
+    }
+  }
   parsedRows.value = batch.items.map((row) => ({
     ...row,
     selected: row.status === 'pending' && row.action === 'create'
   }))
   excelPreviewPage.value = 1
 }
+
+async function resumeStudentImport() {
+  const batchId = sessionStorage.getItem('student-import-batch-id')
+  if (!batchId) return
+  try {
+    const batch = await api<StudentImportBatchResponse>(
+      `/students/imports/${batchId}`
+    )
+    applyStudentImportBatch(batch)
+    if (batch.status === 'preview') {
+      selectedFileName.value = batch.sourceName
+      isExcelModalOpen.value = true
+    }
+  } catch {
+    sessionStorage.removeItem('student-import-batch-id')
+  }
+}
+
+onMounted(() => {
+  void resumeStudentImport()
+})
 
 function importFieldLabel(field: string): string {
   const labels: Readonly<Record<string, string>> = {
@@ -1207,13 +1323,18 @@ async function handleExecuteExcelImport() {
       return
     }
 
+    const remaining = parsedRows.value.filter(
+      (row) =>
+        row.status === 'pending' &&
+        (row.action === 'create' || row.action === 'update')
+    ).length
     toast.add({
       title: 'นำเข้าข้อมูลสำเร็จ',
-      description: `บันทึกหรืออัปเดตข้อมูล ${committedCount} รายการ`,
+      description: `บันทึกหรืออัปเดตข้อมูล ${committedCount} รายการ${remaining > 0 ? `; ยังเหลือ ${remaining} รายการรอยืนยัน` : ''}`,
       color: 'success'
     })
     await refresh()
-    isExcelModalOpen.value = false
+    if (remaining === 0) isExcelModalOpen.value = false
   } catch (error: unknown) {
     toast.add({
       title: 'ตรวจสอบสถานะการนำเข้าไม่สำเร็จ',
@@ -1373,14 +1494,22 @@ function getStudentMenuItems(student: Student) {
   ]
 }
 
-function copyStudentId(id: string) {
-  if (import.meta.client) {
-    navigator.clipboard.writeText(id)
+async function copyStudentId(id: string): Promise<void> {
+  if (!import.meta.client) return
+
+  try {
+    await navigator.clipboard.writeText(id)
     toast.add({
       title: 'คัดลอกรหัสนักศึกษาแล้ว',
       description: `คัดลอก ${id} ไปยังคลิปบอร์ดแล้ว`,
       color: 'success',
       icon: 'i-lucide-check'
+    })
+  } catch {
+    toast.add({
+      title: 'ไม่สามารถคัดลอกรหัสนักศึกษาได้',
+      description: 'โปรดลองคัดลอกรหัสนักศึกษาด้วยตนเอง',
+      color: 'error'
     })
   }
 }
@@ -1616,7 +1745,7 @@ async function openSendEmailModal(student: Student) {
     notes: ''
   }
 
-  fetchEvaluationEmailTemplate()
+  await fetchEvaluationEmailTemplate()
 
   const firstForm = activeCompetencyForms.value[0]
   if (firstForm) {
@@ -1639,7 +1768,7 @@ async function openBulkSendEmailModal() {
   if (!first) return
 
   if (selectedList.length === 1) {
-    openSendEmailModal(first)
+    await openSendEmailModal(first)
     return
   }
 
@@ -1668,7 +1797,7 @@ async function openBulkSendEmailModal() {
     notes: ''
   }
 
-  fetchEvaluationEmailTemplate()
+  await fetchEvaluationEmailTemplate()
 
   const firstForm = activeCompetencyForms.value[0]
   if (firstForm) {
@@ -1736,12 +1865,8 @@ async function handleSendEvaluationEmailSubmit() {
       }
     })
 
-    if (import.meta.client && result.invitationUrl) {
-      result.invitationUrl = result.invitationUrl.replace(
-        /^https?:\/\/[^/]+/,
-        window.location.origin
-      )
-    }
+    const safeInvitationPath = toSafeInvitationPath(result.invitationUrl)
+    result.invitationUrl = safeInvitationPath ?? ''
 
     // Ensure loading animation is visible for at least 800ms before showing success state
     const elapsed = Date.now() - startTime
@@ -1755,6 +1880,14 @@ async function handleSendEvaluationEmailSubmit() {
       description: `คิวส่งงานไปยัง ${result.recipientEmail} แล้ว ติดตามผลได้จากสถานะ Delivery`,
       color: 'info'
     })
+    if (!safeInvitationPath) {
+      toast.add({
+        title: 'ไม่แสดงลิงก์คำเชิญ',
+        description:
+          'คิวถูกสร้างแล้ว แต่ลิงก์ที่ได้รับไม่ผ่านการตรวจสอบความปลอดภัย โปรดตรวจสอบรายการคำเชิญก่อนส่งใหม่',
+        color: 'warning'
+      })
+    }
     await refresh()
   } catch (err: unknown) {
     const msg =
@@ -1828,10 +1961,7 @@ async function handleBulkSendEvaluationEmailSubmit() {
         }
       })
 
-      let finalUrl = res.invitationUrl
-      if (import.meta.client && finalUrl) {
-        finalUrl = finalUrl.replace(/^https?:\/\/[^/]+/, window.location.origin)
-      }
+      const finalUrl = toSafeInvitationPath(res.invitationUrl) ?? ''
 
       bulkSendProgress.value.successCount++
       itemsResults.push({
@@ -1889,7 +2019,18 @@ function copyInvitationLink(url?: string) {
   const targetUrl = url || sendEmailSuccessData.value?.invitationUrl
   if (!targetUrl) return
   if (import.meta.client) {
-    navigator.clipboard.writeText(targetUrl)
+    const safePath = toSafeInvitationPath(targetUrl)
+    if (!safePath) {
+      toast.add({
+        title: 'ไม่สามารถคัดลอกลิงก์ได้',
+        description: 'ลิงก์คำเชิญไม่ผ่านการตรวจสอบความปลอดภัย',
+        color: 'error'
+      })
+      return
+    }
+    void navigator.clipboard.writeText(
+      new URL(safePath, window.location.origin).href
+    )
     toast.add({
       title: 'คัดลอกลิงก์สำเร็จ',
       description: 'คัดลอกลิงก์แบบประเมินไปยังคลิปบอร์ดแล้ว',
@@ -1955,7 +2096,7 @@ function handleModalBackdropClick() {
     <div
       class="rounded-xl border border-default bg-default p-4 shadow-sm space-y-3"
     >
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         <!-- 1. ตัวกรองสำนักวิชา -->
         <div class="space-y-1">
           <label
@@ -2002,7 +2143,35 @@ function handleModalBackdropClick() {
           </select>
         </div>
 
-        <!-- 3. ตัวกรองสถานะการประเมิน (แบบ 3) -->
+        <!-- 3. เลือกรอบเพื่อแสดงสถานะจาก Assignment ของรอบนั้น -->
+        <div class="space-y-1">
+          <label
+            class="text-xs font-semibold text-muted flex items-center gap-1.5"
+          >
+            <UIcon
+              name="i-lucide-calendar-days"
+              class="size-3.5 text-primary"
+            />
+            รอบการประเมิน (Evaluation Cycle)
+          </label>
+          <select
+            v-model="selectedCycleId"
+            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
+          >
+            <option value="all">เลือกรอบประเมิน</option>
+            <option
+              v-for="cycle in cyclesData?.items ?? []"
+              :key="cycle.id"
+              :value="cycle.id"
+            >
+              {{ cycle.code }} — {{ cycle.name.th || cycle.name.en }} ({{
+                cycle.status
+              }})
+            </option>
+          </select>
+        </div>
+
+        <!-- 4. ตัวกรองสถานะการประเมิน (แบบ 3) -->
         <div class="space-y-1">
           <label
             class="text-xs font-semibold text-muted flex items-center gap-1.5"
@@ -2012,6 +2181,7 @@ function handleModalBackdropClick() {
           </label>
           <select
             v-model="selectedEvaluationStatus"
+            :disabled="selectedCycleId === 'all'"
             class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
           >
             <option value="all">ทุกสถานะ (All Statuses)</option>
@@ -2024,7 +2194,7 @@ function handleModalBackdropClick() {
           </select>
         </div>
 
-        <!-- 4. ช่องค้นหาด่วน -->
+        <!-- 5. ช่องค้นหาด่วน -->
         <div class="space-y-1">
           <label
             class="text-xs font-semibold text-muted flex items-center gap-1.5"
@@ -2070,6 +2240,7 @@ function handleModalBackdropClick() {
           v-if="
             selectedSchool !== 'all' ||
             selectedProgram !== 'all' ||
+            selectedCycleId !== 'all' ||
             selectedEvaluationStatus !== 'all' ||
             search
           "
@@ -2081,6 +2252,52 @@ function handleModalBackdropClick() {
           ล้างตัวกรองทั้งหมด
         </button>
       </div>
+    </div>
+
+    <div
+      v-if="referenceDataError"
+      class="flex flex-col gap-2 sm:flex-row sm:items-center"
+      role="alert"
+    >
+      <UAlert
+        class="flex-1"
+        color="warning"
+        icon="i-lucide-circle-alert"
+        title="โหลดข้อมูลอ้างอิงไม่ครบ"
+        description="ตัวกรองและรายละเอียดนักศึกษาอาจไม่ครบ ระบบจะไม่แทนข้อมูลที่โหลดไม่สำเร็จด้วยข้อมูลตัวอย่าง"
+        variant="soft"
+      />
+      <UButton
+        color="neutral"
+        icon="i-lucide-refresh-cw"
+        label="ลองโหลดข้อมูลอ้างอิงใหม่"
+        :loading="referenceDataPending"
+        :disabled="referenceDataPending"
+        @click="retryReferenceData"
+      />
+    </div>
+
+    <div
+      v-if="cyclesError"
+      class="flex flex-col gap-2 sm:flex-row sm:items-center"
+      role="alert"
+    >
+      <UAlert
+        class="flex-1"
+        color="warning"
+        icon="i-lucide-calendar-x"
+        title="โหลดรอบการประเมินไม่สำเร็จ"
+        description="สถานะจะไม่แสดงจนกว่าจะโหลดรอบการประเมินได้"
+        variant="soft"
+      />
+      <UButton
+        color="neutral"
+        icon="i-lucide-refresh-cw"
+        label="ลองโหลดรอบใหม่"
+        :loading="cyclesPending"
+        :disabled="cyclesPending"
+        @click="() => refreshCycles()"
+      />
     </div>
 
     <UAlert
@@ -2796,7 +3013,7 @@ function handleModalBackdropClick() {
     <div
       v-if="isExcelModalOpen"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      @click="isExcelModalOpen = false"
+      @click="!isExcelImporting && (isExcelModalOpen = false)"
     >
       <div
         class="w-full max-w-5xl lg:max-w-6xl xl:max-w-7xl rounded-2xl sm:rounded-3xl border border-default bg-default p-6 sm:p-8 shadow-2xl space-y-6 max-h-[92vh] overflow-y-auto"
@@ -2863,12 +3080,16 @@ function handleModalBackdropClick() {
           <!-- File Upload Dropzone -->
           <div
             class="rounded-xl border-2 border-dashed border-default hover:border-primary p-4 flex flex-col items-center justify-center text-center transition-colors cursor-pointer bg-muted/10 hover:bg-primary/5"
-            @click="($refs.excelFileInput as HTMLInputElement)?.click()"
+            @click="
+              !isExcelImporting &&
+              ($refs.excelFileInput as HTMLInputElement)?.click()
+            "
           >
             <input
               ref="excelFileInput"
               type="file"
               accept=".xlsx,.csv"
+              :disabled="isExcelImporting"
               class="hidden"
               @change="handleExcelFileUpload"
             />
@@ -3099,6 +3320,7 @@ function handleModalBackdropClick() {
         >
           <UButton
             color="neutral"
+            :disabled="isExcelImporting"
             label="ปิดหน้าต่าง"
             variant="outline"
             @click="isExcelModalOpen = false"
@@ -3777,6 +3999,7 @@ function handleModalBackdropClick() {
                 icon="i-lucide-external-link"
                 label="ทดลองเปิดทำแบบประเมิน"
                 target="_blank"
+                rel="noopener noreferrer"
                 :to="sendEmailSuccessData.invitationUrl"
               />
               <span class="text-muted/40">•</span>
@@ -3909,6 +4132,7 @@ function handleModalBackdropClick() {
                           icon="i-lucide-external-link"
                           label="เปิดลิงก์"
                           target="_blank"
+                          rel="noopener noreferrer"
                           :to="item.invitationUrl"
                         />
                       </div>

@@ -121,6 +121,18 @@ Trace: `FR-AUTH-005`
 **And** other sessions remain active unless explicitly revoked  
 **And** an audit event is created.
 
+### AC-AUTH-010 — System Admin links an exact OIDC identity to a pre-created account
+
+- **Given** an active pre-created account has no linked provider identity and a System Admin has verified the account owner
+- **When** the System Admin submits the exact, case-sensitive OIDC `sub`, a reason, and an idempotency key
+- **Then** the API binds the subject to the issuer discovered from the configured provider; the client cannot choose the issuer and email is not used to match accounts
+- **And** identity uniqueness is enforced by the exact `(issuer, subject)` pair, including allowing the same subject from a different issuer
+- **And** the identity link and audit event commit atomically; the audit stores the reason and a subject hash, not the raw subject
+- **And** replaying the same actor/target/operation/key/payload returns the same result, while changed payload or another account's duplicate pair returns `409`
+- **And** Internship Staff and every non-System-Admin role cannot perform this operation.
+
+Status: linking policy approved; real MFU issuer configuration and staging/UAT remain release gates.
+
 ## 4. Academic, Student, Organization, and Placement
 
 ### AC-DATA-001 — Academic code uniqueness
@@ -197,6 +209,31 @@ Trace: `FR-MEM-002`
 **Then** the API applies documented defaults and returns page metadata  
 **And** deterministic secondary sorting prevents missing/duplicate records across pages  
 **And** page size cannot exceed the documented maximum.
+
+### AC-DATA-009 — Academic Term reads follow linked and operational scope
+
+**Given** an authenticated actor has `academic.read` and a School/Program, Student, or Evaluator assignment scope
+
+**When** the actor lists Academic Terms
+
+**Then** System Administrators and tenant-wide Internship Staff see the tenant catalog
+
+- Scoped Staff, Coordinators, and Auditors see only terms referenced by placements in their authorized scopes.
+- Students see only their linked Student/placement terms; Evaluators see only the term linked to their exact assignment.
+- An `academicYear` filter narrows, never expands, the authorized result.
+- Missing or malformed references fail closed without widening the result.
+
+### AC-DATA-010 — Student Organization and Evaluator reads follow own Placement
+
+**Given** Student A has a Placement at Organization A, with Evaluator A assigned to Student A's assessment
+
+**When** Student A lists Organizations or Evaluators, including with search or `organizationId` filters
+
+**Then** Student A sees only Organization A and Evaluators assigned to Student A for that Placement's Organization
+
+- An unassigned Evaluator at Organization A and any Organization/Evaluator linked only to Student B remain hidden.
+- Search and explicit filters narrow the authorized result and cannot expand it.
+- Missing or malformed Student, Placement, or assignment references fail closed.
 
 ## 5. Competency sets and evaluation cycles
 
@@ -455,26 +492,36 @@ Trace: `system.config.manage`, `AC-OPS-002`, `AC-OPS-003`
 **Then** the API queues only the test record ID  
 **And** the Worker updates queued/sending/sent/failed state without exposing recipient or credentials in the status response or logs.
 
+### AC-MAIL-009 — Reading system email templates is side-effect free
+
+Trace: `FR-MAIL-001`, `FR-MAIL-002`
+
+**Given** built-in system templates have not yet been persisted
+**When** an authorized user reads system templates
+**Then** the API returns built-in content without creating MongoDB records or synthetic version metadata
+**And** a campaign workflow persists the default published version transactionally before referencing it
+**And** index migration blocks on duplicate or malformed legacy rows before creating unique indexes.
+
 ## 8. Document templates and generated PDF
 
 ### AC-DOC-001 — Draft document template round-trips canonical JSON
 
 Trace: `FR-DOC-001`
 
-**Given** authorized Staff creates a template containing text, image, score table, suggestion block, and chart placeholders  
-**When** Draft is saved and reopened  
-**Then** canonical JSON and `schemaVersion` round-trip without semantic loss  
-**And** assets/placeholders remain valid  
+**Given** System Admin or tenant-scoped Internship Staff creates a template containing text, image, score table, suggestion block, and chart placeholders
+**When** Draft is saved and reopened
+**Then** canonical JSON and `schemaVersion` round-trip without semantic loss
+**And** assets/placeholders remain valid
 **And** optimistic concurrency protects newer edits.
 
 ### AC-DOC-002 — Publish validates and freezes document version
 
 Trace: `FR-DOC-002`, TOR `AT-03`
 
-**Given** a valid Draft document template  
-**When** Staff publishes  
-**Then** a Published immutable version is created  
-**And** unknown placeholders, missing assets, unsupported nodes, or invalid page geometry block publish  
+**Given** a valid Draft document template
+**When** System Admin or tenant-scoped Internship Staff publishes
+**Then** a Published immutable version is created
+**And** unknown placeholders, missing assets, unsupported nodes, or invalid page geometry block publish
 **And** later edits create a new Draft version.
 
 ### AC-DOC-003 — Konva editor does not break Nuxt SSR
@@ -532,6 +579,17 @@ Trace: `FR-DOC-004`, TOR `AT-01`
 **When** a permitted user requests status  
 **Then** the API returns safe status and retry/support information  
 **And** no internal file path, provider credential, stack trace, or other Student data is exposed.
+
+### AC-DOC-009 — Shared template reads do not expose Drafts or private assets
+
+Trace: `FR-DOC-001`, `FR-DOC-002`, `AUTH-004`
+
+**Given** document templates and assets are tenant-wide shared records without School/Program scope fields
+**When** a School/Program-scoped Staff member or another permitted read-only role lists templates or reads a version
+**Then** only active templates with Published versions and Published version summaries are returned
+**And** Drafts, canonical JSON, arbitrary metadata, placeholders, and private asset keys are not returned; summaries contain only whitelisted display metadata
+**And** a Published version whose parent template is archived returns `404`
+**And** only System Admin or tenant-scoped Internship Staff can create, edit, publish, or access the shared asset library; narrower Staff scopes receive `403`.
 
 ## 9. Dashboard, reports, and export
 

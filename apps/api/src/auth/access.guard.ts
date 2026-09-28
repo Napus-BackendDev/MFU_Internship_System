@@ -16,14 +16,16 @@ import {
   PUBLIC_ROUTE,
   REQUIRED_PERMISSIONS
 } from './auth.decorators.js'
-import { actorHasPermission } from './permission-map.js'
+import { roleHasRoutePermission } from './permission-map.js'
 import { TokenService } from './token.service.js'
+import { SessionService } from './session.service.js'
 
 @Injectable()
 export class AccessGuard implements CanActivate {
   public constructor(
     private readonly reflector: Reflector,
-    private readonly tokenService: TokenService
+    private readonly tokenService: TokenService,
+    private readonly sessionService: SessionService
   ) {}
 
   public async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -47,12 +49,10 @@ export class AccessGuard implements CanActivate {
         context.getHandler(),
         context.getClass()
       ]) ?? []
+    const hasPermissionRequirements =
+      permissions.length > 0 || anyPermissions.length > 0
 
-    if (
-      !authenticatedOnly &&
-      permissions.length === 0 &&
-      anyPermissions.length === 0
-    ) {
+    if (!authenticatedOnly && !hasPermissionRequirements) {
       throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
     }
 
@@ -66,21 +66,39 @@ export class AccessGuard implements CanActivate {
       throw new UnauthorizedException({ code: 'AUTHENTICATION_REQUIRED' })
     }
 
-    const actor = await this.tokenService.verifyAccessToken(token)
-    if (
-      !authenticatedOnly &&
-      (!permissions.every((permission) =>
-        actorHasPermission(actor.roles, permission)
-      ) ||
-        (anyPermissions.length > 0 &&
-          !anyPermissions.some((permission) =>
-            actorHasPermission(actor.roles, permission)
-          )))
-    ) {
+    const verified = await this.tokenService.verifyAccessToken(token)
+    const actor = await this.sessionService.assertAccessTokenCurrent(
+      verified.sessionId,
+      verified.actor
+    )
+    const rolesGrantingRoute = actor.roles.filter(
+      (role) =>
+        permissions.every((permission) =>
+          roleHasRoutePermission(actor, role, permission)
+        ) &&
+        (anyPermissions.length === 0 ||
+          anyPermissions.some((permission) =>
+            roleHasRoutePermission(actor, role, permission)
+          ))
+    )
+    if (hasPermissionRequirements && rolesGrantingRoute.length === 0) {
       throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
     }
 
-    request.actor = actor
+    if (hasPermissionRequirements && actor.roleScopes) {
+      const authorizedRoles = new Set(rolesGrantingRoute)
+      request.actor = {
+        ...actor,
+        roles: rolesGrantingRoute,
+        roleScopes: actor.roleScopes.filter((scope) =>
+          authorizedRoles.has(scope.role)
+        )
+      }
+    } else if (hasPermissionRequirements) {
+      request.actor = { ...actor, roles: rolesGrantingRoute }
+    } else {
+      request.actor = actor
+    }
     return true
   }
 }

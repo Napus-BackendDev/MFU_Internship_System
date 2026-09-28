@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   Param,
   Patch,
@@ -15,6 +16,7 @@ import { z } from 'zod'
 
 import type { AuthenticatedRequest } from '../common/http.js'
 import { RequirePermissions } from './auth.decorators.js'
+import { OidcService } from './oidc.service.js'
 import { UsersService } from './users.service.js'
 
 const listUserSchema = z.object({
@@ -37,10 +39,24 @@ const createUserSchema = z.object({
 })
 
 const updateUserSchema = createUserSchema.partial()
+const oidcAccountLinkSchema = z
+  .object({
+    subject: z
+      .string()
+      .min(1)
+      .max(255)
+      .refine((value) => value.trim().length > 0 && value === value.trim()),
+    reason: z.string().trim().min(10).max(1000)
+  })
+  .strict()
+const idempotencyKeySchema = z.string().trim().min(16).max(200)
 
 @Controller('users')
 export class UsersController {
-  public constructor(private readonly service: UsersService) {}
+  public constructor(
+    private readonly service: UsersService,
+    private readonly oidcService: OidcService
+  ) {}
 
   @RequirePermissions('users.read')
   @Get()
@@ -74,7 +90,11 @@ export class UsersController {
     @Body() raw: unknown
   ): Promise<unknown> {
     const input = createUserSchema.parse(raw)
-    return this.service.createUser(request.actor!, input)
+    return this.service.createUser(
+      request.actor!,
+      input,
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('users.manage')
@@ -85,7 +105,31 @@ export class UsersController {
     @Body() raw: unknown
   ): Promise<unknown> {
     const input = updateUserSchema.parse(raw)
-    return this.service.updateUser(request.actor!, id, input)
+    return this.service.updateUser(
+      request.actor!,
+      id,
+      input,
+      request.requestId ?? 'unknown'
+    )
+  }
+
+  @RequirePermissions('users.manage')
+  @Post(':id/oidc-link')
+  @HttpCode(200)
+  public linkOidcAccount(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() raw: unknown,
+    @Headers('idempotency-key') rawIdempotencyKey: string | undefined
+  ): Promise<unknown> {
+    const input = oidcAccountLinkSchema.parse(raw)
+    const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey)
+    return this.oidcService.linkAccount(request.actor!, {
+      targetUserId: id,
+      ...input,
+      idempotencyKey,
+      requestId: request.requestId ?? 'unknown'
+    })
   }
 
   @RequirePermissions('users.manage')
@@ -95,6 +139,10 @@ export class UsersController {
     @Req() request: AuthenticatedRequest,
     @Param('id') id: string
   ): Promise<void> {
-    await this.service.deleteUser(request.actor!, id)
+    await this.service.deleteUser(
+      request.actor!,
+      id,
+      request.requestId ?? 'unknown'
+    )
   }
 }

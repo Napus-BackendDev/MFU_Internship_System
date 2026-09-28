@@ -11,6 +11,7 @@ import helmet from 'helmet'
 import { Logger } from 'nestjs-pino'
 
 import { AppModule } from './app.module.js'
+import { createApiCorsOptions } from './common/cors-options.js'
 import { ApiExceptionFilter } from './common/api-exception.filter.js'
 import { HealthService } from './health.service.js'
 
@@ -36,11 +37,9 @@ async function bootstrap(): Promise<void> {
     const expressApp = app.getHttpAdapter().getInstance() as Express
     expressApp.set('trust proxy', trustedProxyCidrs)
   }
-  app.enableCors({
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    origin: config.get('corsOrigins', { infer: true })
-  })
+  app.enableCors(
+    createApiCorsOptions(config.get('corsOrigins', { infer: true }))
+  )
   app.use(
     helmet({
       contentSecurityPolicy: false

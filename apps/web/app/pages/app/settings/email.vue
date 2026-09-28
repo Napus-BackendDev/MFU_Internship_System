@@ -4,7 +4,7 @@ import { createSandboxedEmailPreviewDocument } from '~/utils/email-preview'
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
 interface SystemTemplateItem {
-  id: string
+  id?: string
   code: 'evaluation_request' | 'evaluation_reminder'
   name: string
   description: string
@@ -12,9 +12,9 @@ interface SystemTemplateItem {
   html: string
   text: string
   placeholders: string[]
-  versionId: string
-  versionNumber: number
-  updatedAt: string
+  versionId?: string
+  versionNumber?: number
+  updatedAt?: string
 }
 
 interface EmailDesignOptions {
@@ -898,7 +898,9 @@ watch(editorMode, (newMode) => {
             ></span>
             <span
               >เวอร์ชันระบบ:
-              <strong>{{ currentTemplate.versionNumber || 1 }}</strong></span
+              <strong>{{
+                currentTemplate.versionNumber ?? 'ค่าเริ่มต้น'
+              }}</strong></span
             >
           </div>
         </div>

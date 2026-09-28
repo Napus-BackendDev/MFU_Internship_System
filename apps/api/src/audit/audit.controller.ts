@@ -1,7 +1,14 @@
-import { Controller, Get, Query } from '@nestjs/common'
+import {
+  Controller,
+  Get,
+  Query,
+  Req,
+  UnauthorizedException
+} from '@nestjs/common'
 import { z } from 'zod'
 
 import { RequirePermissions } from '../auth/auth.decorators.js'
+import type { AuthenticatedRequest } from '../common/http.js'
 import { AuditService } from './audit.service.js'
 
 const auditQuerySchema = z.object({
@@ -17,9 +24,16 @@ export class AuditController {
 
   @RequirePermissions('audit.read')
   @Get()
-  public async list(@Query() raw: unknown): Promise<unknown> {
+  public async list(
+    @Query() raw: unknown,
+    @Req() request: AuthenticatedRequest
+  ): Promise<unknown> {
     const query = auditQuerySchema.parse(raw)
-    const result = await this.auditService.list(query)
+    const actor = request.actor
+    if (!actor) {
+      throw new UnauthorizedException({ code: 'AUTHENTICATION_REQUIRED' })
+    }
+    const result = await this.auditService.list(actor, query)
     return {
       items: result.items,
       meta: {

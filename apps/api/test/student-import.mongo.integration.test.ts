@@ -225,6 +225,45 @@ describe('student import on an isolated MongoDB replica set', () => {
     await expect(students.countDocuments({})).resolves.toBe(0)
   })
 
+  it('rejects duplicate row IDs even when ObjectId casing differs', async () => {
+    const batch = await preview([sourceRow()])
+    const rowId = batch.items[0]!.id
+    const uppercaseRowId = rowId.toUpperCase()
+    expect(uppercaseRowId).not.toBe(rowId)
+
+    await expect(
+      service.commit(
+        actor,
+        batch.batchId,
+        'duplicate-cased-row-id',
+        [
+          { rowId, action: 'create' },
+          { rowId: uppercaseRowId, action: 'create' }
+        ],
+        'duplicate-cased-row-id-request'
+      )
+    ).rejects.toMatchObject({
+      status: 422,
+      response: { code: 'IMPORT_ROW_DUPLICATED' }
+    })
+
+    await expect(students.countDocuments({})).resolves.toBe(0)
+    await expect(commits.countDocuments({})).resolves.toBe(0)
+  })
+
+  it('rejects unsupported, malformed, and oversized workbooks before persisting a batch', async () => {
+    await expect(
+      service.preview(actor, 'students.xls', Buffer.from('PK\\x03\\x04'))
+    ).rejects.toMatchObject({ status: 422 })
+    await expect(
+      service.preview(actor, 'students.xlsx', Buffer.from('not an xlsx file'))
+    ).rejects.toMatchObject({ status: 422 })
+    await expect(
+      service.preview(actor, 'students.xlsx', Buffer.alloc(5 * 1024 * 1024 + 1))
+    ).rejects.toMatchObject({ status: 413 })
+    await expect(batches.countDocuments({})).resolves.toBe(0)
+  })
+
   it('flags unresolved course and duplicate source IDs instead of guessing', async () => {
     const batch = await preview([
       sourceRow('6631503001', { 'รหัสวิชา (courseCode)': 'UNKNOWN' }),
@@ -241,7 +280,105 @@ describe('student import on an isolated MongoDB replica set', () => {
     expect(batch.items[0]?.issues.map((item) => item.code)).toContain(
       'DUPLICATE_SOURCE_ID'
     )
+    expect(batch.items[0]?.issues.map((item) => item.code)).toContain(
+      'DUPLICATE_SOURCE_EMAIL'
+    )
     await expect(students.countDocuments({})).resolves.toBe(0)
+  })
+
+  it('rejects a primary email already owned by another student record', async () => {
+    await students.create({
+      studentId: '6631503999',
+      name: { th: 'เจ้าของอีเมล', en: 'Email Owner' },
+      email: 'example.student@lamduan.mfu.ac.th',
+      schoolId,
+      programId,
+      status: 'active'
+    })
+    const batch = await preview([sourceRow('6631503001')])
+
+    expect(batch.items[0]).toMatchObject({
+      action: 'invalid',
+      issues: [{ code: 'STUDENT_EMAIL_ALREADY_USED' }]
+    })
+    await expect(
+      service.commit(
+        actor,
+        batch.batchId,
+        'duplicate-email-create',
+        [{ rowId: batch.items[0]!.id, action: 'create' }],
+        'duplicate-email-request'
+      )
+    ).rejects.toMatchObject({ status: 409 })
+    await expect(students.countDocuments({})).resolves.toBe(1)
+  })
+
+  it('rejects a row when its academic master reference changes after preview', async () => {
+    const batch = await preview([sourceRow()])
+    const rowId = batch.items[0]!.id
+    await programs.updateOne(
+      { _id: programId },
+      { $set: { status: 'archived' } }
+    )
+
+    await expect(
+      service.commit(
+        actor,
+        batch.batchId,
+        'archived-program-after-preview',
+        [{ rowId, action: 'create' }],
+        'import-archived-program'
+      )
+    ).rejects.toMatchObject({ status: 409 })
+
+    await expect(students.countDocuments({})).resolves.toBe(0)
+    await expect(
+      rows.findById(rowId).select('status').lean()
+    ).resolves.toMatchObject({
+      status: 'pending'
+    })
+    await expect(auditLogs.countDocuments({})).resolves.toBe(0)
+  })
+
+  it('rejects a row when its selected course is no longer linked to the program', async () => {
+    const batch = await preview([sourceRow()])
+    const rowId = batch.items[0]!.id
+    await courses.updateOne(
+      { courseCode: 'SWE491' },
+      { $set: { programIds: [] } }
+    )
+
+    await expect(
+      service.commit(
+        actor,
+        batch.batchId,
+        'course-link-changed-after-preview',
+        [{ rowId, action: 'create' }],
+        'import-course-link-changed'
+      )
+    ).rejects.toMatchObject({ status: 409 })
+
+    await expect(students.countDocuments({})).resolves.toBe(0)
+    await expect(auditLogs.countDocuments({})).resolves.toBe(0)
+  })
+
+  it('rejects a row when its academic term is archived after preview', async () => {
+    const batch = await preview([sourceRow()])
+    const rowId = batch.items[0]!.id
+    await terms.updateOne({ code: '1/2566' }, { $set: { status: 'archived' } })
+
+    await expect(
+      service.commit(
+        actor,
+        batch.batchId,
+        'term-archived-after-preview',
+        [{ rowId, action: 'create' }],
+        'import-term-archived'
+      )
+    ).rejects.toMatchObject({ status: 409 })
+
+    await expect(students.countDocuments({})).resolves.toBe(0)
+    await expect(auditLogs.countDocuments({})).resolves.toBe(0)
   })
 
   it('requires explicit update confirmation, checks stale versions, and commits one row with its audit event atomically', async () => {
@@ -317,6 +454,11 @@ describe('student import on an isolated MongoDB replica set', () => {
     await expect(
       students.countDocuments({ studentId: '6631503001' })
     ).resolves.toBe(1)
+    const imported = await students
+      .findOne({ studentId: '6631503001' })
+      .select('evaluationStatus')
+      .lean()
+    expect(imported?.evaluationStatus).toBeUndefined()
     await expect(
       auditLogs.countDocuments({ action: 'students.import.created' })
     ).resolves.toBe(1)
@@ -411,6 +553,39 @@ describe('student import on an isolated MongoDB replica set', () => {
       issues: [{ code: 'ROW_OUT_OF_SCOPE' }]
     })
     expect(batch.items[0]?.student?.studentId).toBe('6631503001')
+    await expect(students.countDocuments({})).resolves.toBe(0)
+  })
+
+  it('ignores a revoked tenant staff scope during student import', async () => {
+    const coordinatorActor: AuthenticatedActor = {
+      ...actor,
+      roles: ['coordinator'],
+      scope: { tenant: true, schoolIds: [], programIds: [] },
+      roleScopes: [
+        {
+          role: 'internshipStaff',
+          tenant: true,
+          schoolIds: [],
+          programIds: []
+        },
+        {
+          role: 'coordinator',
+          tenant: false,
+          schoolIds: [],
+          programIds: []
+        }
+      ]
+    }
+    const batch = (await service.preview(
+      coordinatorActor,
+      'students.xlsx',
+      workbookBuffer([sourceRow()])
+    )) as PreviewResponse
+
+    expect(batch.items[0]).toMatchObject({
+      action: 'invalid',
+      issues: [{ code: 'ROW_OUT_OF_SCOPE' }]
+    })
     await expect(students.countDocuments({})).resolves.toBe(0)
   })
 

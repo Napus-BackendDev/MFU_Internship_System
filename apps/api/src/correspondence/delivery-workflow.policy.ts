@@ -23,11 +23,11 @@ export function campaignTargetIssue(input: {
     readonly expiresAt: Date
   }
 }): CampaignTargetIssue | undefined {
-  const expectedStatus = input.type === 'reminder' ? 'inProgress' : 'pending'
-  if (
-    input.assignmentStatus !== expectedStatus ||
-    input.assignmentDeadlineAt <= input.now
-  ) {
+  const assignmentEditable =
+    input.type === 'reminder'
+      ? ['pending', 'inProgress'].includes(input.assignmentStatus)
+      : input.assignmentStatus === 'pending'
+  if (!assignmentEditable || input.assignmentDeadlineAt <= input.now) {
     return 'ASSIGNMENT_NOT_EDITABLE'
   }
   if (

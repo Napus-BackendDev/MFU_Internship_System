@@ -1,4 +1,8 @@
-import type { Permission, RoleKey } from '@internship/shared-types'
+import type {
+  AuthenticatedActor,
+  Permission,
+  RoleKey
+} from '@internship/shared-types'
 import { PERMISSIONS } from '@internship/shared-types'
 
 const without = (...denied: readonly Permission[]): readonly Permission[] =>
@@ -85,7 +89,6 @@ export const ROLE_PERMISSIONS: Readonly<
     'academic.read',
     'students.read',
     'placements.read',
-    'competencies.read',
     'cycles.read',
     'evaluations.read',
     'evaluations.draft',
@@ -118,4 +121,37 @@ export function actorHasPermission(
   permission: Permission
 ): boolean {
   return roles.some((role) => ROLE_PERMISSIONS[role].includes(permission))
+}
+
+export function hasTenantDocumentTemplateManagementScope(
+  actor: AuthenticatedActor
+): boolean {
+  if (actor.roles.includes('systemAdmin')) return true
+  if (!actor.roles.includes('internshipStaff')) return false
+  if (actor.roleScopes) {
+    return actor.roleScopes.some(
+      (scope) => scope.role === 'internshipStaff' && scope.tenant
+    )
+  }
+  return actor.roles.length === 1 && actor.scope.tenant
+}
+
+export function roleHasRoutePermission(
+  actor: AuthenticatedActor,
+  role: RoleKey,
+  permission: Permission
+): boolean {
+  if (!actorHasPermission([role], permission)) return false
+  if (
+    permission !== 'documentTemplates.manage' &&
+    permission !== 'documentTemplates.publish'
+  ) {
+    return true
+  }
+  if (role === 'systemAdmin') return true
+  if (role !== 'internshipStaff') return false
+  if (actor.roleScopes) {
+    return actor.roleScopes.some((scope) => scope.role === role && scope.tenant)
+  }
+  return actor.roles.length === 1 && actor.scope.tenant
 }

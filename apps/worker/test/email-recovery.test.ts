@@ -79,8 +79,8 @@ function createCampaignModels(rows: readonly RecoveryRow[]): {
       aggregate: vi.fn().mockResolvedValue([{ _id: 'uncertain', count: 1 }])
     },
     Campaign: {
-      findById: vi.fn(() => ({
-        select: () => ({ lean: () => Promise.resolve({ total: 1 }) })
+      findOneAndUpdate: vi.fn(() => ({
+        select: () => ({ lean: () => Promise.resolve({ total: 1, __v: 1 }) })
       })),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
     },

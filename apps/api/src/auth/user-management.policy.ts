@@ -25,6 +25,11 @@ export interface UserRoleAssignmentScope {
   readonly active: boolean
 }
 
+export interface UserManagementListFilters {
+  readonly role?: RoleKey
+  readonly schoolId?: string
+}
+
 export function isSystemAdministrator(actor: AuthenticatedActor): boolean {
   return actor.roles.includes('systemAdmin')
 }
@@ -36,6 +41,7 @@ function authorizedScopes(
   if (actor.roleScopes) {
     return actor.roleScopes.filter(
       (scope) =>
+        actor.roles.includes(scope.role) &&
         (scope.role === 'internshipStaff' ||
           (mode === 'read' && scope.role === 'auditor')) &&
         !scope.tenant
@@ -43,6 +49,7 @@ function authorizedScopes(
   }
   const allowedRoles: readonly RoleKey[] =
     mode === 'manage' ? ['internshipStaff'] : ['internshipStaff', 'auditor']
+  if (actor.roles.length !== 1) return []
   if (!actor.roles.some((role) => allowedRoles.includes(role))) return []
   const role: RoleKey = actor.roles.includes('internshipStaff')
     ? 'internshipStaff'
@@ -124,7 +131,8 @@ function exactAssignmentScopeFilter(
 
 export function userManagementScope(
   actor: AuthenticatedActor,
-  mode: 'read' | 'manage' = 'manage'
+  mode: 'read' | 'manage' = 'manage',
+  filters: UserManagementListFilters = {}
 ): QueryFilter<UserRecord> {
   if (isSystemAdministrator(actor)) return {}
 
@@ -141,6 +149,9 @@ export function userManagementScope(
     }
     return { _id: null }
   }
+  if (filters.role && !STAFF_ASSIGNABLE_ROLES.includes(filters.role)) {
+    return { _id: null }
+  }
 
   const scopeFilters = scopedAssignments.map(targetAssignmentScope)
   return {
@@ -150,7 +161,8 @@ export function userManagementScope(
           $elemMatch: {
             active: true,
             tenant: { $ne: true },
-            role: { $in: STAFF_ASSIGNABLE_ROLES },
+            role: filters.role ?? { $in: STAFF_ASSIGNABLE_ROLES },
+            ...(filters.schoolId ? { schoolIds: filters.schoolId } : {}),
             $or: scopeFilters
           }
         }

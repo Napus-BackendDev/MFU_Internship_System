@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import { sanitizeEmailTemplateHtml } from '@internship/email-security'
-import type { Model } from 'mongoose'
+import type { HydratedDocument, Model } from 'mongoose'
 
 import { paginate, type PaginationInput } from '../common/pagination.js'
 import {
@@ -136,6 +136,15 @@ export function extractPlaceholders(
   return [...new Set(matches.filter(Boolean))]
 }
 
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 11000
+  )
+}
+
 @Injectable()
 export class TemplateService {
   public constructor(
@@ -164,21 +173,66 @@ export class TemplateService {
     text: string
   }): Promise<unknown> {
     const html = sanitizeEmailTemplateHtml(input.html)
-    const template = await this.templates.create({
-      code: input.code,
-      audience: input.audience,
-      status: 'active'
-    })
-    const version = await this.versions.create({
-      templateId: template.id,
-      versionNumber: 1,
-      status: 'draft',
-      subject: input.subject,
-      html,
-      text: input.text,
-      placeholders: [...extractPlaceholders(input.subject, html, input.text)]
-    })
-    return { ...template.toJSON(), versions: [version.toJSON()] }
+    const session = await this.templates.db.startSession()
+    let result:
+      | {
+          readonly template: HydratedDocument<EmailTemplateRecord>
+          readonly version: HydratedDocument<EmailTemplateVersionRecord>
+        }
+      | undefined
+    try {
+      await session.withTransaction(async () => {
+        const [template] = await this.templates.create(
+          [
+            {
+              code: input.code,
+              audience: input.audience,
+              status: 'active'
+            }
+          ],
+          { session }
+        )
+        if (!template)
+          throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
+        const [version] = await this.versions.create(
+          [
+            {
+              templateId: template.id,
+              versionNumber: 1,
+              status: 'draft',
+              subject: input.subject,
+              html,
+              text: input.text,
+              placeholders: [
+                ...extractPlaceholders(input.subject, html, input.text)
+              ]
+            }
+          ],
+          { session }
+        )
+        if (!version)
+          throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+        result = { template, version }
+      })
+      if (!result)
+        throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
+      return {
+        ...result.template.toJSON(),
+        versions: [result.version.toJSON()]
+      }
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 11000
+      ) {
+        throw new ConflictException({ code: 'TEMPLATE_CODE_ALREADY_EXISTS' })
+      }
+      throw error
+    } finally {
+      await session.endSession()
+    }
   }
 
   public async publish(versionId: string): Promise<unknown> {
@@ -212,7 +266,7 @@ export class TemplateService {
             publishedAt: new Date()
           }
         },
-        { new: true }
+        { returnDocument: 'after' }
       )
       .exec()
     if (!published) throw new ConflictException({ code: 'VERSION_CONFLICT' })
@@ -225,61 +279,125 @@ export class TemplateService {
 
     for (const code of codes) {
       const def = DEFAULT_SYSTEM_TEMPLATES[code]
-      let template = await this.templates.findOne({ code }).exec()
-      if (!template) {
-        template = await this.templates.create({
-          code,
-          audience: 'evaluator',
-          status: 'active'
-        })
-      }
-
-      let version = await this.versions
-        .findOne({ templateId: template.id, status: 'published' })
-        .sort({ versionNumber: -1 })
-        .exec()
-
-      if (!version) {
-        const latest = await this.versions
-          .findOne({ templateId: template.id })
-          .sort({ versionNumber: -1 })
-          .exec()
-
-        const versionNumber = (latest?.versionNumber ?? 0) + 1
-        const placeholders = [
-          ...extractPlaceholders(def.subject, def.html, def.text)
-        ]
-        version = await this.versions.create({
-          templateId: template.id,
-          versionNumber,
-          status: 'published',
-          subject: def.subject,
-          html: def.html,
-          text: def.text,
-          placeholders,
-          publishedAt: new Date()
-        })
-      }
+      const template = await this.templates.findOne({ code }).exec()
+      const version = template
+        ? await this.versions
+            .findOne({ templateId: template.id, status: 'published' })
+            .sort({ versionNumber: -1 })
+            .exec()
+        : null
+      const subject = version?.subject ?? def.subject
+      const html = sanitizeEmailTemplateHtml(version?.html ?? def.html)
+      const text = version?.text ?? def.text
+      const placeholders = version?.placeholders ?? [
+        ...extractPlaceholders(subject, html, text)
+      ]
 
       results.push({
-        id: template.id,
+        ...(template ? { id: template.id } : {}),
         code,
         name: def.name,
         description: def.description,
-        subject: version.subject,
-        html: sanitizeEmailTemplateHtml(version.html),
-        text: version.text,
-        placeholders: version.placeholders,
-        versionId: version.id,
-        versionNumber: version.versionNumber,
-        updatedAt:
-          (version as unknown as { updatedAt?: Date }).updatedAt ??
-          version.publishedAt ??
-          new Date()
+        subject,
+        html,
+        text,
+        placeholders,
+        ...(version
+          ? {
+              versionId: version.id,
+              versionNumber: version.versionNumber,
+              updatedAt: version.publishedAt
+            }
+          : {})
       })
     }
 
     return results
+  }
+
+  public async ensureSystemTemplateVersion(
+    code: keyof typeof DEFAULT_SYSTEM_TEMPLATES
+  ): Promise<string> {
+    const def = DEFAULT_SYSTEM_TEMPLATES[code]
+    const session = await this.templates.db.startSession()
+    let versionId: string | undefined
+
+    try {
+      await session.withTransaction(async () => {
+        versionId = undefined
+        let template = await this.templates
+          .findOne({ code })
+          .session(session)
+          .exec()
+        if (!template) {
+          const [created] = await this.templates.create(
+            [{ code, audience: 'evaluator', status: 'active' }],
+            { session }
+          )
+          if (!created)
+            throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
+          template = created
+        }
+
+        const published = await this.versions
+          .findOne({ templateId: template.id, status: 'published' })
+          .sort({ versionNumber: -1 })
+          .session(session)
+          .exec()
+        if (published) {
+          versionId = published.id
+          return
+        }
+
+        const latest = await this.versions
+          .findOne({ templateId: template.id })
+          .sort({ versionNumber: -1 })
+          .session(session)
+          .exec()
+        const subject = def.subject
+        const html = sanitizeEmailTemplateHtml(def.html)
+        const text = def.text
+        const [version] = await this.versions.create(
+          [
+            {
+              templateId: template.id,
+              versionNumber: (latest?.versionNumber ?? 0) + 1,
+              status: 'published',
+              subject,
+              html,
+              text,
+              placeholders: [...extractPlaceholders(subject, html, text)],
+              publishedAt: new Date()
+            }
+          ],
+          { session }
+        )
+        if (!version)
+          throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+        versionId = version.id
+      })
+    } catch (error: unknown) {
+      if (isDuplicateKeyError(error)) {
+        const template = await this.templates.findOne({ code }).exec()
+        const published = template
+          ? await this.versions
+              .findOne({ templateId: template.id, status: 'published' })
+              .sort({ versionNumber: -1 })
+              .exec()
+          : null
+        if (published) return published.id
+        throw new ConflictException({
+          code: 'SYSTEM_TEMPLATE_VERSION_CONFLICT'
+        })
+      }
+      throw error
+    } finally {
+      await session.endSession()
+    }
+
+    if (!versionId)
+      throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+    return versionId
   }
 
   public async updateSystemTemplate(
@@ -291,14 +409,6 @@ export class TemplateService {
     }
 
     const def = DEFAULT_SYSTEM_TEMPLATES[code]
-    let template = await this.templates.findOne({ code }).exec()
-    if (!template) {
-      template = await this.templates.create({
-        code,
-        audience: 'evaluator',
-        status: 'active'
-      })
-    }
 
     const html = sanitizeEmailTemplateHtml(input.html)
     const placeholders = [
@@ -314,25 +424,68 @@ export class TemplateService {
       })
     }
 
-    const latest = await this.versions
-      .findOne({ templateId: template.id })
-      .sort({ versionNumber: -1 })
-      .exec()
-
-    const versionNumber = (latest?.versionNumber ?? 0) + 1
-    const newVersion = await this.versions.create({
-      templateId: template.id,
-      versionNumber,
-      status: 'published',
-      subject: input.subject,
-      html,
-      text: input.text,
-      placeholders,
-      publishedAt: new Date()
-    })
+    const session = await this.templates.db.startSession()
+    let templateId: string | undefined
+    let newVersion: HydratedDocument<EmailTemplateVersionRecord> | undefined
+    try {
+      await session.withTransaction(async () => {
+        templateId = undefined
+        newVersion = undefined
+        let template = await this.templates
+          .findOne({ code })
+          .session(session)
+          .exec()
+        if (!template) {
+          const [created] = await this.templates.create(
+            [{ code, audience: 'evaluator', status: 'active' }],
+            { session }
+          )
+          if (!created)
+            throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
+          template = created
+        }
+        const latest = await this.versions
+          .findOne({ templateId: template.id })
+          .sort({ versionNumber: -1 })
+          .session(session)
+          .exec()
+        const [createdVersion] = await this.versions.create(
+          [
+            {
+              templateId: template.id,
+              versionNumber: (latest?.versionNumber ?? 0) + 1,
+              status: 'published',
+              subject: input.subject,
+              html,
+              text: input.text,
+              placeholders,
+              publishedAt: new Date()
+            }
+          ],
+          { session }
+        )
+        if (!createdVersion) {
+          throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+        }
+        templateId = template.id
+        newVersion = createdVersion
+      })
+    } catch (error: unknown) {
+      if (isDuplicateKeyError(error)) {
+        throw new ConflictException({
+          code: 'SYSTEM_TEMPLATE_VERSION_CONFLICT'
+        })
+      }
+      throw error
+    } finally {
+      await session.endSession()
+    }
+    if (!templateId || !newVersion) {
+      throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+    }
 
     return {
-      id: template.id,
+      id: templateId,
       code,
       name: def.name,
       description: def.description,

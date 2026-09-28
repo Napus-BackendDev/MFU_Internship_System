@@ -2,6 +2,21 @@ export {
   campaignStatusFromDeliveryCounts,
   type CampaignStatus
 } from './campaign-status.js'
+export {
+  parseCanonicalDocumentV1,
+  parseCanonicalDocumentV2,
+  type CanonicalCanvasElementTypeV2,
+  type CanonicalCanvasElementV2,
+  type CanonicalDocumentV2,
+  type CanonicalDocumentV1,
+  type CanonicalTextElementV1
+} from './document-template.js'
+export type {
+  DocumentIssueCategoryScore,
+  DocumentIssueEvaluationSnapshot,
+  DocumentIssueLocalizedText,
+  DocumentIssueSnapshotV1
+} from './document-snapshot.js'
 
 export const ROLE_KEYS = [
   'systemAdmin',
@@ -60,12 +75,39 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number]
 
+export const REPORT_EXPORT_FIELDS = [
+  'studentNumber',
+  'studentName',
+  'studentEmail',
+  'schoolId',
+  'programId',
+  'termId',
+  'cycleId',
+  'status',
+  'deadlineAt'
+] as const
+
+export type ReportExportField = (typeof REPORT_EXPORT_FIELDS)[number]
+
+export const DEFAULT_REPORT_EXPORT_FIELDS = [
+  'schoolId',
+  'programId',
+  'termId',
+  'status',
+  'deadlineAt'
+] as const satisfies readonly ReportExportField[]
+
+export const REPORT_EXPORT_FORMATS = ['csv'] as const
+export type ReportExportFormat = (typeof REPORT_EXPORT_FORMATS)[number]
+
 export interface AccessScope {
   readonly tenant: boolean
   readonly schoolIds: readonly string[]
   readonly programIds: readonly string[]
   readonly studentId?: string
   readonly assignmentId?: string
+  readonly invitationId?: string
+  readonly invitationVersion?: number
 }
 
 export interface AuthenticatedActor {

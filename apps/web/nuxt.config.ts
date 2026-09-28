@@ -179,6 +179,21 @@ export default defineNuxtConfig({
     },
     preset: 'node-server'
   },
+  routeRules: {
+    '/evaluate': {
+      headers: {
+        'Referrer-Policy': 'no-referrer'
+      }
+    },
+    '/**': {
+      headers: {
+        'Permissions-Policy': 'camera=(), geolocation=(), microphone=()',
+        'Referrer-Policy': 'strict-origin-when-cross-origin',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY'
+      }
+    }
+  },
   runtimeConfig: {
     apiInternalBaseUrl:
       process.env.API_INTERNAL_BASE_URL ?? 'http://127.0.0.1:8081/api/v2',

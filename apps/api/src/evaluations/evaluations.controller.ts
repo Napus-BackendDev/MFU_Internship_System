@@ -3,6 +3,8 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -20,7 +22,14 @@ const nameSchema = z.object({ th: z.string().min(1), en: z.string().min(1) })
 const pageSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(500).default(25),
-  cycleId: z.string().optional(),
+  cycleId: z
+    .string()
+    .regex(/^[a-fA-F0-9]{24}$/)
+    .optional(),
+  studentId: z
+    .string()
+    .regex(/^[a-fA-F0-9]{24}$/)
+    .optional(),
   status: z
     .enum([
       'pending',
@@ -30,6 +39,20 @@ const pageSchema = z.object({
       'reopened',
       'email_error'
     ])
+    .optional()
+})
+const competencySetListSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(500).default(25),
+  search: z
+    .string()
+    .trim()
+    .max(100)
+    .optional()
+    .transform((value) => value || undefined),
+  archived: z
+    .enum(['true', 'false'])
+    .transform((value) => value === 'true')
     .optional()
 })
 const questionSchema = z
@@ -106,50 +129,76 @@ export class EvaluationsController {
 
   @RequirePermissions('competencies.read')
   @Get('competency-sets')
-  public listCompetencySets(@Query() raw: unknown): Promise<unknown> {
-    return this.service.listCompetencySets(pageSchema.parse(raw))
+  public listCompetencySets(
+    @Req() request: AuthenticatedRequest,
+    @Query() raw: unknown
+  ): Promise<unknown> {
+    const query = competencySetListSchema.parse(raw)
+    return this.service.listCompetencySets(
+      request.actor!,
+      { page: query.page, pageSize: query.pageSize },
+      { search: query.search, archived: query.archived }
+    )
   }
 
   @RequirePermissions('competencies.manage')
   @Post('competency-sets')
-  public createCompetencySet(@Body() raw: unknown): Promise<unknown> {
-    return this.service.createCompetencySet(competencySetSchema.parse(raw))
+  public createCompetencySet(
+    @Req() request: AuthenticatedRequest,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    return this.service.createCompetencySet(
+      request.actor!,
+      competencySetSchema.parse(raw)
+    )
   }
 
   @RequirePermissions('competencies.manage')
   @Post('competency-sets/:competencySetId/versions')
   public createCompetencyVersion(
+    @Req() request: AuthenticatedRequest,
     @Param('competencySetId') competencySetId: string,
     @Body() raw: unknown
   ): Promise<unknown> {
     const body = z.object({ sections: sectionsSchema.default([]) }).parse(raw)
-    return this.service.createCompetencyVersion(competencySetId, body.sections)
+    return this.service.createCompetencyVersion(
+      request.actor!,
+      competencySetId,
+      body.sections
+    )
   }
 
   @RequirePermissions('competencies.read')
   @Get('competency-sets/:competencySetId/versions')
   public listCompetencyVersions(
+    @Req() request: AuthenticatedRequest,
     @Param('competencySetId') competencySetId: string
   ): Promise<unknown> {
-    return this.service.listCompetencyVersions(competencySetId)
+    return this.service.listCompetencyVersions(request.actor!, competencySetId)
   }
 
   @RequirePermissions('competencies.read')
   @Get('competency-set-versions/:versionId')
   public getCompetencyVersion(
+    @Req() request: AuthenticatedRequest,
     @Param('versionId') id: string
   ): Promise<unknown> {
-    return this.service.getCompetencyVersion(id)
+    return this.service.getCompetencyVersion(request.actor!, id)
   }
 
   @RequirePermissions('competencies.manage')
   @Patch('competency-set-versions/:versionId')
   public updateCompetencyVersion(
+    @Req() request: AuthenticatedRequest,
     @Param('versionId') id: string,
     @Body() raw: unknown
   ): Promise<unknown> {
     const body = z.object({ sections: sectionsSchema }).parse(raw)
-    return this.service.updateCompetencyVersion(id, body.sections)
+    return this.service.updateCompetencyVersion(
+      request.actor!,
+      id,
+      body.sections
+    )
   }
 
   @RequirePermissions('competencies.publish')
@@ -176,19 +225,47 @@ export class EvaluationsController {
     @Req() request: AuthenticatedRequest,
     @Body() raw: unknown
   ): Promise<unknown> {
-    return this.service.createCycle(request.actor!, cycleSchema.parse(raw))
+    return this.service.createCycle(
+      request.actor!,
+      cycleSchema.parse(raw),
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('cycles.manage')
   @Get('evaluation-cycles/:cycleId/preview')
-  public previewCycle(@Param('cycleId') id: string): Promise<unknown> {
-    return this.service.previewCycle(id)
+  public previewCycle(
+    @Req() request: AuthenticatedRequest,
+    @Param('cycleId') id: string
+  ): Promise<unknown> {
+    return this.service.previewCycle(request.actor!, id)
   }
 
   @RequirePermissions('cycles.manage')
   @Post('evaluation-cycles/:cycleId/activate')
-  public activateCycle(@Param('cycleId') id: string): Promise<unknown> {
-    return this.service.activateCycle(id)
+  public activateCycle(
+    @Req() request: AuthenticatedRequest,
+    @Param('cycleId') id: string
+  ): Promise<unknown> {
+    return this.service.activateCycle(
+      request.actor!,
+      id,
+      request.requestId ?? 'unknown'
+    )
+  }
+
+  @RequirePermissions('cycles.manage')
+  @Post('evaluation-cycles/:cycleId/close')
+  @HttpCode(HttpStatus.OK)
+  public closeCycle(
+    @Req() request: AuthenticatedRequest,
+    @Param('cycleId') id: string
+  ): Promise<unknown> {
+    return this.service.closeCycle(
+      request.actor!,
+      id,
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('evaluations.read')
@@ -208,7 +285,8 @@ export class EvaluationsController {
   ): Promise<unknown> {
     return this.service.createAssignment(
       request.actor!,
-      assignmentSchema.parse(raw)
+      assignmentSchema.parse(raw),
+      request.requestId ?? 'unknown'
     )
   }
 
@@ -240,10 +318,15 @@ export class EvaluationsController {
     @Body() raw: unknown
   ): Promise<unknown> {
     const key = z.string().min(8).max(128).parse(idempotencyKey)
-    return this.service.submit(request.actor!, id, {
-      ...submitSchema.parse(raw),
-      idempotencyKey: key
-    })
+    return this.service.submit(
+      request.actor!,
+      id,
+      {
+        ...submitSchema.parse(raw),
+        idempotencyKey: key
+      },
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('evaluations.reopen')

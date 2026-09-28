@@ -1,11 +1,6 @@
 import crypto from 'node:crypto'
 import { MongoClient, ObjectId, type Document } from 'mongodb'
-
-interface TestStudent extends Document {
-  studentId: string
-  name?: { th?: string; en?: string }
-  company?: string
-}
+import { hashPin } from '../correspondence/pin.js'
 
 interface TestAssignment extends Document {
   _id: ObjectId
@@ -15,6 +10,7 @@ interface TestAssignment extends Document {
   questionSnapshot?: unknown
   deadlineAt?: Date
   accessPin?: string
+  accessPinHash?: string
 }
 
 interface TestEvaluator extends Document {
@@ -62,17 +58,6 @@ function loadTestConfig(): TestConfig {
   }
 
   return { apiBase, mongodbUri, authJwtSecret }
-}
-
-function normalizePin(value: string): string {
-  return value.replace(/[^A-Za-z0-9]/gu, '').toUpperCase()
-}
-
-function hashPin(pin: string, secret: string): string {
-  return crypto
-    .createHmac('sha256', secret)
-    .update(normalizePin(pin))
-    .digest('hex')
 }
 
 const STRENGTHS_POOL = [
@@ -282,7 +267,10 @@ async function runMockAndTestFlow(): Promise<void> {
       const pinHash = hashPin(a.accessPin, config.authJwtSecret)
       await db
         .collection<TestAssignment>('evaluationAssignments')
-        .updateOne({ _id: a._id }, { $set: { accessPinHash: pinHash } })
+        .updateOne(
+          { _id: a._id },
+          { $set: { accessPinHash: pinHash }, $unset: { accessPin: '' } }
+        )
 
       const evaluator = await db
         .collection<TestEvaluator>('evaluators')
@@ -343,9 +331,9 @@ async function runMockAndTestFlow(): Promise<void> {
     status: 'inProgress'
   })
   const pendingCount = await assignments.countDocuments({ status: 'pending' })
-  const submittedStudents = await db
-    .collection<TestStudent>('students')
-    .countDocuments({ evaluationStatus: 'submitted' })
+  const submittedStudents = new Set(
+    await assignments.distinct('studentId', { status: 'submitted' })
+  ).size
 
   console.log('\n================ FINAL SYSTEM STATE ================')
   console.log(`Total Assignments: ${totalAssignments}`)
@@ -353,9 +341,7 @@ async function runMockAndTestFlow(): Promise<void> {
   console.log(`  - In Progress: ${inProgressCount}`)
   console.log(`  - Pending: ${pendingCount}`)
   console.log(`Total Evaluation Records in DB: ${totalEvals}`)
-  console.log(
-    `Total Students with evaluationStatus = 'submitted': ${submittedStudents}`
-  )
+  console.log(`Students with submitted assignments: ${submittedStudents}`)
   console.log('====================================================\n')
 
   await client.close()

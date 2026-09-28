@@ -1,12 +1,11 @@
 <script setup lang="ts">
-definePageMeta({ layout: 'app', middleware: 'auth', redirect: '/app/students' })
-await navigateTo('/app/students', { replace: true })
+definePageMeta({ layout: 'app', middleware: 'auth' })
 
 interface Delivery {
   readonly id: string
-  readonly recipientEmail: string
+  readonly recipientMasked: string
   readonly assignmentId: string
-  readonly status: 'queued' | 'sending' | 'sent' | 'failed'
+  readonly status: 'queued' | 'sending' | 'sent' | 'failed' | 'uncertain'
   readonly attempts: number
   readonly lastErrorCode?: string
 }
@@ -17,9 +16,9 @@ interface DeliveryPage {
 
 const api = useApi()
 const searchQuery = ref('')
-const statusFilter = ref<'all' | 'sent' | 'queued' | 'sending' | 'failed'>(
-  'all'
-)
+const statusFilter = ref<
+  'all' | 'sent' | 'queued' | 'sending' | 'failed' | 'uncertain'
+>('all')
 const page = ref(1)
 const pageSize = ref(5)
 
@@ -42,7 +41,7 @@ const filteredItems = computed(() => {
   if (!q) return items
   return items.filter(
     (item) =>
-      item.recipientEmail.toLowerCase().includes(q) ||
+      item.recipientMasked.toLowerCase().includes(q) ||
       item.assignmentId.toLowerCase().includes(q)
   )
 })
@@ -61,12 +60,31 @@ watch([statusFilter, pageSize], () => {
   page.value = 1
 })
 const retrying = ref<string>()
+const retryError = ref('')
+const retryIdempotencyKeys = new Map<string, string>()
+const auth = useAuthStore()
+const canRetryDeliveries = computed(() =>
+  auth.actor?.roles.some((role) =>
+    ['systemAdmin', 'internshipStaff'].includes(role)
+  )
+)
 
 async function retry(id: string): Promise<void> {
   retrying.value = id
+  retryError.value = ''
+  const idempotencyKey =
+    retryIdempotencyKeys.get(id) ?? globalThis.crypto.randomUUID()
+  retryIdempotencyKeys.set(id, idempotencyKey)
   try {
-    await api(`/deliveries/${id}/retry`, { method: 'POST' })
+    await api(`/deliveries/${id}/retry`, {
+      method: 'POST',
+      headers: { 'idempotency-key': idempotencyKey }
+    })
     await refresh()
+    retryIdempotencyKeys.delete(id)
+  } catch {
+    retryError.value =
+      'รับคำขอ Retry ไม่สำเร็จ หากเครือข่ายขัดข้อง ลองซ้ำได้โดยระบบจะใช้คำขอเดิม'
   } finally {
     retrying.value = undefined
   }
@@ -79,6 +97,14 @@ async function retry(id: string): Promise<void> {
       <p class="mfu-eyebrow">Delivery state, retry และ idempotency</p>
       <h1 class="mt-2 text-3xl font-bold text-highlighted">การสื่อสาร</h1>
     </header>
+    <UAlert
+      v-if="retryError"
+      color="error"
+      icon="i-lucide-circle-alert"
+      :description="retryError"
+      title="Retry ไม่สำเร็จ"
+      variant="soft"
+    />
     <UAlert
       color="info"
       description="Development ส่งเข้า Mailpit ใน Localhost เท่านั้น; Production ต้องใช้ SMTP credentials จาก Secret Manager"
@@ -105,7 +131,7 @@ async function retry(id: string): Promise<void> {
             v-model="searchQuery"
             class="w-full"
             icon="i-lucide-search"
-            placeholder="ค้นหาอีเมลผู้รับ หรือ Assignment ID..."
+            placeholder="ค้นหาอีเมลที่ปกปิด หรือ Assignment ID..."
             size="md"
           >
             <template #trailing>
@@ -139,6 +165,7 @@ async function retry(id: string): Promise<void> {
             <option value="queued">รอส่ง / อยู่ในคิว (Queued)</option>
             <option value="sending">กำลังส่ง (Sending)</option>
             <option value="failed">ส่งล้มเหลว (Failed)</option>
+            <option value="uncertain">ผลส่งไม่แน่ชัด (Uncertain)</option>
           </select>
         </div>
       </div>
@@ -173,7 +200,6 @@ async function retry(id: string): Promise<void> {
     </div>
 
     <UCard :ui="{ body: 'p-0 sm:p-0' }">
-      >
       <div class="overflow-x-auto">
         <table class="data-table">
           <thead>
@@ -187,7 +213,7 @@ async function retry(id: string): Promise<void> {
           </thead>
           <tbody>
             <tr v-for="item in filteredItems" :key="item.id">
-              <td>{{ item.recipientEmail }}</td>
+              <td>{{ item.recipientMasked }}</td>
               <td class="font-mono text-xs">{{ item.assignmentId }}</td>
               <td>
                 <UBadge
@@ -205,7 +231,7 @@ async function retry(id: string): Promise<void> {
               <td class="tabular-nums">{{ item.attempts }}</td>
               <td>
                 <span
-                  v-if="item.status !== 'failed'"
+                  v-if="item.status !== 'failed' || !canRetryDeliveries"
                   class="text-sm text-muted"
                   >{{ item.lastErrorCode || '—' }}</span
                 ><UButton

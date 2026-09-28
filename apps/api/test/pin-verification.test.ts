@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 
 import { AuthRateLimitGuard } from '../src/auth/auth-rate-limit.guard.js'
 import type { RateLimitStore } from '../src/auth/auth-rate-limit.store.js'
+import { DocumentGenerationRateLimitGuard } from '../src/documents/document-generation-rate-limit.guard.js'
 import {
   generatePin,
+  hashInvitationPin,
   hashPin,
   normalizePin
 } from '../src/correspondence/pin.js'
@@ -28,6 +30,18 @@ describe('secure PIN contract', () => {
     expect(digest).not.toContain(pin)
     expect(hashPin(pin, secret)).toBe(digest)
     expect(hashPin(generatePin(), secret)).not.toBe(digest)
+  })
+
+  it('versions evaluator PIN hashes and separates them from JWT signing keys', () => {
+    const pin = '1234567890123456'
+    const pepper = 'invitation-pepper-for-test-only'
+    const jwtSecret = 'jwt-secret-for-test-only'
+    const digest = hashInvitationPin(pin, pepper)
+
+    expect(digest).toMatch(/^v2:[a-f0-9]{64}$/u)
+    expect(digest).toBe(hashInvitationPin(pin, pepper))
+    expect(digest).not.toBe(hashInvitationPin(pin, jwtSecret))
+    expect(digest).not.toBe(`v2:${hashPin(pin, pepper)}`)
   })
 
   it('shares attempt buckets across guard instances and blocks the 11th PIN attempt', async () => {
@@ -192,6 +206,120 @@ describe('secure PIN contract', () => {
         })
       )
     ).rejects.toMatchObject({ status: 429 })
+  })
+
+  it('rate limits document lookups across changing document IDs', async () => {
+    const guard = new AuthRateLimitGuard(new MemoryRateLimitStore())
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await expect(
+        guard.canActivate(
+          contextFor({
+            headers: {},
+            method: 'GET',
+            path: `/api/v2/documents/generated-documents/${String(attempt).padStart(24, '0')}`,
+            socket: { remoteAddress: '198.51.100.27' }
+          })
+        )
+      ).resolves.toBe(true)
+    }
+    await expect(
+      guard.canActivate(
+        contextFor({
+          headers: {},
+          method: 'GET',
+          path: '/api/v2/documents/generated-documents/ffffffffffffffffffffffff',
+          socket: { remoteAddress: '198.51.100.27' }
+        })
+      )
+    ).rejects.toMatchObject({ status: 429 })
+  })
+
+  it('rate limits PDF generation per actor across changing IPs and idempotency keys', async () => {
+    const guard = new DocumentGenerationRateLimitGuard(
+      new MemoryRateLimitStore()
+    )
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await expect(
+        guard.canActivate(
+          contextFor({
+            actor: { id: 'student-a' },
+            headers: { 'idempotency-key': `request-${attempt}` },
+            method: 'POST',
+            path: '/api/v2/documents/generated-documents',
+            ip: `198.51.100.${attempt + 1}`,
+            socket: { remoteAddress: `198.51.100.${attempt + 1}` }
+          })
+        )
+      ).resolves.toBe(true)
+    }
+    await expect(
+      guard.canActivate(
+        contextFor({
+          actor: { id: 'student-a' },
+          headers: { 'idempotency-key': 'new-key-after-limit' },
+          method: 'POST',
+          path: '/api/v2/documents/generated-documents',
+          ip: '198.51.100.28',
+          socket: { remoteAddress: '198.51.100.28' }
+        })
+      )
+    ).rejects.toMatchObject({ status: 429 })
+  })
+
+  it('caps PDF generation per shared client IP across different actors', async () => {
+    const guard = new DocumentGenerationRateLimitGuard(
+      new MemoryRateLimitStore()
+    )
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await expect(
+        guard.canActivate(
+          contextFor({
+            actor: { id: `actor-${attempt}` },
+            ip: '198.51.100.29',
+            socket: { remoteAddress: '198.51.100.29' }
+          })
+        )
+      ).resolves.toBe(true)
+    }
+    await expect(
+      guard.canActivate(
+        contextFor({
+          actor: { id: 'actor-last' },
+          ip: '198.51.100.29',
+          socket: { remoteAddress: '198.51.100.29' }
+        })
+      )
+    ).rejects.toMatchObject({ status: 429 })
+  })
+
+  it('requires authenticated actor context and fails closed on Redis errors', async () => {
+    const guard = new DocumentGenerationRateLimitGuard(
+      new MemoryRateLimitStore()
+    )
+    await expect(
+      guard.canActivate(
+        contextFor({
+          ip: '198.51.100.30',
+          socket: { remoteAddress: '198.51.100.30' }
+        })
+      )
+    ).rejects.toMatchObject({ status: 401 })
+
+    const unavailableStore: RateLimitStore = {
+      consume: () => Promise.reject(new Error('redis unavailable'))
+    }
+    const unavailableGuard = new DocumentGenerationRateLimitGuard(
+      unavailableStore
+    )
+    await expect(
+      unavailableGuard.canActivate(
+        contextFor({
+          actor: { id: 'student-a' },
+          ip: '198.51.100.30',
+          socket: { remoteAddress: '198.51.100.30' }
+        })
+      )
+    ).rejects.toMatchObject({ status: 503 })
   })
 })
 

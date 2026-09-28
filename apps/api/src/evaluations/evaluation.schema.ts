@@ -12,6 +12,8 @@ const schemaOptions = {
     transform: (_document: unknown, result: Record<string, unknown>) => {
       delete result._id
       delete result.__v
+      delete result.accessPin
+      delete result.accessPinHash
       return result
     }
   }
@@ -220,6 +222,7 @@ EvaluationAssignmentSchema.index(
   { cycleId: 1, placementId: 1 },
   { unique: true }
 )
+EvaluationAssignmentSchema.index({ cycleId: 1, studentId: 1 }, { unique: true })
 
 @Schema({ ...schemaOptions, collection: 'evaluationDrafts' })
 export class EvaluationDraftRecord {

@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import { resolveUniqueStudentPlacement } from '~/utils/document-preview'
+import { adaptCanonicalDocumentForEditor } from '~/utils/document-template-editor'
+import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
+
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
 interface StudentItem {
@@ -81,10 +85,23 @@ export interface CanvasElement {
   padding?: number
   shapeType?: 'rectangle' | 'circle' | 'line' | 'star'
   tableData?: TableData
+  assetKey?: string
+  assetKeys?: string[]
 }
 
 export interface DocumentTemplateItem {
   id: string
+  templateId?: string
+  versionId?: string
+  versionNumber?: number
+  revision?: number
+  versionStatus?: 'draft' | 'published' | 'retired'
+  templateStatus?: 'active' | 'archived'
+  canvasWidth?: number
+  canvasHeight?: number
+  requiresSchemaMigration?: boolean
+  fontAssetKeys?: string[]
+  isLegacy?: boolean
   code: string
   nameTh: string
   nameEn: string
@@ -98,50 +115,322 @@ export interface DocumentTemplateItem {
   elements: CanvasElement[]
 }
 
+interface DocumentTemplateEditorMetadata {
+  readonly nameTh?: string
+  readonly nameEn?: string
+  readonly description?: string
+  readonly backgroundType?: BackgroundType
+  readonly bgOpacity?: number
+}
+
+interface DocumentTemplateVersionSummary {
+  readonly id: string
+  readonly versionNumber: number
+  readonly status: 'draft' | 'published' | 'retired'
+  readonly schemaVersion: number
+  readonly revision: number
+  readonly editorMetadata?: DocumentTemplateEditorMetadata | null
+  readonly fontAssetKeys?: readonly string[]
+}
+
+interface DocumentAssetApiItem {
+  readonly id: string
+  readonly key: string
+  readonly assetType: 'font' | 'emblem' | 'signature' | 'background'
+  readonly originalName: string
+  readonly fontFamily?: string
+  readonly contentType: 'font/ttf' | 'font/otf' | 'image/png'
+  readonly size: number
+}
+
+interface DocumentAssetPage {
+  readonly items: readonly DocumentAssetApiItem[]
+  readonly meta: { readonly totalPages: number }
+}
+
+interface DocumentTemplateApiItem {
+  readonly id: string
+  readonly code: string
+  readonly name: string
+  readonly documentType?: 'transcript' | 'certificate' | null
+  readonly status: 'active' | 'archived'
+  readonly createdAt: string
+  readonly latestVersion?: DocumentTemplateVersionSummary | null
+}
+
+interface DocumentTemplatePage {
+  readonly items: readonly DocumentTemplateApiItem[]
+  readonly meta: { readonly totalPages: number }
+}
+
+interface DocumentTemplateVersionApiRecord extends DocumentTemplateVersionSummary {
+  readonly templateId: string
+  readonly canonicalJson: Readonly<Record<string, unknown>>
+  readonly placeholders: readonly string[]
+}
+
+interface PersistedDocumentTemplate extends DocumentTemplateApiItem {
+  readonly versions: readonly DocumentTemplateVersionApiRecord[]
+}
+
 const api = useApi()
 const toast = useToast()
-const runtimeConfig = useRuntimeConfig()
-const isProduction = runtimeConfig.public.appEnvironment !== 'development'
+const authStore = useAuthStore()
+const isSavingTemplate = ref(false)
+const isPublishingTemplate = ref(false)
+const canManageDocumentTemplates = computed(() => {
+  const actor = authStore.actor
+  if (!actor) return false
+  if (actor.roles.includes('systemAdmin')) return true
+  if (!actor.roles.includes('internshipStaff')) return false
+  if (actor.roleScopes) {
+    return actor.roleScopes.some(
+      (scope) => scope.role === 'internshipStaff' && scope.tenant
+    )
+  }
+  return actor.roles.length === 1 && actor.scope.tenant
+})
+const availableFontAssets = ref<DocumentAssetApiItem[]>([])
+const availableImageAssets = ref<DocumentAssetApiItem[]>([])
+const isLoadingFontAssets = ref(false)
+const isUploadingFontAsset = ref(false)
+const selectedFontFile = ref<File | null>(null)
+const selectedFontFileInput = ref<HTMLInputElement | null>(null)
+const fontRightsBasis = ref('')
+const fontRightsConfirmed = ref(false)
+const isUploadingImageAsset = ref(false)
+const selectedImageFile = ref<File | null>(null)
+const selectedImageFileInput = ref<HTMLInputElement | null>(null)
+const imageRightsBasis = ref('')
+const imageRightsConfirmed = ref(false)
+const selectedImageAssetType = computed(() => {
+  const type = selectedElement.value?.type
+  return type === 'emblem' || type === 'signature' ? type : null
+})
+const selectableImageAssets = computed(() =>
+  selectedImageAssetType.value
+    ? availableImageAssets.value.filter(
+        (asset) => asset.assetType === selectedImageAssetType.value
+      )
+    : []
+)
 
-function showDocumentFeatureUnavailable(): void {
+function showTemplateApiError(error: unknown): void {
+  const statusCode =
+    typeof error === 'object' && error !== null && 'statusCode' in error
+      ? Number(error.statusCode)
+      : typeof error === 'object' && error !== null && 'status' in error
+        ? Number(error.status)
+        : undefined
+  const description =
+    statusCode === 403
+      ? 'บัญชีนี้ไม่มีสิทธิ์จัดการแม่แบบเอกสาร'
+      : statusCode === 409
+        ? 'ข้อมูลแม่แบบเปลี่ยนไปแล้ว กรุณาโหลดใหม่ก่อนบันทึก'
+        : 'บันทึกไม่สำเร็จ ข้อมูลในตัวแก้ไขยังอยู่ กรุณาลองใหม่'
   toast.add({
-    title: 'ยังไม่พร้อมใช้งานใน Production',
-    description:
-      'หน้านี้ยังไม่เชื่อมต่อการบันทึกแม่แบบและการออก PDF ผ่าน API จึงไม่สามารถบันทึกหรือออกเอกสารจริงได้',
-    color: 'warning'
+    title: 'จัดการแม่แบบไม่สำเร็จ',
+    description,
+    color: 'error'
   })
 }
 
+function isBackgroundType(value: unknown): value is BackgroundType {
+  return (
+    value === 'watermark' ||
+    value === 'certificate_pattern' ||
+    value === 'geometric' ||
+    value === 'custom' ||
+    value === 'none'
+  )
+}
+
+function readEditorMetadata(value: unknown): DocumentTemplateEditorMetadata {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return {}
+  }
+  return value as DocumentTemplateEditorMetadata
+}
+
+function mapApiTemplate(
+  template: DocumentTemplateApiItem
+): DocumentTemplateItem {
+  const version = template.latestVersion
+  const metadata = readEditorMetadata(version?.editorMetadata)
+  const hasKnownType =
+    template.documentType === 'transcript' ||
+    template.documentType === 'certificate'
+  return {
+    id: template.id,
+    templateId: template.id,
+    ...(version ? { versionId: version.id } : {}),
+    ...(version ? { versionNumber: version.versionNumber } : {}),
+    ...(version ? { revision: version.revision } : {}),
+    ...(version ? { versionStatus: version.status } : {}),
+    templateStatus: template.status,
+    isLegacy: !hasKnownType || !version,
+    code: template.code,
+    nameTh:
+      typeof metadata.nameTh === 'string' ? metadata.nameTh : template.name,
+    nameEn: typeof metadata.nameEn === 'string' ? metadata.nameEn : '',
+    docType: template.documentType === 'certificate' ? 'certificate' : 'pdf',
+    description:
+      typeof metadata.description === 'string' ? metadata.description : '',
+    createdAt: template.createdAt,
+    status:
+      template.status === 'active' && version?.status === 'published'
+        ? 'active'
+        : 'inactive',
+    backgroundType: isBackgroundType(metadata.backgroundType)
+      ? metadata.backgroundType
+      : 'none',
+    bgOpacity:
+      typeof metadata.bgOpacity === 'number' &&
+      metadata.bgOpacity >= 0 &&
+      metadata.bgOpacity <= 100
+        ? metadata.bgOpacity
+        : 10,
+    elements: []
+  }
+}
+
+async function fetchAllDocumentTemplates(): Promise<{
+  readonly items: readonly DocumentTemplateApiItem[]
+}> {
+  const firstPage = await api<DocumentTemplatePage>('/document-templates', {
+    query: { page: 1, limit: 100 }
+  })
+  const remainingPages = await Promise.all(
+    Array.from({ length: Math.max(0, firstPage.meta.totalPages - 1) }, (_, i) =>
+      api<DocumentTemplatePage>('/document-templates', {
+        query: { page: i + 2, limit: 100 }
+      })
+    )
+  )
+  return {
+    items: [...firstPage.items, ...remainingPages.flatMap((page) => page.items)]
+  }
+}
+
+const {
+  data: templatesData,
+  error: templatesError,
+  pending: templatesPending,
+  refresh: refreshTemplates
+} = await useAsyncData('document-templates-list', fetchAllDocumentTemplates)
+
 // Load dynamic data from system API
-const { data: studentsData } = await useAsyncData('docs-students', () =>
-  api<{ items: StudentItem[] }>('/students', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
+const {
+  data: studentsData,
+  error: studentsError,
+  pending: studentsPending,
+  refresh: refreshStudents
+} = await useAsyncData('docs-students', () =>
+  loadAllPages(
+    (page, pageSize) =>
+      api<PaginatedItems<StudentItem>>('/students', {
+        query: { page, pageSize }
+      }),
+    100
+  )
 )
 
-const { data: schoolsData } = await useAsyncData('docs-schools', () =>
-  api<{ items: SchoolItem[] }>('/academic/schools', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
+const activeStudentId = ref(studentsData.value?.items[0]?.studentId ?? '')
+
+const {
+  data: schoolsData,
+  error: schoolsError,
+  pending: schoolsPending,
+  refresh: refreshSchools
+} = await useAsyncData('docs-schools', () =>
+  loadAllPages(
+    (page, pageSize) =>
+      api<PaginatedItems<SchoolItem>>('/academic/schools', {
+        query: { page, pageSize }
+      }),
+    100
+  )
 )
 
-const { data: programsData } = await useAsyncData('docs-programs', () =>
-  api<{ items: ProgramItem[] }>('/academic/programs', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
+const {
+  data: programsData,
+  error: programsError,
+  pending: programsPending,
+  refresh: refreshPrograms
+} = await useAsyncData('docs-programs', () =>
+  loadAllPages(
+    (page, pageSize) =>
+      api<PaginatedItems<ProgramItem>>('/academic/programs', {
+        query: { page, pageSize }
+      }),
+    100
+  )
 )
 
-const { data: placementsData } = await useAsyncData('docs-placements', () =>
-  api<{ items: PlacementItem[] }>('/placements', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
+const {
+  data: placementsData,
+  error: placementsError,
+  pending: placementsPending,
+  refresh: refreshPlacements
+} = await useAsyncData(
+  'docs-placements',
+  async () => {
+    if (!activeStudentId.value) return { items: [] as PlacementItem[] }
+    return loadAllPages(
+      (page, pageSize) =>
+        api<PaginatedItems<PlacementItem>>('/placements', {
+          query: { studentId: activeStudentId.value, page, pageSize }
+        }),
+      100
+    )
+  },
+  { watch: [activeStudentId] }
 )
 
-const { data: orgsData } = await useAsyncData('docs-orgs', () =>
-  api<{ items: OrganizationItem[] }>('/organizations', {
-    query: { pageSize: 100 }
-  }).catch(() => ({ items: [] }))
+const {
+  data: orgsData,
+  error: organizationsError,
+  pending: organizationsPending,
+  refresh: refreshOrganizations
+} = await useAsyncData('docs-orgs', () =>
+  loadAllPages(
+    (page, pageSize) =>
+      api<PaginatedItems<OrganizationItem>>('/organizations', {
+        query: { page, pageSize }
+      }),
+    100
+  )
 )
+
+const referenceDataError = computed(
+  () =>
+    Boolean(studentsError.value) ||
+    Boolean(schoolsError.value) ||
+    Boolean(programsError.value) ||
+    Boolean(placementsError.value) ||
+    Boolean(organizationsError.value)
+)
+const referenceDataPending = computed(
+  () =>
+    studentsPending.value ||
+    schoolsPending.value ||
+    programsPending.value ||
+    placementsPending.value ||
+    organizationsPending.value
+)
+
+async function retryReferenceData(): Promise<void> {
+  await Promise.allSettled([
+    refreshStudents(),
+    refreshSchools(),
+    refreshPrograms(),
+    refreshPlacements(),
+    refreshOrganizations()
+  ])
+  if (!activeStudentId.value) {
+    activeStudentId.value = studentsData.value?.items[0]?.studentId ?? ''
+  }
+}
 
 // Font Options for Canvas typography
 const fontFamilies = [
@@ -312,7 +601,7 @@ const defaultTranscriptElements: CanvasElement[] = [
   {
     id: 'el-tr-std-year',
     type: 'text',
-    content: 'ปีการศึกษา: 2569 (2026)',
+    content: 'ปีการศึกษา: {{academic_year}}',
     x: 380,
     y: 338,
     width: 340,
@@ -631,10 +920,9 @@ const defaultCertificateElements: CanvasElement[] = [
     textAlign: 'center'
   },
   {
-    id: 'el-cr-detail-grade',
-    type: 'variable',
-    variableKey: 'evaluation_grade',
-    content: 'ด้วยผลการประเมินระดับ {{evaluation_grade}}',
+    id: 'el-cr-detail-training',
+    type: 'text',
+    content: 'ได้เข้ารับการฝึกงาน ณ สถานประกอบการตามหลักสูตร',
     x: 0,
     y: 486,
     width: 1024,
@@ -674,54 +962,17 @@ const defaultCertificateElements: CanvasElement[] = [
   }
 ]
 
-// Table data: Document templates with Canva canvas elements
+// The designer reads persisted templates only; no demo records are mixed into API data.
 const documents = ref<DocumentTemplateItem[]>(
-  isProduction
-    ? []
-    : [
-        {
-          id: 'doc-001',
-          code: 'DOC-TR-001',
-          nameTh: 'ใบบันทึกผลการประเมินการฝึกงาน (Internship Transcript)',
-          nameEn: 'Internship Transcript & Competency Report',
-          docType: 'pdf',
-          description:
-            'เอกสารรายงานผลคะแนนสมรรถนะรายหมวด บันทึกเวลาฝึกงาน และลายมือชื่อรับรอง (A4 แนวตั้ง)',
-          createdAt: '2026-09-02T10:00:00Z',
-          status: 'active',
-          backgroundType: 'watermark',
-          bgOpacity: 12,
-          elements: JSON.parse(JSON.stringify(defaultTranscriptElements))
-        },
-        {
-          id: 'doc-002',
-          code: 'DOC-CR-001',
-          nameTh: 'ใบประกาศนียบัตรรับรองการฝึกงาน (Certificate of Completion)',
-          nameEn: 'Certificate of Professional Internship Completion',
-          docType: 'certificate',
-          description:
-            'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ กรอบทองหรูหราพร้อมตรามหาวิทยาลัย (A4 แนวนอน)',
-          createdAt: '2026-09-02T10:30:00Z',
-          status: 'active',
-          backgroundType: 'certificate_pattern',
-          bgOpacity: 15,
-          elements: JSON.parse(JSON.stringify(defaultCertificateElements))
-        },
-        {
-          id: 'doc-003',
-          code: 'DOC-RF-001',
-          nameTh: 'หนังสือส่งตัวนักศึกษาฝึกงาน (Internship Referral Letter)',
-          nameEn: 'Official Student Internship Referral Letter',
-          docType: 'pdf',
-          description:
-            'หนังสือราชการจากมหาวิทยาลัยส่งตัวนักศึกษาเข้าฝึกงาน ณ สถานประกอบการ',
-          createdAt: '2026-09-01T08:00:00Z',
-          status: 'inactive',
-          backgroundType: 'none',
-          bgOpacity: 10,
-          elements: []
-        }
-      ]
+  (templatesData.value?.items ?? []).map(mapApiTemplate)
+)
+
+watch(
+  templatesData,
+  (result) => {
+    if (result) documents.value = result.items.map(mapApiTemplate)
+  },
+  { immediate: true }
 )
 
 // Search & Filter state
@@ -742,7 +993,8 @@ const filteredDocuments = computed(() => {
       statusFilter.value === 'all' || doc.status === statusFilter.value
 
     const matchesType =
-      typeFilter.value === 'all' || doc.docType === typeFilter.value
+      typeFilter.value === 'all' ||
+      (!doc.isLegacy && doc.docType === typeFilter.value)
 
     return matchesSearch && matchesStatus && matchesType
   })
@@ -779,15 +1031,65 @@ watch([searchQuery, statusFilter, typeFilter, pageSize], () => {
 // =========================================================================
 const isCanvaStudioOpen = ref(false)
 const activeEditingDoc = ref<DocumentTemplateItem | null>(null)
+const savedEditorState = ref<string | null>(null)
+function getDocumentCanvasSize(doc: DocumentTemplateItem): {
+  readonly width: number
+  readonly height: number
+} {
+  return {
+    width: doc.canvasWidth ?? (doc.docType === 'pdf' ? 794 : 1024),
+    height: doc.canvasHeight ?? (doc.docType === 'pdf' ? 1040 : 724)
+  }
+}
+const studioCanvasWidth = computed(() =>
+  activeEditingDoc.value
+    ? getDocumentCanvasSize(activeEditingDoc.value).width
+    : 794
+)
+const studioCanvasHeight = computed(() =>
+  activeEditingDoc.value
+    ? getDocumentCanvasSize(activeEditingDoc.value).height
+    : 1040
+)
+function getStudioEditorState(doc: DocumentTemplateItem): string {
+  return JSON.stringify({
+    canonicalJson: buildCanonicalJson(doc),
+    fontAssetKeys: doc.fontAssetKeys ?? []
+  })
+}
+
+const selectedDocumentFontKey = computed({
+  get: () => activeEditingDoc.value?.fontAssetKeys?.[0] ?? '',
+  set: (key: string) => {
+    if (activeEditingDoc.value) {
+      activeEditingDoc.value.fontAssetKeys = key ? [key] : []
+    }
+  }
+})
+const selectedFontAssetUnavailable = computed(() => {
+  const selectedKey = selectedDocumentFontKey.value
+  return (
+    !!selectedKey &&
+    !availableFontAssets.value.some((asset) => asset.key === selectedKey)
+  )
+})
+
+const hasUnsavedChanges = computed(() => {
+  const doc = activeEditingDoc.value
+  if (!doc) return false
+  const currentState = getStudioEditorState(doc)
+  return (
+    !doc.templateId ||
+    doc.requiresSchemaMigration === true ||
+    savedEditorState.value !== currentState
+  )
+})
 const selectedElementId = ref<string | null>(null)
 const canvasScale = ref<number>(0.9) // zoom level
 const canvaSidebarTab = ref<
   'variables' | 'text' | 'shapes' | 'tables' | 'elements' | 'background'
 >('variables')
 const livePreviewMode = ref<'variables' | 'real_data'>('real_data')
-
-// Active dynamic student selection
-const activeStudentId = ref<string>('')
 
 const dynamicStudentValues = computed(() => {
   const std = studentsData.value?.items?.find(
@@ -797,14 +1099,19 @@ const dynamicStudentValues = computed(() => {
   const program = programsData.value?.items?.find(
     (p) => p.id === std?.programId
   )
-  const placement = placementsData.value?.items?.find(
-    (p) => p.studentId === std?.id || p.studentId === std?.studentId
-  )
+  const { placement, ambiguous: placementAmbiguous } =
+    resolveUniqueStudentPlacement(
+      placementsData.value?.items ?? [],
+      std?.id,
+      std?.studentId
+    )
   const org = orgsData.value?.items?.find(
     (o) => o.id === placement?.organizationId
   )
 
-  let period = '[ยังไม่มีช่วงเวลาฝึกงาน]'
+  let period = placementAmbiguous
+    ? '[เลือกภาคการศึกษาของการฝึกงาน]'
+    : '[ไม่พบข้อมูลช่วงเวลาฝึกงาน]'
   if (placement?.startsAt && placement?.endsAt) {
     const sDate = new Date(placement.startsAt).toLocaleDateString('th-TH', {
       year: 'numeric',
@@ -835,7 +1142,7 @@ const dynamicStudentValues = computed(() => {
     position_title: placement?.positionTitle?.th || '[ไม่พบตำแหน่งฝึกงาน]',
     training_period: period,
     total_hours: '[ยังไม่มีข้อมูลชั่วโมงจากระบบ]',
-    evaluation_grade: '[ยังไม่มีผลประเมินจากระบบ]',
+    evaluation_grade: '[ไม่มีเกรดรวมตามนโยบาย MVP]',
     issue_date: '[กำหนดเมื่อออกเอกสารจริง]',
     doc_number: '[กำหนดเลขที่โดยระบบเมื่อออกเอกสารจริง]'
   }
@@ -863,6 +1170,7 @@ function renderElementContent(text: string): string {
 // Available Dynamic Variables Chips
 const availableVariables = [
   { key: 'student_id', label: 'รหัสนักศึกษา', tag: '{{student_id}}' },
+  { key: 'academic_year', label: 'ปีการศึกษา', tag: '{{academic_year}}' },
   {
     key: 'student_name_th',
     label: 'ชื่อ-นามสกุล (ไทย)',
@@ -887,11 +1195,6 @@ const availableVariables = [
     tag: '{{training_period}}'
   },
   { key: 'total_hours', label: 'จำนวนชั่วโมงรวม', tag: '{{total_hours}}' },
-  {
-    key: 'evaluation_grade',
-    label: 'ผลการประเมิน/เกรด',
-    tag: '{{evaluation_grade}}'
-  },
   { key: 'issue_date', label: 'วันที่ออกเอกสาร', tag: '{{issue_date}}' },
   { key: 'doc_number', label: 'เลขที่เอกสาร', tag: '{{doc_number}}' }
 ]
@@ -900,30 +1203,26 @@ const availableVariables = [
 const isFormatSelectModalOpen = ref(false)
 
 function openCreateChooser() {
-  if (isProduction) {
-    showDocumentFeatureUnavailable()
-    return
-  }
+  if (!canManageDocumentTemplates.value) return
   isFormatSelectModalOpen.value = true
 }
 
 function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
-  if (isProduction) {
-    showDocumentFeatureUnavailable()
-    return
-  }
+  if (!canManageDocumentTemplates.value) return
   isFormatSelectModalOpen.value = false
+  const code = `DOC-${type === 'certificate' ? 'CR' : 'TR'}-${Date.now().toString(36).toUpperCase()}`
   if (type === 'certificate') {
     const newDoc: DocumentTemplateItem = {
-      id: `doc-${Date.now()}`,
-      code: `DOC-CR-${Math.floor(100 + Math.random() * 900)}`,
+      id: `draft-${code}`,
+      code,
       nameTh: 'ใบประกาศนียบัตรรับรองการฝึกงาน (Certificate of Completion)',
       nameEn: 'Certificate of Professional Internship Completion',
       docType: 'certificate',
       description:
         'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ (A4 แนวนอน)',
       createdAt: new Date().toISOString(),
-      status: 'active',
+      status: 'inactive',
+      versionStatus: 'draft',
       backgroundType: 'certificate_pattern',
       bgOpacity: 15,
       elements: JSON.parse(JSON.stringify(defaultCertificateElements))
@@ -931,15 +1230,16 @@ function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
     activeEditingDoc.value = newDoc
   } else {
     const newDoc: DocumentTemplateItem = {
-      id: `doc-${Date.now()}`,
-      code: `DOC-TR-${Math.floor(100 + Math.random() * 900)}`,
+      id: `draft-${code}`,
+      code,
       nameTh: 'ใบบันทึกผลการประเมินการฝึกงาน (Internship Transcript)',
       nameEn: 'Internship Transcript & Competency Report',
       docType: 'pdf',
       description:
         'เอกสารรายงานผลคะแนนสมรรถนะรายหมวด บันทึกเวลาฝึกงาน (A4 แนวตั้ง)',
       createdAt: new Date().toISOString(),
-      status: 'active',
+      status: 'inactive',
+      versionStatus: 'draft',
       backgroundType: 'watermark',
       bgOpacity: 12,
       elements: JSON.parse(JSON.stringify(defaultTranscriptElements))
@@ -948,66 +1248,542 @@ function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
   }
 
   selectedElementId.value = activeEditingDoc.value?.elements?.[0]?.id || null
+  savedEditorState.value = null
   isCanvaStudioOpen.value = true
+  void refreshFontAssets()
 }
 
-// Open Canva Studio
-function openCanvaStudio(doc?: DocumentTemplateItem) {
-  if (isProduction) {
-    showDocumentFeatureUnavailable()
+async function refreshFontAssets(showError = true): Promise<void> {
+  isLoadingFontAssets.value = true
+  try {
+    availableFontAssets.value = await fetchAllDocumentAssets('font')
+  } catch (error: unknown) {
+    if (showError) showTemplateApiError(error)
+  } finally {
+    isLoadingFontAssets.value = false
+  }
+}
+
+async function refreshImageAssets(showError = true): Promise<void> {
+  try {
+    availableImageAssets.value = [
+      ...(await fetchAllDocumentAssets('emblem')),
+      ...(await fetchAllDocumentAssets('signature'))
+    ]
+  } catch (error: unknown) {
+    if (showError) showTemplateApiError(error)
+  }
+}
+
+async function fetchAllDocumentAssets(
+  assetType: 'font' | 'emblem' | 'signature'
+): Promise<DocumentAssetApiItem[]> {
+  const firstPage = await api<DocumentAssetPage>('/document-assets', {
+    query: { assetType, page: 1, pageSize: 100 }
+  })
+  const rest = await Promise.all(
+    Array.from({ length: Math.max(0, firstPage.meta.totalPages - 1) }, (_, i) =>
+      api<DocumentAssetPage>('/document-assets', {
+        query: { assetType, page: i + 2, pageSize: 100 }
+      })
+    )
+  )
+  return [firstPage.items, ...rest.map((page) => page.items)].flat()
+}
+
+function handleSelectedFontFileChange(event: Event): void {
+  const input = event.target
+  selectedFontFile.value =
+    input instanceof HTMLInputElement ? (input.files?.[0] ?? null) : null
+}
+
+async function uploadSelectedFont(): Promise<void> {
+  if (!canManageDocumentTemplates.value) return
+  const file = selectedFontFile.value
+  const rightsBasis = fontRightsBasis.value.trim()
+  if (!file || !rightsBasis || !fontRightsConfirmed.value) {
+    toast.add({
+      title: 'ข้อมูลฟอนต์ยังไม่ครบ',
+      description: 'เลือกไฟล์ ระบุที่มาสิทธิ์ และยืนยันว่ามีสิทธิ์ใช้ไฟล์นี้',
+      color: 'warning'
+    })
     return
   }
-  if (doc) {
-    activeEditingDoc.value = JSON.parse(JSON.stringify(doc))
-    selectedElementId.value = activeEditingDoc.value?.elements?.[0]?.id || null
-    isCanvaStudioOpen.value = true
-  } else {
+
+  const form = new FormData()
+  form.append('file', file)
+  form.append('assetType', 'font')
+  form.append('rightsBasis', rightsBasis)
+  form.append('rightsConfirmed', 'true')
+  isUploadingFontAsset.value = true
+  try {
+    const asset = await api<DocumentAssetApiItem>('/document-assets', {
+      method: 'POST',
+      body: form
+    })
+    availableFontAssets.value = [
+      asset,
+      ...availableFontAssets.value.filter((item) => item.key !== asset.key)
+    ]
+    selectedDocumentFontKey.value = asset.key
+    selectedFontFile.value = null
+    if (selectedFontFileInput.value) selectedFontFileInput.value.value = ''
+    fontRightsConfirmed.value = false
+    toast.add({
+      title: 'ลงทะเบียนฟอนต์ในพื้นที่ส่วนตัวแล้ว',
+      description:
+        'ฟอนต์ถูกเลือกให้ Draft นี้ ต้องบันทึก Draft เพื่อเก็บการเลือก',
+      color: 'success'
+    })
+  } catch (error: unknown) {
+    showTemplateApiError(error)
+  } finally {
+    isUploadingFontAsset.value = false
+  }
+}
+
+async function openCanvaStudio(doc?: DocumentTemplateItem) {
+  if (!canManageDocumentTemplates.value) return
+  if (!doc) {
     openCreateChooser()
+    return
+  }
+  if (doc.isLegacy || !doc.versionId) {
+    toast.add({
+      title: 'แม่แบบรุ่นเก่ายังเปิดแก้ไขไม่ได้',
+      description:
+        'ข้อมูลไม่มีชนิดเอกสารหรือ canonical layout ครบ จึงไม่เปิดเขียนทับข้อมูลเดิม',
+      color: 'warning'
+    })
+    return
+  }
+  if (doc.templateStatus === 'archived') {
+    toast.add({
+      title: 'แม่แบบถูกเก็บถาวรแล้ว',
+      description: 'เปิดดูและแก้ไขแม่แบบที่เก็บถาวรไม่ได้',
+      color: 'warning'
+    })
+    return
+  }
+
+  try {
+    const version = await api<DocumentTemplateVersionApiRecord>(
+      `/document-template-versions/${doc.versionId}`
+    )
+    if ((version.fontAssetKeys?.length ?? 0) > 1) {
+      toast.add({
+        title: 'แม่แบบมีการผูกฟอนต์หลายไฟล์',
+        description:
+          'renderer รุ่นนี้รองรับฟอนต์หลักหนึ่งไฟล์ จึงไม่เปิดบันทึกทับเพื่อป้องกันข้อมูลฟอนต์สูญหาย',
+        color: 'warning'
+      })
+      return
+    }
+    const adapted = adaptCanonicalDocumentForEditor(
+      version.canonicalJson,
+      version.schemaVersion,
+      version.placeholders
+    )
+    if (!adapted) {
+      toast.add({
+        title: 'รูปแบบแม่แบบยังไม่รองรับ',
+        description:
+          'ข้อมูลแม่แบบไม่ผ่านการตรวจ schema ที่รองรับ ข้อมูลเดิมไม่ถูกแก้ไข',
+        color: 'warning'
+      })
+      return
+    }
+    const canonical = adapted.document
+    const metadata = readEditorMetadata(canonical.editorMetadata)
+    activeEditingDoc.value = {
+      ...doc,
+      canvasWidth: canonical.width,
+      canvasHeight: canonical.height,
+      requiresSchemaMigration: adapted.migratedFromV1,
+      nameTh:
+        typeof metadata.nameTh === 'string' ? metadata.nameTh : doc.nameTh,
+      nameEn:
+        typeof metadata.nameEn === 'string' ? metadata.nameEn : doc.nameEn,
+      description:
+        typeof metadata.description === 'string'
+          ? metadata.description
+          : doc.description,
+      backgroundType: isBackgroundType(metadata.backgroundType)
+        ? metadata.backgroundType
+        : doc.backgroundType,
+      bgOpacity:
+        typeof metadata.bgOpacity === 'number'
+          ? metadata.bgOpacity
+          : doc.bgOpacity,
+      versionId: version.id,
+      versionNumber: version.versionNumber,
+      revision: version.revision,
+      versionStatus: version.status,
+      fontAssetKeys: [...(version.fontAssetKeys ?? [])],
+      elements: canonical.elements.map((element) =>
+        structuredClone(element)
+      ) as CanvasElement[]
+    }
+    selectedElementId.value = activeEditingDoc.value.elements[0]?.id || null
+    savedEditorState.value = getStudioEditorState(activeEditingDoc.value)
+    isCanvaStudioOpen.value = true
+    if (adapted.migratedFromV1) {
+      toast.add({
+        title: 'เปิดแม่แบบรุ่นเก่าในตัวแก้ไขได้แล้ว',
+        description:
+          'บันทึกจะย้าย Draft นี้เป็น schema รุ่นใหม่ โดยเก็บฉบับ Published เดิมไว้',
+        color: 'warning'
+      })
+    }
+    void refreshFontAssets()
+    void refreshImageAssets()
+  } catch (error: unknown) {
+    showTemplateApiError(error)
   }
 }
 
-// Save Changes from Studio back to documents list
-function saveStudioChanges() {
-  if (isProduction) {
-    showDocumentFeatureUnavailable()
+function handleSelectedImageFileChange(event: Event): void {
+  const input = event.target
+  selectedImageFile.value =
+    input instanceof HTMLInputElement ? (input.files?.[0] ?? null) : null
+}
+
+function selectedSignatureAssetKey(index: 0 | 1): string {
+  const selected = selectedElement.value
+  return selected?.type === 'signature'
+    ? (selected.assetKeys?.[index] ?? '')
+    : ''
+}
+
+function imageAssetLabel(key: string | undefined): string {
+  if (!key) return 'ยังไม่เลือก asset ที่ได้รับอนุมัติ'
+  return (
+    availableImageAssets.value.find((asset) => asset.key === key)
+      ?.originalName ?? 'ไม่พบ asset นี้ในคลังที่ใช้งานได้'
+  )
+}
+
+function setSignatureAssetKey(index: 0 | 1, key: string): void {
+  const selected = selectedElement.value
+  if (selected?.type !== 'signature') return
+  const keys: [string, string] = [
+    selected.assetKeys?.[0] ?? '',
+    selected.assetKeys?.[1] ?? ''
+  ]
+  keys[index] = key
+  selected.assetKeys = keys
+}
+
+async function uploadSelectedImageAsset(): Promise<void> {
+  if (!canManageDocumentTemplates.value) return
+  const file = selectedImageFile.value
+  const assetType = selectedImageAssetType.value
+  const rightsBasis = imageRightsBasis.value.trim()
+  if (!assetType || !file || !rightsBasis || !imageRightsConfirmed.value) {
+    toast.add({
+      title: 'ข้อมูลรูปภาพยังไม่ครบ',
+      description:
+        'เลือกไฟล์ PNG ระบุที่มาสิทธิ์ และยืนยันว่ามีสิทธิ์ใช้ไฟล์นี้',
+      color: 'warning'
+    })
     return
   }
-  if (!activeEditingDoc.value) return
+  if (file.size === 0 || file.size > 8 * 1024 * 1024) {
+    toast.add({
+      title: 'ขนาดไฟล์ไม่ถูกต้อง',
+      description: 'ไฟล์รูปภาพต้องมีขนาดไม่เกิน 8 MB',
+      color: 'warning'
+    })
+    return
+  }
 
-  // Enforce single active document PER TYPE rule (PDF มีได้ 1 อัน, Certificate มีได้ 1 อัน)
-  if (activeEditingDoc.value.status === 'active') {
-    for (const d of documents.value) {
-      if (
-        d.docType === activeEditingDoc.value.docType &&
-        d.id !== activeEditingDoc.value.id
-      ) {
-        d.status = 'inactive'
+  const form = new FormData()
+  form.append('file', file)
+  form.append('assetType', assetType)
+  form.append('rightsBasis', rightsBasis)
+  form.append('rightsConfirmed', 'true')
+  isUploadingImageAsset.value = true
+  try {
+    const asset = await api<DocumentAssetApiItem>('/document-assets', {
+      method: 'POST',
+      body: form
+    })
+    availableImageAssets.value = [
+      asset,
+      ...availableImageAssets.value.filter((item) => item.key !== asset.key)
+    ]
+    if (assetType === 'emblem' && selectedElement.value?.type === 'emblem') {
+      selectedElement.value.assetKey = asset.key
+    }
+    if (
+      assetType === 'signature' &&
+      selectedElement.value?.type === 'signature'
+    ) {
+      const keys = selectedElement.value.assetKeys ?? []
+      const emptyIndex = keys[0] ? (keys[1] ? -1 : 1) : 0
+      if (emptyIndex === 0 || emptyIndex === 1) {
+        setSignatureAssetKey(emptyIndex, asset.key)
       }
     }
-  }
-
-  const idx = documents.value.findIndex(
-    (d) => d.id === activeEditingDoc.value?.id
-  )
-  if (idx !== -1) {
-    documents.value[idx] = JSON.parse(JSON.stringify(activeEditingDoc.value))
+    selectedImageFile.value = null
+    if (selectedImageFileInput.value) selectedImageFileInput.value.value = ''
+    imageRightsBasis.value = ''
+    imageRightsConfirmed.value = false
     toast.add({
-      title: 'บันทึกฉบับทดลองในหน้าปัจจุบันแล้ว',
+      title: 'ลงทะเบียนรูปภาพส่วนตัวแล้ว',
       description:
-        'การเปลี่ยนแปลงนี้ยังไม่ถูกบันทึกลงฐานข้อมูล และจะหายเมื่อออกจากหน้านี้',
-      color: 'warning'
+        'รูปถูกเลือกให้ Draft นี้ ต้องบันทึก Draft เพื่อเก็บการเลือก',
+      color: 'success'
     })
-  } else {
-    documents.value.unshift(JSON.parse(JSON.stringify(activeEditingDoc.value)))
-    toast.add({
-      title: 'เพิ่มฉบับทดลองในหน้าปัจจุบันแล้ว',
-      description:
-        'แม่แบบนี้ยังไม่ถูกบันทึกลงฐานข้อมูล และใช้สร้างเอกสารจริงไม่ได้',
-      color: 'warning'
-    })
+  } catch (error: unknown) {
+    showTemplateApiError(error)
+  } finally {
+    isUploadingImageAsset.value = false
   }
+}
 
+function buildCanonicalJson(
+  doc: DocumentTemplateItem
+): Record<string, unknown> {
+  const canvas = getDocumentCanvasSize(doc)
+  return {
+    width: canvas.width,
+    height: canvas.height,
+    elements: JSON.parse(JSON.stringify(doc.elements)) as CanvasElement[],
+    editorMetadata: {
+      nameTh: doc.nameTh,
+      nameEn: doc.nameEn,
+      description: doc.description,
+      backgroundType: doc.backgroundType,
+      bgOpacity: doc.bgOpacity
+    }
+  }
+}
+
+function requestCloseStudio(): void {
+  if (isSavingTemplate.value || isPublishingTemplate.value) return
+  if (
+    hasUnsavedChanges.value &&
+    !window.confirm(
+      'มีการแก้ไขที่ยังไม่บันทึก ต้องการปิดและทิ้งการแก้ไขหรือไม่?'
+    )
+  ) {
+    return
+  }
   isCanvaStudioOpen.value = false
+  activeEditingDoc.value = null
+  savedEditorState.value = null
+}
+
+function getTemplatePlaceholders(elements: readonly CanvasElement[]): string[] {
+  const content = JSON.stringify(elements)
+  return [
+    ...new Set(
+      [...content.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)].map(
+        (match) => match[1] ?? ''
+      )
+    )
+  ]
+    .filter(Boolean)
+    .sort()
+}
+
+async function publishStudioDraft(): Promise<void> {
+  const doc = activeEditingDoc.value
+  if (
+    !doc ||
+    !canManageDocumentTemplates.value ||
+    !doc.templateId ||
+    !doc.versionId ||
+    doc.versionStatus !== 'draft' ||
+    doc.templateStatus !== 'active' ||
+    isSavingTemplate.value ||
+    isPublishingTemplate.value
+  ) {
+    return
+  }
+  if (hasUnsavedChanges.value) {
+    toast.add({
+      title: 'บันทึก Draft ก่อนเผยแพร่',
+      description: 'ระบบจะเผยแพร่เฉพาะ version ที่บันทึกแล้ว',
+      color: 'warning'
+    })
+    return
+  }
+  if (
+    !window.confirm(
+      'ยืนยันเผยแพร่แม่แบบนี้หรือไม่? ฉบับ Published จะแก้ไขไม่ได้ และการออก PDF จริงยังปิดจนกว่าจะผ่านการตรวจรับอย่างเป็นทางการ'
+    )
+  ) {
+    return
+  }
+
+  isPublishingTemplate.value = true
+  try {
+    const publishedVersion = await api<DocumentTemplateVersionApiRecord>(
+      `/document-template-versions/${doc.versionId}/publish`,
+      { method: 'POST' }
+    )
+    const publishedDoc: DocumentTemplateItem = {
+      ...doc,
+      versionId: publishedVersion.id,
+      versionNumber: publishedVersion.versionNumber,
+      revision: publishedVersion.revision,
+      versionStatus: publishedVersion.status,
+      status: 'active'
+    }
+    activeEditingDoc.value = publishedDoc
+    documents.value = documents.value.map((item) =>
+      item.templateId === doc.templateId ? publishedDoc : item
+    )
+    toast.add({
+      title: 'เผยแพร่แม่แบบแล้ว',
+      description:
+        'ระบบตรวจและล็อก version นี้แล้ว; การออก PDF ยังรอการตรวจรับอย่างเป็นทางการ',
+      color: 'success'
+    })
+    void refreshTemplates().catch(() => {
+      toast.add({
+        title: 'เผยแพร่แล้ว แต่รีโหลดรายการไม่สำเร็จ',
+        description:
+          'แม่แบบถูก Published จาก API แล้ว; ลองรีโหลดรายการเพื่อยืนยันสถานะล่าสุด',
+        color: 'warning'
+      })
+    })
+  } catch (error: unknown) {
+    const statusCode =
+      typeof error === 'object' && error !== null && 'statusCode' in error
+        ? Number(error.statusCode)
+        : typeof error === 'object' && error !== null && 'status' in error
+          ? Number(error.status)
+          : undefined
+    const description =
+      statusCode === 403
+        ? 'บัญชีนี้ไม่มีสิทธิ์เผยแพร่แม่แบบเอกสาร'
+        : statusCode === 409
+          ? 'Draft เปลี่ยนสถานะหรือ revision แล้ว กรุณาโหลดแม่แบบใหม่'
+          : statusCode === 422
+            ? 'แม่แบบไม่ผ่านการตรวจ schema, placeholder, geometry, asset หรือข้อมูลฟอนต์ แก้ Draft แล้วลองใหม่'
+            : 'เผยแพร่ไม่สำเร็จ Draft ยังอยู่ กรุณาตรวจการเชื่อมต่อแล้วลองใหม่'
+    toast.add({
+      title: 'เผยแพร่แม่แบบไม่สำเร็จ',
+      description,
+      color: 'error'
+    })
+  } finally {
+    isPublishingTemplate.value = false
+  }
+}
+
+// Persist edits as versioned Drafts; PDF issuance remains disabled pending official UAT.
+async function saveStudioChanges() {
+  const doc = activeEditingDoc.value
+  if (
+    !canManageDocumentTemplates.value ||
+    !doc ||
+    isSavingTemplate.value ||
+    isPublishingTemplate.value
+  )
+    return
+  if (
+    doc.templateId &&
+    !doc.requiresSchemaMigration &&
+    !hasUnsavedChanges.value
+  ) {
+    toast.add({
+      title: 'ไม่มีการแก้ไขใหม่',
+      description: 'ไม่สร้าง version เพิ่ม เพราะเนื้อหาเหมือนฉบับที่บันทึกแล้ว',
+      color: 'neutral'
+    })
+    return
+  }
+  if (doc.backgroundType === 'custom') {
+    toast.add({
+      title: 'ยังบันทึกพื้นหลังนี้ไม่ได้',
+      description:
+        'อัปโหลด asset ผ่านพื้นที่จัดเก็บส่วนตัวก่อน จึงจะบันทึกพื้นหลังแบบกำหนดเองได้',
+      color: 'warning'
+    })
+    return
+  }
+
+  const canonicalJson = buildCanonicalJson(doc)
+  const placeholders = getTemplatePlaceholders(doc.elements)
+  const payload = {
+    schemaVersion: 2,
+    canonicalJson,
+    placeholders,
+    fontAssetKeys: [...(doc.fontAssetKeys ?? [])]
+  }
+  isSavingTemplate.value = true
+  try {
+    let templateId = doc.templateId
+    let savedVersion: DocumentTemplateVersionApiRecord
+    if (!templateId) {
+      const created = await api<PersistedDocumentTemplate>(
+        '/document-templates',
+        {
+          method: 'POST',
+          body: {
+            code: doc.code,
+            name: doc.nameTh,
+            documentType:
+              doc.docType === 'certificate' ? 'certificate' : 'transcript',
+            ...payload
+          }
+        }
+      )
+      templateId = created.id
+      const initialVersion = created.versions[0]
+      if (!initialVersion) throw new Error('Initial template version missing')
+      savedVersion = initialVersion
+    } else if (doc.versionStatus === 'draft' && doc.versionId) {
+      savedVersion = await api<DocumentTemplateVersionApiRecord>(
+        `/document-template-versions/${doc.versionId}`,
+        {
+          method: 'PATCH',
+          body: { revision: doc.revision ?? 1, ...payload }
+        }
+      )
+    } else {
+      savedVersion = await api<DocumentTemplateVersionApiRecord>(
+        `/document-templates/${templateId}/versions`,
+        { method: 'POST', body: payload }
+      )
+    }
+
+    const savedDoc: DocumentTemplateItem = {
+      ...doc,
+      id: templateId,
+      templateId,
+      versionId: savedVersion.id,
+      versionNumber: savedVersion.versionNumber,
+      revision: savedVersion.revision,
+      versionStatus: savedVersion.status,
+      requiresSchemaMigration: false,
+      fontAssetKeys: [...(savedVersion.fontAssetKeys ?? payload.fontAssetKeys)],
+      isLegacy: false,
+      status: savedVersion.status === 'published' ? 'active' : 'inactive'
+    }
+    documents.value = [
+      savedDoc,
+      ...documents.value.filter((item) => item.templateId !== templateId)
+    ]
+    isCanvaStudioOpen.value = false
+    activeEditingDoc.value = null
+    savedEditorState.value = null
+    toast.add({
+      title: 'บันทึกฉบับร่างลงระบบแล้ว',
+      description:
+        'แม่แบบถูกบันทึกเป็น versioned Draft; ยังไม่เผยแพร่และยังออก PDF จริงไม่ได้',
+      color: 'success'
+    })
+    await refreshTemplates()
+  } catch (error: unknown) {
+    showTemplateApiError(error)
+  } finally {
+    isSavingTemplate.value = false
+  }
 }
 
 // Current Selected Element in Studio
@@ -1080,14 +1856,14 @@ function sendToBack() {
 
 function centerHorizontally() {
   if (!activeEditingDoc.value || !selectedElement.value) return
-  const canvasWidth = activeEditingDoc.value.docType === 'pdf' ? 794 : 1024
+  const canvasWidth = getDocumentCanvasSize(activeEditingDoc.value).width
   const elWidth = selectedElement.value.width || 200
   selectedElement.value.x = Math.round((canvasWidth - elWidth) / 2)
 }
 
 function centerVertically() {
   if (!activeEditingDoc.value || !selectedElement.value) return
-  const canvasHeight = activeEditingDoc.value.docType === 'pdf' ? 1000 : 724
+  const canvasHeight = getDocumentCanvasSize(activeEditingDoc.value).height
   const elHeight = selectedElement.value.height || 40
   selectedElement.value.y = Math.round((canvasHeight - elHeight) / 2)
 }
@@ -1233,43 +2009,25 @@ function addCustomTable(preset: 'competency' | 'hours_log' | 'blank_3x3') {
         'ลายมือชื่อผู้คุม'
       ],
       rows: [
-        [
-          '1',
-          '1 มิ.ย. 2569',
-          'ปฐมนิเทศและรับมอบหมายระบบงาน',
-          '8.0',
-          '....................'
-        ],
-        [
-          '2',
-          '2 มิ.ย. 2569',
-          'วิเคราะห์ความต้องการและการออกแบบ UI',
-          '8.0',
-          '....................'
-        ],
-        [
-          '3',
-          '3 มิ.ย. 2569',
-          'พัฒนา REST API และเชื่อมต่อ Database',
-          '8.0',
-          '....................'
-        ]
+        ['1', '', '', '', ''],
+        ['2', '', '', '', ''],
+        ['3', '', '', '', '']
       ]
     }
   } else if (preset === 'blank_3x3') {
     tableData = {
       headers: ['หัวข้อคอลัมน์ 1', 'หัวข้อคอลัมน์ 2', 'หัวข้อคอลัมน์ 3'],
       rows: [
-        ['แถวที่ 1 ข้อมูล A', 'แถวที่ 1 ข้อมูล B', 'แถวที่ 1 ข้อมูล C'],
-        ['แถวที่ 2 ข้อมูล A', 'แถวที่ 2 ข้อมูล B', 'แถวที่ 2 ข้อมูล C']
+        ['', '', ''],
+        ['', '', '']
       ]
     }
   } else {
     tableData = {
-      headers: ['หมวดสมรรถนะ', 'เกณฑ์', 'คะแนน', 'ผลประเมิน'],
+      headers: ['หมวดทักษะ', 'คะแนนเฉลี่ย', 'จำนวนข้อที่ตอบ'],
       rows: [
-        ['1. ทักษะทั่วไปและการสื่อสาร', '5.00', '4.80', 'ผ่านเกณฑ์'],
-        ['2. ทักษะวิชาชีพและการปฏิบัติงาน', '5.00', '4.90', 'ผ่านเกณฑ์ดีเยี่ยม']
+        ['Hard Skill', '—', '—'],
+        ['Soft Skill', '—', '—']
       ]
     }
   }
@@ -1297,7 +2055,7 @@ function addCustomTable(preset: 'competency' | 'hours_log' | 'blank_3x3') {
 function addTableRow() {
   if (!selectedElement.value?.tableData) return
   const cols = selectedElement.value.tableData.headers.length
-  const newRow = Array(cols).fill('ข้อมูลใหม่')
+  const newRow = Array(cols).fill('')
   selectedElement.value.tableData.rows.push(newRow)
 }
 
@@ -1306,7 +2064,7 @@ function addTableColumn() {
   const colNum = selectedElement.value.tableData.headers.length + 1
   selectedElement.value.tableData.headers.push(`หัวข้อ ${colNum}`)
   for (const row of selectedElement.value.tableData.rows) {
-    row.push('-')
+    row.push('')
   }
 }
 
@@ -1437,72 +2195,60 @@ function handleStudioBgUpload(event: Event) {
   }
   reader.readAsDataURL(file)
 }
-
-// Quick Actions in Table: Enforce single active document PER TYPE rule
-function handleToggleStatus(doc: DocumentTemplateItem) {
-  if (isProduction) {
-    showDocumentFeatureUnavailable()
-    return
-  }
-  if (doc.status === 'active') {
-    doc.status = 'inactive'
-    toast.add({
-      title: 'ปิดใช้งานแม่แบบ',
-      description: `ปิดการใช้งาน ${doc.nameTh} เรียบร้อยแล้ว`,
-      color: 'neutral'
-    })
-    return
-  }
-
-  // Deactivate other templates OF THE SAME TYPE so only 1 template is active per type!
-  for (const item of documents.value) {
-    if (item.docType === doc.docType && item.id !== doc.id) {
-      item.status = 'inactive'
-    }
-  }
-  doc.status = 'active'
-  const typeLabel =
-    doc.docType === 'pdf'
-      ? 'PDF (ใบบันทึกผล)'
-      : 'Certification (ใบประกาศนียบัตร)'
-  toast.add({
-    title: 'เปลี่ยนสถานะฉบับทดลองแล้ว',
-    description: `การเปลี่ยนสถานะ "${doc.nameTh}" มีผลเฉพาะในหน้านี้ และยังไม่ใช่สถานะใช้งานจริง (${typeLabel})`,
-    color: 'warning'
-  })
-}
-
-function handleDeleteDocument(doc: DocumentTemplateItem) {
-  if (isProduction) {
-    showDocumentFeatureUnavailable()
-    return
-  }
-  documents.value = documents.value.filter((d) => d.id !== doc.id)
-  toast.add({
-    title: 'นำออกจากรายการฉบับทดลองแล้ว',
-    description: `การนำ ${doc.nameTh} ออกจากรายการมีผลเฉพาะในหน้านี้ ไม่ได้ลบข้อมูลในระบบ`,
-    color: 'warning'
-  })
-}
 </script>
 
 <template>
   <div class="space-y-6">
     <UAlert
-      :color="isProduction ? 'error' : 'warning'"
-      :icon="isProduction ? 'i-lucide-circle-alert' : 'i-lucide-flask-conical'"
-      :title="
-        isProduction
-          ? 'ระบบจัดการแม่แบบและออกเอกสารยังไม่พร้อมใช้งานใน Production'
-          : 'โหมดตัวอย่าง Development — ข้อมูลและการแก้ไขไม่ถูกบันทึกลงระบบ'
-      "
-      :description="
-        isProduction
-          ? 'หน้า Designer นี้ยังไม่เชื่อมต่อการบันทึกแม่แบบและการออก PDF ผ่าน API จึงปิดการสร้าง แก้ไข และพิมพ์เอกสารจริงไว้'
-          : 'แม่แบบในหน้านี้เป็นข้อมูลตัวอย่าง การพิมพ์ถูกปิดไว้ และการแก้ไขจะหายเมื่อออกจากหน้านี้'
-      "
+      color="warning"
+      icon="i-lucide-shield-check"
+      title="บันทึกแม่แบบเป็น Draft ผ่านระบบแล้ว"
+      description="ผู้มีสิทธิ์เผยแพร่ Draft ที่ผ่านการตรวจของระบบได้; การออก PDF จริงยังปิดจนกว่า renderer, ฟอนต์, asset และลายเซ็นที่ได้รับอนุญาตจะผ่านการตรวจรับ"
       variant="soft"
     />
+
+    <div
+      v-if="templatesError"
+      class="flex flex-col gap-2 sm:flex-row sm:items-center"
+    >
+      <UAlert
+        class="flex-1"
+        color="error"
+        icon="i-lucide-circle-alert"
+        title="โหลดแม่แบบจากระบบไม่สำเร็จ"
+        description="ไม่แสดงข้อมูลตัวอย่างแทนข้อมูลจริง ตรวจสิทธิ์และการเชื่อมต่อ API แล้วลองใหม่"
+        variant="soft"
+      />
+      <UButton
+        color="neutral"
+        icon="i-lucide-refresh-cw"
+        label="ลองโหลดใหม่"
+        :loading="templatesPending"
+        @click="refreshTemplates()"
+      />
+    </div>
+
+    <div
+      v-if="referenceDataError"
+      class="flex flex-col gap-2 sm:flex-row sm:items-center"
+    >
+      <UAlert
+        class="flex-1"
+        color="warning"
+        icon="i-lucide-circle-alert"
+        title="โหลดข้อมูลอ้างอิงไม่ครบ"
+        description="รายชื่อนักศึกษา สำนักวิชา หลักสูตร ข้อมูล Placement หรือสถานประกอบการอาจไม่ครบ ระบบจะไม่แทนข้อมูลจริงด้วยข้อมูลตัวอย่าง"
+        variant="soft"
+      />
+      <UButton
+        color="neutral"
+        icon="i-lucide-refresh-cw"
+        label="ลองโหลดข้อมูลอ้างอิงใหม่"
+        :loading="referenceDataPending"
+        :disabled="referenceDataPending"
+        @click="retryReferenceData"
+      />
+    </div>
 
     <!-- Top Action Header -->
     <div
@@ -1518,11 +2264,11 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
       </div>
 
       <UButton
+        v-if="canManageDocumentTemplates"
         color="primary"
         icon="i-lucide-plus"
         label="สร้างเอกสารใหม่"
         size="lg"
-        :disabled="isProduction"
         @click="openCreateChooser"
       />
     </div>
@@ -1585,8 +2331,8 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
               class="rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary font-medium"
             >
               <option value="all">ทุกสถานะ</option>
-              <option value="active">ใช้งาน (Active)</option>
-              <option value="inactive">ไม่ใช้งาน (Inactive)</option>
+              <option value="active">เผยแพร่แล้ว</option>
+              <option value="inactive">ฉบับร่าง / เก็บถาวร</option>
             </select>
           </div>
         </div>
@@ -1632,11 +2378,8 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
         <div class="flex items-center gap-1.5">
           <UIcon name="i-lucide-info" class="size-4 text-primary shrink-0" />
           <span>
-            ข้อกำหนดระบบ: แต่ละประเภทเอกสาร (PDF และ Certification)
-            สามารถมีแม่แบบสถานะ
-            <strong class="text-highlighted"
-              >&quot;ใช้งาน&quot; ได้เพียงประเภทละ 1 ฉบับเท่านั้น</strong
-            >
+            รายการนี้ใช้สถานะจาก template version จริง; การแก้ไขสร้าง Draft ใหม่
+            และยังไม่ถือว่าเอกสารถูกเผยแพร่หรือออกให้นักศึกษา
           </span>
         </div>
         <div class="flex flex-wrap items-center gap-3 text-[11px] font-mono">
@@ -1644,22 +2387,22 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
             class="inline-flex items-center gap-1.5 rounded-md bg-rose-50 px-2 py-0.5 text-rose-700 ring-1 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-400"
           >
             <span class="size-1.5 rounded-full bg-rose-500"></span>
-            PDF หลัก:
+            PDF ที่เผยแพร่:
             <strong>{{
-              documents.find(
+              documents.filter(
                 (d) => d.docType === 'pdf' && d.status === 'active'
-              )?.code || 'ไม่มี'
+              ).length
             }}</strong>
           </span>
           <span
             class="inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-400"
           >
             <span class="size-1.5 rounded-full bg-amber-500"></span>
-            Certification หลัก:
+            Certificate ที่เผยแพร่:
             <strong>{{
-              documents.find(
+              documents.filter(
                 (d) => d.docType === 'certificate' && d.status === 'active'
-              )?.code || 'ไม่มี'
+              ).length
             }}</strong>
           </span>
         </div>
@@ -1682,7 +2425,16 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
             </tr>
           </thead>
           <tbody>
-            <tr v-if="filteredDocuments.length === 0">
+            <tr v-if="templatesPending">
+              <td colspan="7" class="py-12 text-center text-muted">
+                <UIcon
+                  name="i-lucide-loader-circle"
+                  class="mx-auto mb-2 size-8 animate-spin text-primary"
+                />
+                <p class="font-medium">กำลังโหลดแม่แบบจากระบบ...</p>
+              </td>
+            </tr>
+            <tr v-else-if="filteredDocuments.length === 0">
               <td colspan="7" class="py-12 text-center text-muted">
                 <UIcon
                   name="i-lucide-file-x"
@@ -1748,6 +2500,14 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                   >
                     {{ doc.description }}
                   </p>
+                  <UBadge
+                    v-if="doc.isLegacy"
+                    class="mt-1"
+                    color="warning"
+                    label="Legacy — อ่านอย่างเดียว"
+                    size="xs"
+                    variant="subtle"
+                  />
                 </div>
               </td>
 
@@ -1799,78 +2559,42 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                 }}
               </td>
 
-              <!-- Column 6: สถานะใช้งาน / ไม่ใช้งาน (มีได้เพียงฉบับเดียว) -->
+              <!-- Column 6: Persisted template/version state -->
               <td class="text-center">
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1 transition-all focus:outline-none"
-                  :title="
-                    doc.status === 'active'
-                      ? 'เอกสารนี้กำลังเป็นเอกสารหลักที่เปิดใช้งาน (คลิกเพื่อปิด)'
-                      : 'คลิกเพื่อตั้งค่าเป็นเอกสารหลักที่ใช้งานเพียงฉบับเดียว'
+                <UBadge
+                  :color="
+                    doc.templateStatus === 'archived'
+                      ? 'neutral'
+                      : doc.versionStatus === 'published'
+                        ? 'success'
+                        : 'warning'
                   "
-                  @click="handleToggleStatus(doc)"
+                  size="sm"
+                  variant="subtle"
                 >
-                  <UBadge
-                    v-if="doc.status === 'active'"
-                    color="success"
-                    size="sm"
-                    variant="subtle"
-                    class="cursor-pointer font-bold ring-1 ring-success/40 hover:ring-2 hover:ring-success transition-all"
-                  >
-                    <UIcon name="i-lucide-check" class="size-3.5 mr-0.5" />
-                    ใช้งาน (หลัก)
-                  </UBadge>
-                  <UBadge
-                    v-else
-                    color="neutral"
-                    size="sm"
-                    variant="subtle"
-                    class="cursor-pointer opacity-70 hover:opacity-100 hover:border-primary transition-all"
-                  >
-                    ไม่ใช้งาน
-                  </UBadge>
-                </button>
+                  {{
+                    doc.templateStatus === 'archived'
+                      ? 'เก็บถาวร'
+                      : doc.versionStatus === 'published'
+                        ? 'เผยแพร่แล้ว'
+                        : 'ฉบับร่าง'
+                  }}
+                </UBadge>
               </td>
 
               <!-- Column 7: การจัดการ -->
               <td class="text-right">
-                <div class="flex items-center justify-end">
+                <div
+                  v-if="canManageDocumentTemplates"
+                  class="flex items-center justify-end"
+                >
                   <UDropdownMenu
                     :items="[
                       [
                         {
-                          label: 'จัดวางและแก้ไข (Canva Studio)',
+                          label: 'เปิดใน Designer',
                           icon: 'i-lucide-layout-template',
                           onSelect: () => openCanvaStudio(doc)
-                        },
-                        {
-                          label: 'ดูตัวอย่างและพิมพ์เอกสาร',
-                          icon: 'i-lucide-printer',
-                          onSelect: () => {
-                            openCanvaStudio(doc)
-                            livePreviewMode = 'real_data'
-                          }
-                        }
-                      ],
-                      [
-                        {
-                          label:
-                            doc.status === 'active'
-                              ? 'ปิดใช้งาน'
-                              : 'เปิดใช้งาน',
-                          icon:
-                            doc.status === 'active'
-                              ? 'i-lucide-ban'
-                              : 'i-lucide-check',
-                          color: doc.status === 'active' ? 'error' : 'success',
-                          onSelect: () => handleToggleStatus(doc)
-                        },
-                        {
-                          label: 'ลบเอกสาร',
-                          icon: 'i-lucide-trash-2',
-                          color: 'error',
-                          onSelect: () => handleDeleteDocument(doc)
                         }
                       ]
                     ]"
@@ -1886,6 +2610,7 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                     />
                   </UDropdownMenu>
                 </div>
+                <span v-else class="text-xs text-muted">เผยแพร่แล้ว</span>
               </td>
             </tr>
           </tbody>
@@ -2081,9 +2806,25 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
     <!-- CANVA-LIKE DOCUMENT DESIGNER STUDIO (FULL MODAL)                   -->
     <!-- ================================================================= -->
     <div
-      v-if="isCanvaStudioOpen && activeEditingDoc"
+      v-if="isCanvaStudioOpen && activeEditingDoc && canManageDocumentTemplates"
       class="fixed inset-0 z-50 flex flex-col bg-slate-950 text-slate-100"
+      :aria-busy="isSavingTemplate || isPublishingTemplate"
     >
+      <div
+        v-if="isSavingTemplate || isPublishingTemplate"
+        class="absolute inset-0 z-[100] flex items-center justify-center bg-slate-950/75"
+        role="status"
+        aria-live="polite"
+      >
+        <div
+          class="flex items-center gap-3 rounded-xl bg-slate-900 px-5 py-4 text-sm text-white shadow-xl"
+        >
+          <UIcon name="i-lucide-loader-circle" class="size-5 animate-spin" />
+          {{
+            isPublishingTemplate ? 'กำลังตรวจและเผยแพร่…' : 'กำลังบันทึก Draft…'
+          }}
+        </div>
+      </div>
       <!-- Studio Header -->
       <div
         class="no-print flex h-16 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/95 px-5 backdrop-blur-md"
@@ -2099,6 +2840,7 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
             <div class="flex items-center gap-2">
               <input
                 v-model="activeEditingDoc.nameTh"
+                :disabled="!!activeEditingDoc.templateId"
                 class="bg-transparent text-base font-bold text-white border-b border-transparent hover:border-slate-700 focus:border-primary focus:outline-none transition-all"
                 :style="{
                   width: `${Math.max(26, (activeEditingDoc.nameTh?.length || 10) + 3)}ch`,
@@ -2107,7 +2849,11 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                   fieldSizing: 'content'
                 }"
                 placeholder="ชื่อเทมเพลตเอกสาร..."
-                title="คลิกเพื่อแก้ไขชื่อเอกสาร"
+                :title="
+                  activeEditingDoc.templateId
+                    ? 'ชื่อเทมเพลตคงที่หลังสร้าง'
+                    : 'คลิกเพื่อแก้ไขชื่อเอกสาร'
+                "
               />
               <UBadge
                 :color="
@@ -2204,9 +2950,35 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
           />
 
           <UButton
+            v-if="
+              canManageDocumentTemplates &&
+              activeEditingDoc.templateId &&
+              activeEditingDoc.versionId &&
+              activeEditingDoc.versionStatus === 'draft' &&
+              activeEditingDoc.templateStatus === 'active'
+            "
+            color="success"
+            icon="i-lucide-shield-check"
+            :label="isPublishingTemplate ? 'กำลังเผยแพร่...' : 'เผยแพร่แม่แบบ'"
+            :loading="isPublishingTemplate"
+            :disabled="
+              isSavingTemplate || isPublishingTemplate || hasUnsavedChanges
+            "
+            :title="
+              hasUnsavedChanges
+                ? 'บันทึก Draft ก่อนเผยแพร่'
+                : 'ตรวจสอบและเผยแพร่ Draft ที่บันทึกแล้ว'
+            "
+            @click="publishStudioDraft"
+          />
+
+          <UButton
+            v-if="canManageDocumentTemplates"
             color="primary"
             icon="i-lucide-save"
-            label="บันทึกเทมเพลต"
+            :label="isSavingTemplate ? 'กำลังบันทึก...' : 'บันทึก Draft'"
+            :loading="isSavingTemplate"
+            :disabled="isSavingTemplate || isPublishingTemplate"
             @click="saveStudioChanges"
           />
 
@@ -2215,9 +2987,92 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
             icon="i-lucide-x"
             size="sm"
             variant="ghost"
-            @click="isCanvaStudioOpen = false"
+            :disabled="isSavingTemplate || isPublishingTemplate"
+            @click="requestCloseStudio"
           />
         </div>
+      </div>
+
+      <div
+        v-if="canManageDocumentTemplates"
+        class="no-print flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-800 bg-slate-900 px-5 py-2 text-xs text-slate-300"
+      >
+        <div class="min-w-52">
+          <p class="font-semibold text-white">ฟอนต์หลักสำหรับ PDF</p>
+          <p class="text-[10px] text-slate-400">
+            เลือกได้หนึ่งไฟล์; PDF ยังปิดจน renderer ผ่านการตรวจรับ
+          </p>
+        </div>
+        <select
+          v-model="selectedDocumentFontKey"
+          aria-label="เลือกฟอนต์หลักสำหรับ PDF"
+          class="h-8 min-w-48 rounded border border-slate-700 bg-slate-800 px-2 text-xs text-white"
+          :disabled="isLoadingFontAssets"
+        >
+          <option value="">ไม่ระบุฟอนต์ที่อัปโหลด</option>
+          <option
+            v-if="selectedFontAssetUnavailable"
+            :value="selectedDocumentFontKey"
+          >
+            ไม่พบ asset ที่เลือกไว้เดิม
+          </option>
+          <option
+            v-for="asset in availableFontAssets"
+            :key="asset.key"
+            :value="asset.key"
+          >
+            {{ asset.originalName }} ·
+            {{ asset.fontFamily ?? 'family ยังไม่ยืนยัน' }} ({{
+              Math.ceil(asset.size / 1024)
+            }}
+            KB)
+          </option>
+        </select>
+        <label
+          class="flex items-center gap-2 rounded border border-slate-700 px-2 py-1.5"
+        >
+          <span>ไฟล์ TTF/OTF</span>
+          <input
+            ref="selectedFontFileInput"
+            type="file"
+            accept=".ttf,.otf,font/ttf,font/otf"
+            class="max-w-48 text-[10px]"
+            :disabled="isUploadingFontAsset"
+            @change="handleSelectedFontFileChange"
+          />
+        </label>
+        <input
+          v-model="fontRightsBasis"
+          type="text"
+          maxlength="1000"
+          aria-label="ที่มาของสิทธิ์ใช้ฟอนต์"
+          placeholder="ที่มาสิทธิ์ใช้ฟอนต์ เช่น ใบอนุญาต"
+          class="h-8 min-w-56 flex-1 rounded border border-slate-700 bg-slate-800 px-2 text-xs text-white placeholder:text-slate-500"
+          :disabled="isUploadingFontAsset"
+        />
+        <label
+          class="flex max-w-60 items-center gap-1.5 text-[10px] text-amber-200"
+        >
+          <input
+            v-model="fontRightsConfirmed"
+            type="checkbox"
+            class="accent-amber-500"
+            :disabled="isUploadingFontAsset"
+          />
+          ยืนยันว่ามีสิทธิ์ใช้ไฟล์นี้
+        </label>
+        <UButton
+          size="xs"
+          color="neutral"
+          variant="outline"
+          icon="i-lucide-upload"
+          :label="
+            isUploadingFontAsset ? 'กำลังอัปโหลด...' : 'อัปโหลดฟอนต์ส่วนตัว'
+          "
+          :loading="isUploadingFontAsset"
+          :disabled="isUploadingFontAsset"
+          @click="uploadSelectedFont"
+        />
       </div>
 
       <!-- Studio Canva Toolbar (Font, Layering, Shapes, Alignment) -->
@@ -2930,8 +3785,8 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
           <div
             class="shrink-0 relative transition-all duration-150"
             :style="{
-              width: `${(activeEditingDoc.docType === 'pdf' ? 794 : 1024) * canvasScale}px`,
-              height: `${(activeEditingDoc.docType === 'pdf' ? 1040 : 724) * canvasScale}px`,
+              width: `${studioCanvasWidth * canvasScale}px`,
+              height: `${studioCanvasHeight * canvasScale}px`,
               margin: '3rem auto'
             }"
             @click.stop
@@ -2941,8 +3796,8 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
               id="printable-document"
               class="absolute left-0 top-0 origin-top-left border border-slate-300 bg-white text-slate-900 shadow-2xl transition-transform duration-150"
               :style="{
-                width: activeEditingDoc.docType === 'pdf' ? '794px' : '1024px',
-                height: activeEditingDoc.docType === 'pdf' ? '1040px' : '724px',
+                width: `${studioCanvasWidth}px`,
+                height: `${studioCanvasHeight}px`,
                 transform: `scale(${canvasScale})`
               }"
             >
@@ -3110,16 +3965,12 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                 <!-- Emblem Component -->
                 <div
                   v-else-if="el.type === 'emblem'"
-                  class="mx-auto flex size-14 items-center justify-center rounded-full bg-amber-50 text-amber-700 ring-2 ring-amber-600"
+                  class="mx-auto flex min-h-20 w-32 flex-col items-center justify-center gap-1 rounded border border-dashed border-amber-600 bg-amber-50 p-2 text-amber-800"
                 >
-                  <UIcon
-                    :name="
-                      el.content === 'GOLD-AWARD'
-                        ? 'i-lucide-award'
-                        : 'i-lucide-graduation-cap'
-                    "
-                    class="size-8"
-                  />
+                  <UIcon name="i-lucide-image" class="size-6" />
+                  <span class="max-w-full truncate text-center text-[9px]">
+                    {{ imageAssetLabel(el.assetKey) }}
+                  </span>
                 </div>
 
                 <!-- Custom Dynamic Table Component -->
@@ -3161,8 +4012,11 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                   </table>
                 </div>
 
-                <!-- Competency Assessment Table Component -->
+                <!-- Category score preview: never infer an overall grade. -->
                 <div v-else-if="el.type === 'table'" class="w-full">
+                  <p class="mb-1 text-[10px] text-slate-500" role="status">
+                    ยังไม่ได้โหลดผลประเมินจริงในหน้าตัวอย่างนี้
+                  </p>
                   <table
                     class="w-full border-collapse text-left text-xs bg-white/90 backdrop-blur-[1px]"
                   >
@@ -3170,69 +4024,25 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                       <tr
                         class="border-y border-slate-300 bg-slate-100 font-bold text-slate-800"
                       >
-                        <th class="py-2 pl-3">หมวดสมรรถนะการประเมิน</th>
-                        <th class="py-2 text-center">คะแนนเต็ม</th>
-                        <th class="py-2 text-center">คะแนนที่ได้</th>
-                        <th class="py-2 text-center">ร้อยละ</th>
-                        <th class="py-2 pr-3 text-right">ผลการประเมิน</th>
+                        <th class="py-2 pl-3">หมวดทักษะ</th>
+                        <th class="py-2 text-center">คะแนนเฉลี่ย</th>
+                        <th class="py-2 pr-3 text-right">จำนวนข้อที่ตอบ</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-200">
                       <tr>
                         <td class="py-2.5 pl-3">
-                          <p class="font-bold text-slate-900">
-                            1. หมวดสมรรถนะทั่วไป (Core Competencies)
-                          </p>
-                          <p class="text-[11px] text-slate-500">
-                            การตรงต่อเวลา, วินัย, การสื่อสาร,
-                            การทำงานร่วมกับผู้อื่น
-                          </p>
+                          <p class="font-bold text-slate-900">Hard Skill</p>
                         </td>
-                        <td class="text-center font-mono">5.00</td>
-                        <td
-                          class="text-center font-mono font-bold text-slate-900"
-                        >
-                          4.80
-                        </td>
-                        <td class="text-center font-mono">96.0%</td>
-                        <td class="pr-3 text-right font-bold text-emerald-700">
-                          ผ่านเกณฑ์ดีเยี่ยม
-                        </td>
+                        <td class="text-center font-mono">—</td>
+                        <td class="pr-3 text-right font-mono">—</td>
                       </tr>
                       <tr>
                         <td class="py-2.5 pl-3">
-                          <p class="font-bold text-slate-900">
-                            2. หมวดสมรรถนะวิชาชีพเฉพาะ (Specialized Field)
-                          </p>
-                          <p class="text-[11px] text-slate-500">
-                            ทักษะเชิงเทคนิค, การแก้ปัญหาหน้างาน, คุณภาพงาน
-                          </p>
+                          <p class="font-bold text-slate-900">Soft Skill</p>
                         </td>
-                        <td class="text-center font-mono">5.00</td>
-                        <td
-                          class="text-center font-mono font-bold text-slate-900"
-                        >
-                          4.90
-                        </td>
-                        <td class="text-center font-mono">98.0%</td>
-                        <td class="pr-3 text-right font-bold text-emerald-700">
-                          ผ่านเกณฑ์ดีเยี่ยม
-                        </td>
-                      </tr>
-                      <tr class="bg-amber-50/70 font-bold">
-                        <td class="py-2.5 pl-3 text-slate-900">
-                          ผลการประเมินรวมเฉลี่ย (Overall Grade & Score)
-                        </td>
-                        <td class="text-center font-mono">5.00</td>
-                        <td class="text-center font-mono text-amber-800">
-                          4.85
-                        </td>
-                        <td class="text-center font-mono text-amber-800">
-                          97.0%
-                        </td>
-                        <td class="pr-3 text-right text-emerald-800">
-                          A (ผ่านเกณฑ์ดีเยี่ยม)
-                        </td>
+                        <td class="text-center font-mono">—</td>
+                        <td class="pr-3 text-right font-mono">—</td>
                       </tr>
                     </tbody>
                   </table>
@@ -3244,6 +4054,9 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                   class="grid grid-cols-2 gap-8 text-center text-xs w-full"
                 >
                   <div>
+                    <p class="mb-1 text-[9px] text-amber-700">
+                      {{ imageAssetLabel(el.assetKeys?.[0]) }}
+                    </p>
                     <div
                       class="mx-auto h-10 w-44 border-b border-dashed border-slate-400"
                     ></div>
@@ -3260,6 +4073,9 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                     </p>
                   </div>
                   <div>
+                    <p class="mb-1 text-[9px] text-amber-700">
+                      {{ imageAssetLabel(el.assetKeys?.[1]) }}
+                    </p>
                     <div
                       class="mx-auto h-10 w-44 border-b border-dashed border-slate-400"
                     ></div>
@@ -3433,6 +4249,118 @@ function handleDeleteDocument(doc: DocumentTemplateItem) {
                 {{ v.label }} ({{ v.tag }})
               </option>
             </select>
+          </div>
+
+          <div v-if="selectedElement.type === 'emblem'" class="space-y-2">
+            <label class="block text-[11px] font-semibold text-slate-400">
+              ตราสัญลักษณ์ที่ลงทะเบียนและยืนยันสิทธิ์แล้ว
+            </label>
+            <select
+              v-model="selectedElement.assetKey"
+              class="w-full rounded-lg border border-slate-800 bg-slate-800/80 p-2 text-xs text-white"
+            >
+              <option value="">เลือก asset ตราสัญลักษณ์</option>
+              <option
+                v-for="asset in selectableImageAssets"
+                :key="asset.key"
+                :value="asset.key"
+              >
+                {{ asset.originalName }}
+              </option>
+            </select>
+          </div>
+
+          <div v-if="selectedElement.type === 'signature'" class="space-y-2">
+            <label class="block text-[11px] font-semibold text-slate-400">
+              ลายเซ็นที่ลงทะเบียนและยืนยันสิทธิ์แล้ว (ต้องครบ 2 รายการ)
+            </label>
+            <select
+              :value="selectedSignatureAssetKey(0)"
+              class="w-full rounded-lg border border-slate-800 bg-slate-800/80 p-2 text-xs text-white"
+              @change="
+                setSignatureAssetKey(
+                  0,
+                  ($event.target as HTMLSelectElement).value
+                )
+              "
+            >
+              <option value="">เลือกลายเซ็นผู้ควบคุมการฝึกงาน</option>
+              <option
+                v-for="asset in selectableImageAssets"
+                :key="asset.key"
+                :value="asset.key"
+              >
+                {{ asset.originalName }}
+              </option>
+            </select>
+            <select
+              :value="selectedSignatureAssetKey(1)"
+              class="w-full rounded-lg border border-slate-800 bg-slate-800/80 p-2 text-xs text-white"
+              @change="
+                setSignatureAssetKey(
+                  1,
+                  ($event.target as HTMLSelectElement).value
+                )
+              "
+            >
+              <option value="">เลือกอาจารย์ผู้ประสานงาน</option>
+              <option
+                v-for="asset in selectableImageAssets"
+                :key="asset.key"
+                :value="asset.key"
+              >
+                {{ asset.originalName }}
+              </option>
+            </select>
+          </div>
+
+          <div
+            v-if="canManageDocumentTemplates && selectedImageAssetType"
+            class="space-y-2 rounded-lg border border-slate-700 p-2.5"
+          >
+            <p class="text-[11px] font-semibold text-amber-200">
+              ลงทะเบียน PNG พร้อมหลักฐานสิทธิ์ใช้
+            </p>
+            <input
+              ref="selectedImageFileInput"
+              type="file"
+              accept=".png,image/png"
+              class="w-full text-[10px] text-slate-300"
+              :disabled="isUploadingImageAsset"
+              @change="handleSelectedImageFileChange"
+            />
+            <input
+              v-model="imageRightsBasis"
+              type="text"
+              maxlength="1000"
+              aria-label="ที่มาของสิทธิ์ใช้รูปภาพ"
+              placeholder="เลขที่หนังสืออนุมัติหรือที่มาสิทธิ์"
+              class="w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-[10px] text-white"
+              :disabled="isUploadingImageAsset"
+            />
+            <label class="flex items-start gap-1.5 text-[10px] text-amber-100">
+              <input
+                v-model="imageRightsConfirmed"
+                type="checkbox"
+                class="mt-0.5 accent-amber-500"
+                :disabled="isUploadingImageAsset"
+              />
+              ยืนยันว่ามีสิทธิ์ใช้ไฟล์นี้ในเอกสารทางการ
+            </label>
+            <UButton
+              size="xs"
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-upload"
+              :label="
+                isUploadingImageAsset
+                  ? 'กำลังอัปโหลด...'
+                  : 'อัปโหลดและแนบ asset'
+              "
+              :loading="isUploadingImageAsset"
+              :disabled="isUploadingImageAsset"
+              @click="uploadSelectedImageAsset"
+            />
           </div>
 
           <!-- Coordinates X, Y -->

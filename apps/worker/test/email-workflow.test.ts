@@ -10,7 +10,10 @@ import { renderSafeEmailHtml } from '../src/runtime/email-template.js'
 const source = {
   invitationStatus: 'active',
   invitationAssignmentId: 'assignment-a',
+  invitationVersion: 1,
   invitationExpiresAt: new Date('2026-10-01T00:00:00Z'),
+  campaignType: 'invitation' as const,
+  campaignInvitationVersion: 1,
   templatePublished: true,
   assignmentStatus: 'pending',
   assignmentDeadlineAt: new Date('2026-10-01T00:00:00Z')
@@ -20,6 +23,20 @@ describe('email delivery workflow guards', () => {
   it('refuses delivery for a submitted or mismatched assignment', () => {
     const now = new Date('2026-09-23T00:00:00Z')
     expect(deliverySourcesAreCurrent(source, 'assignment-a', now)).toBe(true)
+    expect(
+      deliverySourcesAreCurrent(
+        { ...source, invitationVersion: 2 },
+        'assignment-a',
+        now
+      )
+    ).toBe(false)
+    expect(
+      deliverySourcesAreCurrent(
+        { ...source, campaignType: 'reminder', invitationVersion: 2 },
+        'assignment-a',
+        now
+      )
+    ).toBe(true)
     expect(
       deliverySourcesAreCurrent(
         { ...source, assignmentStatus: 'submitted' },
@@ -59,7 +76,7 @@ describe('email delivery workflow guards', () => {
       '<script>alert(1)</script><p onclick="alert(1)">{{student_name}}</p><a href="{{invitation_url}}">Open</a><a href="javascript:alert(1)">bad</a>',
       {
         student_name: '<img src=x onerror=alert(1)>',
-        invitation_url: 'https://internship.mfu.ac.th/evaluate?token=a&next=b'
+        invitation_url: 'https://internship.mfu.ac.th/evaluate#token=a&next=b'
       }
     )
 
@@ -69,7 +86,7 @@ describe('email delivery workflow guards', () => {
     expect(html).not.toContain('javascript:')
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
     expect(html).toContain(
-      'href="https://internship.mfu.ac.th/evaluate?token=a&amp;next=b"'
+      'href="https://internship.mfu.ac.th/evaluate#token=a&amp;next=b"'
     )
   })
 })

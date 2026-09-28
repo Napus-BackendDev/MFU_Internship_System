@@ -1,11 +1,27 @@
 <script setup lang="ts">
-import type { EnrichedStudentRow } from '~/components/AdminStudentDirectory.vue'
+import type {
+  EnrichedStudentRow,
+  EvaluationCycleItem
+} from '~/components/AdminStudentDirectory.vue'
 import {
   buildStudentEvaluationResult,
   formatCategoryAverage,
   type EvaluationSectionSnapshot,
   type StudentEvaluationRecord
 } from '~/utils/student-evaluation-result'
+import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
+import { loadItemsOrEmpty } from '~/utils/load-items-or-empty'
+import { selectCurrentStudentAssignment } from '~/utils/student-assignment'
+import {
+  createStudentDocumentIdempotencyKey,
+  findDocumentForEvaluationSet,
+  getStudentDocumentState,
+  resolvePublishedDocumentVersion,
+  type GeneratedDocumentStatus,
+  type StudentDocumentTemplateCandidate,
+  type StudentDocumentType,
+  type StudentGeneratedDocument
+} from '~/utils/student-documents'
 
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
@@ -25,9 +41,11 @@ interface StudentItem {
   readonly personalEmail?: string
   readonly schoolId: string
   readonly programId: string
+  readonly academicTermId?: string
   readonly company?: string
   readonly province?: string
   readonly semester?: string
+  readonly academicYear?: number
   readonly admissionYear?: number
   readonly status: string
 }
@@ -45,17 +63,11 @@ interface ProgramItem {
   readonly name: { readonly th: string; readonly en: string }
 }
 
-interface CourseItem {
-  readonly id: string
-  readonly courseCode?: string
-  readonly programIds?: string[]
-  readonly name: { readonly th: string; readonly en: string }
-}
-
 interface PlacementItem {
   readonly id: string
   readonly studentId: string
   readonly organizationId: string
+  readonly academicTermId?: string
   readonly positionTitle?: { readonly th: string; readonly en: string }
   readonly startsAt?: string
   readonly endsAt?: string
@@ -78,6 +90,8 @@ interface EvaluatorItem {
 interface EvaluationAssignmentItem {
   readonly id: string
   readonly studentId: string
+  readonly createdAt: string
+  readonly cycleId?: string
   readonly evaluatorId: string
   readonly deadlineAt: string
   readonly status:
@@ -91,13 +105,34 @@ interface EvaluationAssignmentItem {
   readonly placementId?: string
 }
 
-interface GeneratedDocItem {
-  readonly id: string
+interface GeneratedDocItem extends StudentGeneratedDocument {
   readonly studentId: string
   readonly templateVersionId: string
-  readonly status: string
   readonly objectKey?: string
-  readonly createdAt: string
+}
+
+interface StudentDocumentSource {
+  readonly placementId: string
+  readonly evaluationIds: readonly string[]
+}
+
+interface StudentDocumentTemplateItem {
+  readonly id: string
+  readonly documentType: StudentDocumentType
+  readonly status: 'active' | 'archived'
+}
+
+interface StudentDocumentTemplateVersionItem {
+  readonly id: string
+  readonly templateId: string
+  readonly status: 'draft' | 'published' | 'retired'
+}
+
+interface StudentDocumentTemplateAvailability {
+  readonly status:
+    'idle' | 'loading' | 'available' | 'unavailable' | 'ambiguous' | 'error'
+  readonly versionId?: string
+  readonly message?: string
 }
 
 const api = useApi()
@@ -130,6 +165,40 @@ const studentOrg = ref<OrganizationItem | null>(null)
 const studentEvaluator = ref<EvaluatorItem | null>(null)
 const studentAssignment = ref<EvaluationAssignmentItem | null>(null)
 const studentDocs = ref<GeneratedDocItem[]>([])
+const documentSource = ref<StudentDocumentSource | null>(null)
+const documentSourceUnavailableReason = ref('')
+const documentTemplateAvailability = ref<
+  Record<StudentDocumentType, StudentDocumentTemplateAvailability>
+>({
+  certificate: { status: 'idle' },
+  transcript: { status: 'idle' }
+})
+const certificateDocumentState = computed(() =>
+  getStudentDocumentState(studentDocs.value, 'certificate')
+)
+const transcriptDocumentState = computed(() =>
+  getStudentDocumentState(studentDocs.value, 'transcript')
+)
+const certificateSourceDocument = computed(() =>
+  documentSource.value
+    ? findDocumentForEvaluationSet(
+        studentDocs.value,
+        'certificate',
+        documentSource.value.evaluationIds
+      )
+    : null
+)
+const transcriptSourceDocument = computed(() =>
+  documentSource.value
+    ? findDocumentForEvaluationSet(
+        studentDocs.value,
+        'transcript',
+        documentSource.value.evaluationIds
+      )
+    : null
+)
+const activeDocumentDownload = ref<StudentDocumentType | null>(null)
+const activeDocumentGeneration = ref<StudentDocumentType | null>(null)
 const studentDataLoading = ref(false)
 const studentDataError = ref('')
 const submittedEvaluation = ref<
@@ -185,6 +254,12 @@ async function loadStudentData(): Promise<void> {
   studentDocs.value = []
   submittedEvaluation.value = null
   studentQuestionSnapshot.value = []
+  documentSource.value = null
+  documentSourceUnavailableReason.value = ''
+  documentTemplateAvailability.value = {
+    certificate: { status: 'idle' },
+    transcript: { status: 'idle' }
+  }
 
   try {
     const currentStudentId = auth.actor?.scope.studentId
@@ -209,21 +284,34 @@ async function loadStudentData(): Promise<void> {
       api<{ items: ProgramItem[] }>('/academic/programs', {
         query: { pageSize: 100 }
       }),
-      api<{ items: PlacementItem[] }>('/placements', {
-        query: { pageSize: 50 }
-      }),
+      loadAllPages(
+        (page, pageSize) =>
+          api<PaginatedItems<PlacementItem>>('/placements', {
+            query: { page, pageSize }
+          }),
+        100
+      ),
       api<{ items: OrganizationItem[] }>('/organizations', {
         query: { pageSize: 100 }
       }),
       api<{ items: EvaluatorItem[] }>('/evaluators', {
         query: { pageSize: 100 }
       }),
-      api<{ items: EvaluationAssignmentItem[] }>('/evaluation-assignments', {
-        query: { pageSize: 50 }
-      }),
-      api<{ items: GeneratedDocItem[] }>('/generated-documents', {
-        query: { pageSize: 50 }
-      })
+      loadAllPages(
+        (page, pageSize) =>
+          api<PaginatedItems<EvaluationAssignmentItem>>(
+            '/evaluation-assignments',
+            { query: { page, pageSize } }
+          ),
+        100
+      ),
+      loadAllPages(
+        (page, pageSize) =>
+          api<PaginatedItems<GeneratedDocItem>>('/generated-documents', {
+            query: { page, pageSize }
+          }),
+        100
+      )
     ])
 
     studentProfile.value =
@@ -243,12 +331,11 @@ async function loadStudentData(): Promise<void> {
         assignment.studentId === studentProfile.value?.id ||
         assignment.studentId === studentProfile.value?.studentId
     )
-    studentAssignment.value =
-      matchingAssignments.find(
-        (assignment) => assignment.status === 'submitted'
-      ) ??
-      matchingAssignments[0] ??
-      null
+    studentAssignment.value = selectCurrentStudentAssignment(
+      assignmentsRes.items,
+      studentProfile.value.id,
+      studentProfile.value.studentId
+    )
 
     studentPlacement.value =
       placementsRes.items.find(
@@ -276,6 +363,72 @@ async function loadStudentData(): Promise<void> {
       ) ?? null
 
     studentDocs.value = docsRes.items
+
+    const completedPlacementCandidates = placementsRes.items
+      .filter(
+        (placement) =>
+          (placement.studentId === studentProfile.value?.id ||
+            placement.studentId === studentProfile.value?.studentId) &&
+          placement.status === 'completed'
+      )
+      .map((placement) => ({
+        placement,
+        assignments: matchingAssignments.filter(
+          (assignment) =>
+            assignment.status === 'submitted' &&
+            assignment.placementId === placement.id
+        )
+      }))
+      .filter(({ assignments }) => assignments.length > 0)
+
+    if (completedPlacementCandidates.length === 1) {
+      const source = completedPlacementCandidates[0]
+      if (!source) throw new Error('DOCUMENT_PLACEMENT_REQUIRED')
+      if (source.assignments.length > 50) {
+        documentSourceUnavailableReason.value =
+          'ผลประเมินในรอบนี้เกินจำนวนที่ระบบออกเอกสารได้ กรุณาติดต่อเจ้าหน้าที่ตรวจสอบ'
+      } else {
+        try {
+          const evaluations = await Promise.all(
+            source.assignments.map(async (assignment) => {
+              const result = await api<{
+                assignment?: { readonly evaluationVersion?: number }
+                evaluations?: StudentEvaluationRecord[]
+              }>(`/evaluations/${encodeURIComponent(assignment.id)}`)
+              return result.evaluations?.find(
+                (evaluation) =>
+                  typeof evaluation.id === 'string' &&
+                  evaluation.version === result.assignment?.evaluationVersion &&
+                  !evaluation.supersededAt
+              )
+            })
+          )
+          if (
+            evaluations.some((evaluation) => !evaluation?.id) ||
+            evaluations.length !== source.assignments.length
+          ) {
+            throw new Error('DOCUMENT_EVALUATION_SOURCE_INCOMPLETE')
+          }
+          documentSource.value = {
+            placementId: source.placement.id,
+            evaluationIds: evaluations
+              .map((evaluation) => evaluation?.id)
+              .filter((id): id is string => Boolean(id))
+              .sort()
+          }
+        } catch (err: unknown) {
+          console.error('Failed to resolve document evaluation sources:', err)
+          documentSourceUnavailableReason.value =
+            'ตรวจสอบผลประเมินเพื่อออกเอกสารไม่สำเร็จ กรุณาโหลดข้อมูลใหม่'
+        }
+      }
+    } else if (completedPlacementCandidates.length > 1) {
+      documentSourceUnavailableReason.value =
+        'พบรอบฝึกงานที่จบแล้วและมีผลประเมินหลายรอบ กรุณาติดต่อเจ้าหน้าที่ให้ตรวจสอบก่อนออกเอกสาร'
+    } else {
+      documentSourceUnavailableReason.value =
+        'เอกสารจะออกได้เมื่อสถานประกอบการปิดรอบฝึกงานและส่งผลประเมินแล้ว'
+    }
 
     if (
       studentAssignment.value &&
@@ -316,65 +469,30 @@ async function loadStudentData(): Promise<void> {
 }
 
 // Admin Data for Student Directory Table
-const adminStudents = ref<StudentItem[]>([])
-const adminSchools = ref<SchoolItem[]>([])
-const adminPrograms = ref<ProgramItem[]>([])
-const adminCourses = ref<CourseItem[]>([])
-const adminOrganizations = ref<OrganizationItem[]>([])
-const adminEvaluators = ref<EvaluatorItem[]>([])
-const adminAssignments = ref<EvaluationAssignmentItem[]>([])
-const adminPlacements = ref<PlacementItem[]>([])
+const adminCycles = ref<EvaluationCycleItem[]>([])
+const adminCycleLoadError = ref('')
 const adminDataLoading = ref(false)
+const adminDirectoryRefreshVersion = ref(0)
 
 async function loadAdminDirectoryData(): Promise<void> {
   if (isStudent.value) return
   adminDataLoading.value = true
+  adminCycleLoadError.value = ''
   try {
-    const [
-      studentsRes,
-      schoolsRes,
-      programsRes,
-      coursesRes,
-      orgsRes,
-      placementsRes,
-      evaluatorsRes,
-      assignmentsRes
-    ] = await Promise.all([
-      api<{ items: StudentItem[] }>('/students', {
-        query: { pageSize: 500 }
-      }).catch(() => ({ items: [] })),
-      api<{ items: SchoolItem[] }>('/academic/schools', {
-        query: { pageSize: 500 }
-      }).catch(() => ({ items: [] })),
-      api<{ items: ProgramItem[] }>('/academic/programs', {
-        query: { pageSize: 500 }
-      }).catch(() => ({ items: [] })),
-      api<{ items: CourseItem[] }>('/academic/courses', {
-        query: { pageSize: 500 }
-      }).catch(() => ({ items: [] })),
-      api<{ items: OrganizationItem[] }>('/organizations', {
-        query: { pageSize: 500 }
-      }).catch(() => ({ items: [] })),
-      api<{ items: PlacementItem[] }>('/placements', {
-        query: { pageSize: 500 }
-      }).catch(() => ({ items: [] })),
-      api<{ items: EvaluatorItem[] }>('/evaluators', {
-        query: { pageSize: 500 }
-      }).catch(() => ({ items: [] })),
-      api<{ items: EvaluationAssignmentItem[] }>('/evaluation-assignments', {
-        query: { pageSize: 500 }
-      }).catch(() => ({ items: [] }))
-    ])
-
-    adminStudents.value = studentsRes.items
-    adminSchools.value = schoolsRes.items
-    adminPrograms.value = programsRes.items
-    adminCourses.value = coursesRes.items
-    adminOrganizations.value = orgsRes.items
-    adminPlacements.value = placementsRes.items
-    adminEvaluators.value = evaluatorsRes.items
-    adminAssignments.value = assignmentsRes.items
+    const cyclesRes = await loadItemsOrEmpty(
+      () =>
+        loadAllPages((page, pageSize) =>
+          api<PaginatedItems<EvaluationCycleItem>>('/evaluation-cycles', {
+            query: { page, pageSize }
+          })
+        ),
+      () => {
+        adminCycleLoadError.value = 'cycle_load_failed'
+      }
+    )
+    adminCycles.value = cyclesRes.items
   } catch (err) {
+    adminCycleLoadError.value = 'cycle_load_failed'
     console.error('Failed to load admin directory data:', err)
   } finally {
     adminDataLoading.value = false
@@ -382,8 +500,9 @@ async function loadAdminDirectoryData(): Promise<void> {
 }
 
 function refreshAllAdmin(): void {
-  refreshOverview()
-  loadAdminDirectoryData()
+  void refreshOverview()
+  adminDirectoryRefreshVersion.value += 1
+  void loadAdminDirectoryData()
 }
 
 const isStaff = computed(() =>
@@ -412,10 +531,10 @@ function onStaffWizardCompleted(): void {
 
 onMounted(() => {
   if (isStudent.value) {
-    loadStudentData()
+    void loadStudentData()
     checkStudentFirstTimeWizard()
   } else {
-    loadAdminDirectoryData()
+    void loadAdminDirectoryData()
     if (isStaff.value) {
       checkStaffFirstTimeWizard()
     }
@@ -424,15 +543,19 @@ onMounted(() => {
 
 watch(isStudent, (val) => {
   if (val) {
-    loadStudentData()
+    void loadStudentData()
     checkStudentFirstTimeWizard()
   } else {
-    loadAdminDirectoryData()
+    void loadAdminDirectoryData()
   }
 })
 
 watch(isStaff, (val) => {
   if (val) checkStaffFirstTimeWizard()
+})
+
+watch([downloadModalOpen, documentSource], ([isOpen, source]) => {
+  if (isOpen && source) void loadDocumentTemplateAvailability()
 })
 
 const studentEvaluationView = computed(() =>
@@ -679,7 +802,15 @@ const activeDocContext = computed<TargetStudentDocContext>(() => {
   const placement = studentPlacement.value
   const evaluator = studentEvaluator.value
   const sId = profile?.studentId ?? ''
-  const yearTh = profile?.admissionYear ? profile.admissionYear + 4 : '-'
+  const explicitAcademicYear = Number(profile?.academicYear)
+  const yearTh =
+    Number.isFinite(explicitAcademicYear) && explicitAcademicYear > 0
+      ? String(
+          explicitAcademicYear > 2400
+            ? explicitAcademicYear
+            : explicitAcademicYear + 543
+        )
+      : '-'
   const dean = getDeanForSchool(school?.schoolCode)
   const startsAt = formatThaiDate(placement?.startsAt, '-')
   const endsAt = formatThaiDate(placement?.endsAt, '-')
@@ -721,10 +852,6 @@ function notifyDocumentsUnavailable(): void {
     color: 'warning',
     icon: 'i-lucide-info'
   })
-}
-
-function openDocumentPreview(_type: 'certification' | 'referral'): void {
-  notifyDocumentsUnavailable()
 }
 
 function handleAdminOpenDocument(payload: {
@@ -875,8 +1002,347 @@ function _downloadDocumentAsDoc(type: 'certification' | 'referral'): void {
   })
 }
 
-function downloadDocument(_type: 'certification' | 'referral'): void {
-  notifyDocumentsUnavailable()
+function documentStatusIcon(status?: GeneratedDocumentStatus): string {
+  return {
+    queued: 'i-lucide-clock-3',
+    processing: 'i-lucide-loader-circle',
+    ready: 'i-lucide-circle-check',
+    failed: 'i-lucide-circle-alert'
+  }[status ?? 'queued']
+}
+
+function documentSourceRecord(
+  type: StudentDocumentType
+): GeneratedDocItem | null {
+  return type === 'certificate'
+    ? certificateSourceDocument.value
+    : transcriptSourceDocument.value
+}
+
+function hasUnverifiableDocumentSource(type: StudentDocumentType): boolean {
+  return studentDocs.value.some(
+    (item) =>
+      item.documentType === type &&
+      (!item.evaluationIds || item.evaluationIds.length === 0)
+  )
+}
+
+function canRequestDocument(type: StudentDocumentType): boolean {
+  return Boolean(
+    isStudent.value &&
+    documentSource.value &&
+    documentTemplateAvailability.value[type].status === 'available' &&
+    !documentSourceRecord(type) &&
+    !hasUnverifiableDocumentSource(type) &&
+    !activeDocumentGeneration.value
+  )
+}
+
+function documentRequestLabel(type: StudentDocumentType): string {
+  if (activeDocumentGeneration.value === type) return 'กำลังส่งคำขอ'
+  const existing = documentSourceRecord(type)
+  if (existing) {
+    return {
+      queued: 'รอจัดทำ PDF',
+      processing: 'กำลังจัดทำ PDF',
+      ready: 'ออกเอกสารแล้ว',
+      failed: 'รอตรวจสอบเอกสาร'
+    }[existing.status]
+  }
+  if (hasUnverifiableDocumentSource(type)) return 'ตรวจสอบเอกสารเดิม'
+  if (!documentSource.value) return 'ยังออกไม่ได้'
+  const templateState = documentTemplateAvailability.value[type]
+  if (templateState.status === 'loading' || templateState.status === 'idle') {
+    return 'กำลังตรวจแม่แบบ'
+  }
+  if (templateState.status !== 'available') return 'แม่แบบยังไม่พร้อม'
+  return documentSource.value ? 'ขอออก PDF' : 'ยังออกไม่ได้'
+}
+
+function templateAvailabilityFailure(
+  error: unknown
+): StudentDocumentTemplateAvailability {
+  const failure = error as {
+    readonly message?: string
+    readonly status?: number
+    readonly statusCode?: number
+  }
+  if (failure.message === 'DOCUMENT_TEMPLATE_UNAVAILABLE') {
+    return {
+      status: 'unavailable',
+      message: 'ยังไม่มีแม่แบบที่เผยแพร่และพร้อมใช้งานสำหรับเอกสารชนิดนี้'
+    }
+  }
+  if (failure.message === 'DOCUMENT_TEMPLATE_AMBIGUOUS') {
+    return {
+      status: 'ambiguous',
+      message:
+        'พบแม่แบบที่เผยแพร่หลายแบบ กรุณาติดต่อเจ้าหน้าที่ให้กำหนดแม่แบบหลัก'
+    }
+  }
+  if (failure.status === 403 || failure.statusCode === 403) {
+    return {
+      status: 'error',
+      message: 'บัญชีนี้ไม่มีสิทธิ์ตรวจสอบแม่แบบเอกสาร'
+    }
+  }
+  return {
+    status: 'error',
+    message: 'ตรวจสอบแม่แบบเอกสารไม่สำเร็จ กรุณาลองใหม่หรือติดต่อเจ้าหน้าที่'
+  }
+}
+
+function scheduleDocumentStatusRefresh(
+  id: string,
+  type: StudentDocumentType,
+  evaluationIds: readonly string[],
+  attempt = 0
+): void {
+  if (!import.meta.client || attempt >= 6) return
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const result = await api<GeneratedDocItem>(
+          `/generated-documents/${encodeURIComponent(id)}`
+        )
+        const refreshed: GeneratedDocItem = {
+          ...result,
+          documentType: type,
+          evaluationIds: [...evaluationIds]
+        }
+        studentDocs.value = [
+          refreshed,
+          ...studentDocs.value.filter((item) => item.id !== refreshed.id)
+        ]
+        if (result.status === 'queued' || result.status === 'processing') {
+          scheduleDocumentStatusRefresh(id, type, evaluationIds, attempt + 1)
+        }
+      } catch (err: unknown) {
+        console.error('Failed to refresh generated-document status:', err)
+        scheduleDocumentStatusRefresh(id, type, evaluationIds, attempt + 1)
+      }
+    })()
+  }, 5_000)
+}
+
+async function getPublishedTemplateVersion(
+  type: StudentDocumentType
+): Promise<string> {
+  const templates = await loadAllPages(
+    (page, pageSize) =>
+      api<PaginatedItems<StudentDocumentTemplateItem>>('/document-templates', {
+        query: { status: 'active', documentType: type, page, pageSize }
+      }),
+    100
+  )
+  const candidates: StudentDocumentTemplateCandidate[] = await Promise.all(
+    templates.items.map(async (template) => {
+      const versions = await api<
+        PaginatedItems<StudentDocumentTemplateVersionItem>
+      >(`/document-templates/${encodeURIComponent(template.id)}/versions`, {
+        query: { status: 'published', page: 1, pageSize: 1 }
+      })
+      const version = versions.items[0]
+      return {
+        templateId: template.id,
+        documentType: template.documentType,
+        templateStatus: template.status,
+        publishedVersionId:
+          version?.templateId === template.id && version.status === 'published'
+            ? version.id
+            : null
+      }
+    })
+  )
+  const resolution = resolvePublishedDocumentVersion(candidates, type)
+  if (resolution.status !== 'available') {
+    throw new Error(`DOCUMENT_TEMPLATE_${resolution.status.toUpperCase()}`)
+  }
+  return resolution.versionId
+}
+
+async function loadDocumentTemplateAvailability(): Promise<void> {
+  if (!documentSource.value) return
+  const states = Object.values(documentTemplateAvailability.value)
+  if (states.some((state) => state.status === 'loading')) return
+  if (
+    states.every(
+      (state) =>
+        state.status !== 'idle' &&
+        state.status !== 'error' &&
+        state.status !== 'loading'
+    )
+  ) {
+    return
+  }
+
+  const types: readonly StudentDocumentType[] = ['certificate', 'transcript']
+  for (const type of types) {
+    documentTemplateAvailability.value[type] = { status: 'loading' }
+  }
+  await Promise.all(
+    types.map(async (type) => {
+      try {
+        const versionId = await getPublishedTemplateVersion(type)
+        documentTemplateAvailability.value[type] = {
+          status: 'available',
+          versionId
+        }
+      } catch (error: unknown) {
+        documentTemplateAvailability.value[type] =
+          templateAvailabilityFailure(error)
+      }
+    })
+  )
+}
+
+function openStudentDocumentModal(): void {
+  downloadModalOpen.value = true
+  void loadDocumentTemplateAvailability()
+}
+
+async function requestStudentDocument(
+  type: StudentDocumentType
+): Promise<void> {
+  if (!import.meta.client || !canRequestDocument(type)) return
+  const source = documentSource.value
+  const student = studentProfile.value
+  if (!source || !student) return
+
+  activeDocumentGeneration.value = type
+  let templateWasResolved = false
+  try {
+    const templateVersionId = await getPublishedTemplateVersion(type)
+    templateWasResolved = true
+    const idempotencyKey = await createStudentDocumentIdempotencyKey({
+      studentId: student.id,
+      documentType: type,
+      templateVersionId,
+      evaluationIds: source.evaluationIds
+    })
+    const document = await api<GeneratedDocItem>('/generated-documents', {
+      method: 'POST',
+      headers: { 'idempotency-key': idempotencyKey },
+      body: {
+        studentId: student.studentId,
+        templateVersionId,
+        evaluationIds: source.evaluationIds
+      }
+    })
+    const acceptedDocument: GeneratedDocItem = {
+      ...document,
+      documentType: type,
+      evaluationIds: [...source.evaluationIds]
+    }
+    studentDocs.value = [
+      acceptedDocument,
+      ...studentDocs.value.filter((item) => item.id !== document.id)
+    ]
+    toast.add({
+      title: 'รับคำขอจัดทำเอกสารแล้ว',
+      description: 'งานเข้าคิวแล้ว สถานะจะเปลี่ยนเมื่อ PDF จัดทำเสร็จ',
+      color: 'success',
+      icon: 'i-lucide-clock-3'
+    })
+    scheduleDocumentStatusRefresh(document.id, type, source.evaluationIds)
+  } catch (err: unknown) {
+    if (!templateWasResolved) {
+      documentTemplateAvailability.value[type] =
+        templateAvailabilityFailure(err)
+    }
+    const failure = err as {
+      readonly status?: number
+      readonly statusCode?: number
+      readonly data?: { readonly code?: string }
+    }
+    const status = failure.statusCode ?? failure.status
+    const code = failure.data?.code
+    const description =
+      code === 'DOCUMENT_TEMPLATE_UNAVAILABLE'
+        ? 'ยังไม่มีแม่แบบที่เผยแพร่และพร้อมใช้งานสำหรับเอกสารชนิดนี้'
+        : code === 'DOCUMENT_TEMPLATE_AMBIGUOUS'
+          ? 'พบแม่แบบที่เผยแพร่หลายแบบ กรุณาติดต่อเจ้าหน้าที่ให้กำหนดแม่แบบหลัก'
+          : code === 'DOCUMENT_COMPLETED_PLACEMENT_REQUIRED'
+            ? 'สถานะรอบฝึกงานยังไม่สมบูรณ์ จึงยังออกเอกสารไม่ได้'
+            : code === 'DOCUMENT_SOURCE_DATA_INCOMPLETE'
+              ? 'ข้อมูลนักศึกษา หลักสูตร สถานประกอบการ หรือภาคเรียนยังไม่ครบ'
+              : status === 429
+                ? 'ส่งคำขอบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่'
+                : 'ตรวจสอบเงื่อนไขการออกเอกสารไม่ผ่าน กรุณาโหลดข้อมูลใหม่หรือติดต่อเจ้าหน้าที่'
+    toast.add({
+      title: 'ขอออกเอกสารไม่สำเร็จ',
+      description,
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    activeDocumentGeneration.value = null
+  }
+}
+
+async function downloadDocument(type: StudentDocumentType): Promise<void> {
+  if (!import.meta.client) return
+  const documentState =
+    type === 'certificate'
+      ? certificateDocumentState.value
+      : transcriptDocumentState.value
+  const issuedDocument = documentState.downloadable
+  if (!issuedDocument) {
+    toast.add({
+      title: documentState.label,
+      description: 'ระบบจะแสดงปุ่มดาวน์โหลดเมื่อมีไฟล์ PDF ที่ออกสำเร็จ',
+      color: documentState.latest?.status === 'failed' ? 'error' : 'warning',
+      icon:
+        documentState.latest?.status === 'failed'
+          ? 'i-lucide-circle-alert'
+          : 'i-lucide-info'
+    })
+    return
+  }
+
+  activeDocumentDownload.value = type
+  try {
+    const response = await api<{ url: string; expiresIn: number }>(
+      `/generated-documents/${encodeURIComponent(issuedDocument.id)}/download-url`
+    )
+    const signedUrl = new URL(response.url)
+    const secureProtocol =
+      signedUrl.protocol === 'https:' ||
+      (!import.meta.env.PROD && signedUrl.protocol === 'http:')
+    if (
+      !secureProtocol ||
+      signedUrl.username ||
+      signedUrl.password ||
+      !Number.isInteger(response.expiresIn) ||
+      response.expiresIn < 1 ||
+      response.expiresIn > 300
+    ) {
+      throw new Error('DOCUMENT_DOWNLOAD_URL_INVALID')
+    }
+
+    const link = document.createElement('a')
+    link.href = signedUrl.href
+    link.rel = 'noopener noreferrer'
+    link.referrerPolicy = 'no-referrer'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    toast.add({
+      title: 'เริ่มดาวน์โหลดเอกสาร',
+      description: 'กำลังดาวน์โหลด PDF จากไฟล์ที่ระบบออกไว้',
+      color: 'success',
+      icon: 'i-lucide-file-down'
+    })
+  } catch {
+    toast.add({
+      title: 'ดาวน์โหลดเอกสารไม่สำเร็จ',
+      description: 'กรุณารีเฟรชสถานะแล้วลองใหม่อีกครั้ง',
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    activeDocumentDownload.value = null
+  }
 }
 
 // Admin Overview Cards
@@ -980,7 +1446,7 @@ const _adminCards = computed(() => [
               icon="i-lucide-download"
               label="สถานะเอกสาร"
               size="sm"
-              @click="downloadModalOpen = true"
+              @click="openStudentDocumentModal"
             />
           </div>
         </div>
@@ -1324,15 +1790,9 @@ const _adminCards = computed(() => [
       <!-- ทะเบียนนักศึกษาฝึกงานและสถานะการประเมิน พร้อมตัวกรองปี/ภาคเรียน และส่งออก Excel 2 ภาษา -->
       <section aria-label="ทะเบียนนักศึกษาและผลประเมิน">
         <AdminStudentDirectory
-          :students="adminStudents"
-          :schools="adminSchools"
-          :programs="adminPrograms"
-          :courses="adminCourses"
-          :organizations="adminOrganizations"
-          :evaluators="adminEvaluators"
-          :assignments="adminAssignments"
-          :placements="adminPlacements"
-          :loading="adminDataLoading"
+          :cycles="adminCycles"
+          :cycle-load-error="adminCycleLoadError"
+          :refresh-version="adminDirectoryRefreshVersion"
           @refresh="loadAdminDirectoryData"
           @open-document="handleAdminOpenDocument"
         />
@@ -1377,171 +1837,246 @@ const _adminCards = computed(() => [
         </div>
 
         <!-- Modal Body: 2 Documents -->
-        <div class="p-6 grid gap-5 md:grid-cols-2 max-h-[75vh] overflow-y-auto">
-          <!-- ฉบับที่ 1: Certification (ใบประกาศนียบัตรรับรองการฝึกงาน) -->
-          <UCard
-            class="group relative border-2 border-amber-500/30 hover:border-amber-500/60 bg-gradient-to-br from-default to-amber-500/5 transition-all duration-300 shadow-sm hover:shadow-md"
+        <div class="p-6 max-h-[75vh] overflow-y-auto">
+          <p
+            v-if="documentSourceUnavailableReason"
+            class="mb-4 rounded-lg border border-warning-500/30 bg-warning-500/5 px-3 py-2 text-xs text-warning-700 dark:text-warning-300"
+            role="status"
           >
-            <div class="space-y-4">
-              <div class="flex items-start justify-between gap-3">
-                <span
-                  class="grid size-11 place-items-center rounded-xl bg-amber-500/10 text-amber-600 ring-1 ring-amber-500/20 group-hover:scale-105 transition-transform"
-                >
-                  <UIcon name="i-lucide-award" class="size-6" />
-                </span>
-                <UBadge
-                  color="warning"
-                  label="Certification"
-                  size="xs"
-                  variant="subtle"
-                />
-              </div>
-
-              <div>
-                <div
-                  class="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400 font-semibold"
-                >
-                  <UIcon name="i-lucide-sparkles" class="size-3.5" />
-                  เอกสารฉบับที่ 1: เกียรติบัตรรับรอง
-                </div>
-                <h3
-                  class="text-base font-bold text-highlighted mt-1 group-hover:text-primary transition-colors"
-                >
-                  ใบประกาศนียบัตรรับรองการฝึกงาน
-                </h3>
-                <p class="text-[11px] text-muted font-mono">
-                  Certificate of Internship Completion
-                </p>
-                <p class="text-xs text-muted mt-2 leading-relaxed">
-                  ใบรับรองจะยังไม่ถือเป็นเอกสารทางการจนกว่าจะออกจากระบบด้วยแม่แบบและผู้ลงนามที่ได้รับอนุมัติ
-                </p>
-              </div>
-
-              <div class="border-t border-default/70 pt-3 space-y-1 text-xs">
-                <div class="flex justify-between text-muted">
-                  <span>เลขที่เอกสาร:</span>
-                  <span class="font-mono font-semibold text-muted"
-                    >ยังไม่มี</span
-                  >
-                </div>
-                <div class="flex justify-between text-muted">
-                  <span>สถานะเอกสาร:</span>
+            {{ documentSourceUnavailableReason }}
+          </p>
+          <div class="grid gap-5 md:grid-cols-2">
+            <!-- ฉบับที่ 1: Certification (ใบประกาศนียบัตรรับรองการฝึกงาน) -->
+            <UCard
+              class="group relative border-2 border-amber-500/30 hover:border-amber-500/60 bg-gradient-to-br from-default to-amber-500/5 transition-all duration-300 shadow-sm hover:shadow-md"
+            >
+              <div class="space-y-4">
+                <div class="flex items-start justify-between gap-3">
                   <span
-                    class="font-semibold text-warning-600 flex items-center gap-1"
+                    class="grid size-11 place-items-center rounded-xl bg-amber-500/10 text-amber-600 ring-1 ring-amber-500/20 group-hover:scale-105 transition-transform"
                   >
-                    <UIcon name="i-lucide-clock-3" class="size-3.5" />
-                    ยังไม่ออกโดยระบบ
+                    <UIcon name="i-lucide-award" class="size-6" />
                   </span>
+                  <UBadge
+                    color="warning"
+                    label="Certification"
+                    size="xs"
+                    variant="subtle"
+                  />
                 </div>
-              </div>
 
-              <div class="pt-2 flex flex-wrap items-center gap-2">
-                <UButton
-                  color="neutral"
-                  icon="i-lucide-eye"
-                  label="ดูตัวอย่าง"
-                  size="xs"
-                  variant="outline"
-                  class="flex-1 justify-center min-w-[80px]"
-                  disabled
-                  @click="openDocumentPreview('certification')"
-                />
-                <UButton
-                  color="primary"
-                  icon="i-lucide-printer"
-                  label="พิมพ์ / PDF"
-                  size="xs"
-                  variant="solid"
-                  class="flex-1 justify-center min-w-[90px]"
-                  disabled
-                  @click="downloadDocument('certification')"
-                />
-              </div>
-            </div>
-          </UCard>
-
-          <!-- ฉบับที่ 2: Transcript -->
-          <UCard
-            class="group relative border-2 border-sky-500/30 hover:border-sky-500/60 bg-gradient-to-br from-default to-sky-500/5 transition-all duration-300 shadow-sm hover:shadow-md"
-          >
-            <div class="space-y-4">
-              <div class="flex items-start justify-between gap-3">
-                <span
-                  class="grid size-11 place-items-center rounded-xl bg-sky-500/10 text-sky-600 ring-1 ring-sky-500/20 group-hover:scale-105 transition-transform"
-                >
-                  <UIcon name="i-lucide-file-text" class="size-6" />
-                </span>
-                <UBadge
-                  color="info"
-                  label="Transcript"
-                  size="xs"
-                  variant="subtle"
-                />
-              </div>
-
-              <div>
-                <div
-                  class="flex items-center gap-1.5 text-xs text-sky-700 dark:text-sky-400 font-semibold"
-                >
-                  <UIcon name="i-lucide-shield-check" class="size-3.5" />
-                  เอกสารฉบับที่ 2: Transcript
-                </div>
-                <h3
-                  class="text-base font-bold text-highlighted mt-1 group-hover:text-primary transition-colors"
-                >
-                  ใบบันทึกผลการฝึกงาน
-                </h3>
-                <p class="text-[11px] text-muted font-mono">
-                  Internship Transcript
-                </p>
-                <p class="text-xs text-muted mt-2 leading-relaxed">
-                  Transcript จะแสดงผลประเมินจากข้อมูลจริงหลังแม่แบบและ PDF
-                  renderer ผ่านการอนุมัติ
-                </p>
-              </div>
-
-              <div class="border-t border-default/70 pt-3 space-y-1 text-xs">
-                <div class="flex justify-between text-muted">
-                  <span>เลขที่เอกสาร:</span>
-                  <span class="font-mono font-semibold text-muted"
-                    >ยังไม่มี</span
+                <div>
+                  <div
+                    class="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400 font-semibold"
                   >
+                    <UIcon name="i-lucide-sparkles" class="size-3.5" />
+                    เอกสารฉบับที่ 1: เกียรติบัตรรับรอง
+                  </div>
+                  <h3
+                    class="text-base font-bold text-highlighted mt-1 group-hover:text-primary transition-colors"
+                  >
+                    ใบประกาศนียบัตรรับรองการฝึกงาน
+                  </h3>
+                  <p class="text-[11px] text-muted font-mono">
+                    Certificate of Internship Completion
+                  </p>
+                  <p class="text-xs text-muted mt-2 leading-relaxed">
+                    ใบรับรองจะยังไม่ถือเป็นเอกสารทางการจนกว่าจะออกจากระบบด้วยแม่แบบและผู้ลงนามที่ได้รับอนุมัติ
+                  </p>
                 </div>
-                <div class="flex justify-between text-muted">
-                  <span>สถานะเอกสาร:</span>
+
+                <div class="border-t border-default/70 pt-3 space-y-1 text-xs">
+                  <div class="flex justify-between text-muted">
+                    <span>เลขที่เอกสาร:</span>
+                    <span class="font-mono font-semibold text-muted">{{
+                      certificateDocumentState.downloadable?.documentNumber ??
+                      'ยังไม่มี'
+                    }}</span>
+                  </div>
+                  <div class="flex justify-between text-muted">
+                    <span>สถานะเอกสาร:</span>
+                    <span
+                      class="font-semibold text-warning-600 flex items-center gap-1"
+                      role="status"
+                    >
+                      <UIcon
+                        :name="
+                          documentStatusIcon(
+                            certificateDocumentState.latest?.status
+                          )
+                        "
+                        class="size-3.5"
+                      />
+                      {{ certificateDocumentState.label }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="pt-2 flex flex-wrap items-center gap-2">
+                  <UButton
+                    color="primary"
+                    icon="i-lucide-file-plus-2"
+                    :label="documentRequestLabel('certificate')"
+                    :loading="activeDocumentGeneration === 'certificate'"
+                    :disabled="!canRequestDocument('certificate')"
+                    size="xs"
+                    variant="outline"
+                    class="flex-1 justify-center min-w-[80px]"
+                    @click="requestStudentDocument('certificate')"
+                  />
+                  <UButton
+                    color="primary"
+                    icon="i-lucide-printer"
+                    :label="
+                      activeDocumentDownload === 'certificate'
+                        ? 'กำลังเตรียมไฟล์'
+                        : certificateDocumentState.downloadable
+                          ? 'ดาวน์โหลด PDF'
+                          : 'ไฟล์ยังไม่พร้อม'
+                    "
+                    :loading="activeDocumentDownload === 'certificate'"
+                    :disabled="!certificateDocumentState.downloadable"
+                    size="xs"
+                    variant="solid"
+                    class="flex-1 justify-center min-w-[90px]"
+                    @click="downloadDocument('certificate')"
+                  />
+                </div>
+                <p
+                  v-if="
+                    documentSource &&
+                    !certificateSourceDocument &&
+                    !hasUnverifiableDocumentSource('certificate') &&
+                    documentTemplateAvailability.certificate.status !==
+                      'available'
+                  "
+                  class="text-[11px] text-muted"
+                  role="status"
+                >
+                  {{
+                    documentTemplateAvailability.certificate.message ??
+                    'กำลังตรวจสอบแม่แบบที่เผยแพร่'
+                  }}
+                </p>
+              </div>
+            </UCard>
+
+            <!-- ฉบับที่ 2: Transcript -->
+            <UCard
+              class="group relative border-2 border-sky-500/30 hover:border-sky-500/60 bg-gradient-to-br from-default to-sky-500/5 transition-all duration-300 shadow-sm hover:shadow-md"
+            >
+              <div class="space-y-4">
+                <div class="flex items-start justify-between gap-3">
                   <span
-                    class="font-semibold text-warning-600 flex items-center gap-1"
+                    class="grid size-11 place-items-center rounded-xl bg-sky-500/10 text-sky-600 ring-1 ring-sky-500/20 group-hover:scale-105 transition-transform"
                   >
-                    <UIcon name="i-lucide-clock-3" class="size-3.5" />
-                    ยังไม่ออกโดยระบบ
+                    <UIcon name="i-lucide-file-text" class="size-6" />
                   </span>
+                  <UBadge
+                    color="info"
+                    label="Transcript"
+                    size="xs"
+                    variant="subtle"
+                  />
                 </div>
-              </div>
 
-              <div class="pt-2 flex flex-wrap items-center gap-2">
-                <UButton
-                  color="neutral"
-                  icon="i-lucide-eye"
-                  label="ดูตัวอย่าง"
-                  size="xs"
-                  variant="outline"
-                  class="flex-1 justify-center min-w-[80px]"
-                  disabled
-                  @click="openDocumentPreview('referral')"
-                />
-                <UButton
-                  color="primary"
-                  icon="i-lucide-printer"
-                  label="พิมพ์ / PDF"
-                  size="xs"
-                  variant="solid"
-                  class="flex-1 justify-center min-w-[90px]"
-                  disabled
-                  @click="downloadDocument('referral')"
-                />
+                <div>
+                  <div
+                    class="flex items-center gap-1.5 text-xs text-sky-700 dark:text-sky-400 font-semibold"
+                  >
+                    <UIcon name="i-lucide-shield-check" class="size-3.5" />
+                    เอกสารฉบับที่ 2: Transcript
+                  </div>
+                  <h3
+                    class="text-base font-bold text-highlighted mt-1 group-hover:text-primary transition-colors"
+                  >
+                    ใบบันทึกผลการฝึกงาน
+                  </h3>
+                  <p class="text-[11px] text-muted font-mono">
+                    Internship Transcript
+                  </p>
+                  <p class="text-xs text-muted mt-2 leading-relaxed">
+                    Transcript จะแสดงผลประเมินจากข้อมูลจริงหลังแม่แบบและ PDF
+                    renderer ผ่านการอนุมัติ
+                  </p>
+                </div>
+
+                <div class="border-t border-default/70 pt-3 space-y-1 text-xs">
+                  <div class="flex justify-between text-muted">
+                    <span>เลขที่เอกสาร:</span>
+                    <span class="font-mono font-semibold text-muted">{{
+                      transcriptDocumentState.downloadable?.documentNumber ??
+                      'ยังไม่มี'
+                    }}</span>
+                  </div>
+                  <div class="flex justify-between text-muted">
+                    <span>สถานะเอกสาร:</span>
+                    <span
+                      class="font-semibold text-warning-600 flex items-center gap-1"
+                      role="status"
+                    >
+                      <UIcon
+                        :name="
+                          documentStatusIcon(
+                            transcriptDocumentState.latest?.status
+                          )
+                        "
+                        class="size-3.5"
+                      />
+                      {{ transcriptDocumentState.label }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="pt-2 flex flex-wrap items-center gap-2">
+                  <UButton
+                    color="primary"
+                    icon="i-lucide-file-plus-2"
+                    :label="documentRequestLabel('transcript')"
+                    :loading="activeDocumentGeneration === 'transcript'"
+                    :disabled="!canRequestDocument('transcript')"
+                    size="xs"
+                    variant="outline"
+                    class="flex-1 justify-center min-w-[80px]"
+                    @click="requestStudentDocument('transcript')"
+                  />
+                  <UButton
+                    color="primary"
+                    icon="i-lucide-printer"
+                    :label="
+                      activeDocumentDownload === 'transcript'
+                        ? 'กำลังเตรียมไฟล์'
+                        : transcriptDocumentState.downloadable
+                          ? 'ดาวน์โหลด PDF'
+                          : 'ไฟล์ยังไม่พร้อม'
+                    "
+                    :loading="activeDocumentDownload === 'transcript'"
+                    :disabled="!transcriptDocumentState.downloadable"
+                    size="xs"
+                    variant="solid"
+                    class="flex-1 justify-center min-w-[90px]"
+                    @click="downloadDocument('transcript')"
+                  />
+                </div>
+                <p
+                  v-if="
+                    documentSource &&
+                    !transcriptSourceDocument &&
+                    !hasUnverifiableDocumentSource('transcript') &&
+                    documentTemplateAvailability.transcript.status !==
+                      'available'
+                  "
+                  class="text-[11px] text-muted"
+                  role="status"
+                >
+                  {{
+                    documentTemplateAvailability.transcript.message ??
+                    'กำลังตรวจสอบแม่แบบที่เผยแพร่'
+                  }}
+                </p>
               </div>
-            </div>
-          </UCard>
+            </UCard>
+          </div>
         </div>
 
         <!-- Modal Footer -->
