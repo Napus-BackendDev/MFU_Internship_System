@@ -69,7 +69,9 @@ const programSchema = z.object({
   status: z.enum(['active', 'archived']).default('active')
 })
 const programQuerySchema = pageSchema.extend({
+  search: optionalSearchSchema,
   schoolId: z.string().optional(),
+  archived: archivedQuerySchema,
   programIds: z
     .string()
     .max(2499)
@@ -86,6 +88,15 @@ const programQuerySchema = pageSchema.extend({
         ? undefined
         : [...new Set(ids.map((id) => id.toLowerCase()))]
     )
+})
+const courseListSchema = pageSchema.extend({
+  search: optionalSearchSchema,
+  programId: z
+    .string()
+    .regex(/^[a-f\d]{24}$/i)
+    .optional(),
+  courseIds: objectIdCsvSchema(100),
+  archived: archivedQuerySchema
 })
 const courseSchema = z.object({
   courseCode: z.string().trim().min(1).max(30),
@@ -172,7 +183,8 @@ export class AcademicController {
       request.actor!,
       query,
       query.schoolId,
-      query.programIds
+      query.programIds,
+      { search: query.search, archived: query.archived }
     )
   }
 
@@ -210,7 +222,13 @@ export class AcademicController {
     @Req() request: AuthenticatedRequest,
     @Query() raw: unknown
   ): Promise<unknown> {
-    return this.service.listCourses(request.actor!, pageSchema.parse(raw))
+    const query = courseListSchema.parse(raw)
+    return this.service.listCourses(request.actor!, query, {
+      search: query.search,
+      programId: query.programId,
+      courseIds: query.courseIds,
+      archived: query.archived
+    })
   }
 
   @RequirePermissions('academic.manage')

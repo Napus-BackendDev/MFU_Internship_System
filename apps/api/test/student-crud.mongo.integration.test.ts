@@ -40,7 +40,9 @@ import {
   EvaluationAssignmentRecord,
   EvaluationAssignmentSchema,
   EvaluationCycleRecord,
-  EvaluationCycleSchema
+  EvaluationCycleSchema,
+  EvaluationRecord,
+  EvaluationSchema
 } from '../src/evaluations/evaluation.schema.js'
 import {
   EvaluatorRecord,
@@ -74,6 +76,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
   let connection: Connection
   let students: Model<StudentRecord>
   let assignments: Model<EvaluationAssignmentRecord>
+  let evaluations: Model<EvaluationRecord>
   let cycles: Model<EvaluationCycleRecord>
   let terms: Model<AcademicTermRecord>
   let schools: Model<SchoolRecord>
@@ -128,6 +131,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       EvaluationAssignmentRecord.name,
       EvaluationAssignmentSchema
     )
+    evaluations = connection.model(EvaluationRecord.name, EvaluationSchema)
     cycles = connection.model(EvaluationCycleRecord.name, EvaluationCycleSchema)
     documents = connection.model(
       GeneratedDocumentRecord.name,
@@ -148,6 +152,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       placements,
       terms,
       assignments,
+      evaluations,
       cycles,
       schools,
       programs,
@@ -859,6 +864,65 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
         status: 'expired'
       }
     ])
+    const submittedAssignment = await assignments
+      .findOne({ cycleId: cycle.id, studentId: actualSubmitted.id })
+      .exec()
+    expect(submittedAssignment).not.toBeNull()
+    await connection.collection('evaluations').insertMany([
+      {
+        assignmentId: submittedAssignment!.id,
+        version: 1,
+        answers: {},
+        questionSnapshot: [],
+        aggregateScore: null,
+        categoryScores: {
+          hardSkill: {
+            average: 5,
+            answeredCount: 4,
+            scaleMin: 1,
+            scaleMax: 5
+          },
+          softSkill: {
+            average: 5,
+            answeredCount: 4,
+            scaleMin: 1,
+            scaleMax: 5
+          },
+          scoringPolicyVersion: 'mfu-category-mean-v1'
+        },
+        evaluatorId: assignedEvaluator.id,
+        submittedAt: new Date('2028-08-01T00:00:00.000Z'),
+        idempotencyKey: 'superseded-result-v1',
+        idempotencyScopeKey: 'directory-score-fixture-v1',
+        supersededAt: new Date('2028-08-02T00:00:00.000Z')
+      },
+      {
+        assignmentId: submittedAssignment!.id,
+        version: 2,
+        answers: {},
+        questionSnapshot: [],
+        aggregateScore: null,
+        categoryScores: {
+          hardSkill: {
+            average: 4.25,
+            answeredCount: 2,
+            scaleMin: 1,
+            scaleMax: 5
+          },
+          softSkill: {
+            average: 3.5,
+            answeredCount: 1,
+            scaleMin: 1,
+            scaleMax: 5
+          },
+          scoringPolicyVersion: 'mfu-category-mean-v1'
+        },
+        evaluatorId: assignedEvaluator.id,
+        submittedAt: new Date('2028-08-03T00:00:00.000Z'),
+        idempotencyKey: 'active-result-v2',
+        idempotencyScopeKey: 'directory-score-fixture-v2'
+      }
+    ])
 
     const result = (await service.listStudents(admin, {
       page: 1,
@@ -886,6 +950,21 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
           course?: { id: string; courseCode: string; name: { th: string } }
           assignments: Array<{
             accessPin?: string
+            categoryScores?: {
+              hardSkill: {
+                average: number | null
+                answeredCount: number
+                scaleMin: number | null
+                scaleMax: number | null
+              }
+              softSkill: {
+                average: number | null
+                answeredCount: number
+                scaleMin: number | null
+                scaleMax: number | null
+              }
+              scoringPolicyVersion: string
+            }
             evaluator?: {
               email: string
               position: { en: string }
@@ -948,6 +1027,23 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
     expect(
       actualSubmittedDirectory.directoryRelations.assignments[0]
     ).not.toHaveProperty('accessPin')
+    expect(
+      actualSubmittedDirectory.directoryRelations.assignments[0]?.categoryScores
+    ).toEqual({
+      hardSkill: {
+        average: 4.25,
+        answeredCount: 2,
+        scaleMin: 1,
+        scaleMax: 5
+      },
+      softSkill: {
+        average: 3.5,
+        answeredCount: 1,
+        scaleMin: 1,
+        scaleMax: 5
+      },
+      scoringPolicyVersion: 'mfu-category-mean-v1'
+    })
     expect(
       actualSubmittedDirectory.directoryRelations.placements[0]?.organization
         ?.name.en
@@ -1187,6 +1283,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
         placements,
         terms,
         assignments,
+        evaluations,
         cycles,
         schools,
         programs,
@@ -1539,6 +1636,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
         placements,
         terms,
         assignments,
+        evaluations,
         cycles,
         schools,
         programs,
@@ -2148,6 +2246,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       placements,
       terms,
       assignments,
+      evaluations,
       cycles,
       schools,
       programs,
@@ -2266,7 +2365,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       admin,
       placement(firstStudent.studentId, organizationId, schoolId, programId)
     )) as { id: string }
-    await placements.create(
+    const secondOwnPlacement = await placements.create(
       placement(
         firstStudent.studentId,
         secondOwnOrganization.id,
@@ -2429,6 +2528,15 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
         testCase.role
       ).toEqual([...testCase.expectedIds].sort())
 
+      const boundedLookup = (await service.listStudents(testCase.actor, {
+        ...page,
+        studentIds: [firstStudent.id, secondStudent.id]
+      })) as { items: Array<{ id: string }> }
+      expect(
+        boundedLookup.items.map((student) => student.id).sort(),
+        `${testCase.role} lookup IDs remain inside effective scope`
+      ).toEqual([...testCase.expectedIds].sort())
+
       if (testCase.requestedStudentId) {
         const filtered = (await service.listStudents(testCase.actor, {
           ...page,
@@ -2479,6 +2587,71 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
         ?.directoryRelations?.assignments?.map((item) => item.studentId)
         .every((reference) => reference === firstStudent.id)
     ).toBe(true)
+
+    const studentDirectoryPage = (await service.listStudents(
+      firstStudentActor,
+      page
+    )) as {
+      items: Array<{
+        id: string
+        directoryRelations?: {
+          term?: { id: string; semester: string; academicYear: number }
+          assignments?: Array<{
+            cycleId: string
+            studentId: string
+            placementId: string
+            evaluator?: { organizationId: string }
+          }>
+          placements?: Array<{
+            id: string
+            studentId: string
+            academicTerm?: {
+              id: string
+              semester: string
+              academicYear: number
+            }
+            organization?: { id: string }
+          }>
+        }
+      }>
+    }
+    const studentOwnRelations =
+      studentDirectoryPage.items[0]?.directoryRelations
+    expect(
+      studentOwnRelations?.placements?.map((item) => item.id).sort()
+    ).toEqual([firstPlacement.id, secondOwnPlacement.id].sort())
+    expect(
+      studentOwnRelations?.placements
+        ?.map((item) => item.organization?.id)
+        .sort()
+    ).toEqual([organizationId, secondOwnOrganization.id].sort())
+    expect(
+      studentOwnRelations?.placements?.every(
+        (item) => item.studentId === firstStudent.id
+      )
+    ).toBe(true)
+    expect(studentOwnRelations?.term).toEqual({
+      id: term.id,
+      semester: '1',
+      academicYear: 2567
+    })
+    expect(
+      studentOwnRelations?.placements?.map((item) => item.academicTerm)
+    ).toEqual(
+      expect.arrayContaining([
+        { id: term.id, semester: '1', academicYear: 2567 },
+        { id: secondTerm.id, semester: '1', academicYear: 2566 }
+      ])
+    )
+    expect(
+      studentOwnRelations?.assignments?.map((item) => item.cycleId)
+    ).toEqual(['directory-valid-assignment'])
+    expect(studentOwnRelations?.assignments?.[0]).toMatchObject({
+      cycleId: 'directory-valid-assignment',
+      studentId: firstStudent.id,
+      placementId: firstPlacement.id,
+      evaluator: { organizationId }
+    })
 
     const placementReadMatrix: ReadonlyArray<{
       role: string
@@ -2653,6 +2826,31 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       service.listOrganizations(firstStudentActor, {
         ...page,
         search: 'MFU-TEST-2'
+      })
+    ).resolves.toMatchObject({ items: [], meta: { total: 0 } })
+    await expect(
+      service.listOrganizations(admin, {
+        ...page,
+        organizationIds: [organizationId]
+      })
+    ).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: organizationId })],
+      meta: { total: 1 }
+    })
+    await expect(
+      service.listOrganizations(firstStudentActor, {
+        ...page,
+        organizationIds: [secondOrganization.id]
+      })
+    ).resolves.toMatchObject({ items: [], meta: { total: 0 } })
+    const foreignEvaluator = await evaluators
+      .findOne({ email: 'second@company.example' })
+      .exec()
+    if (!foreignEvaluator) throw new Error('Test evaluator fixture missing')
+    await expect(
+      service.listEvaluators(firstStudentActor, {
+        ...page,
+        evaluatorIds: [foreignEvaluator.id]
       })
     ).resolves.toMatchObject({ items: [], meta: { total: 0 } })
     await expect(
@@ -2939,7 +3137,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       scopedActor,
       { page: 1, pageSize: 25 },
       {
-        search: 'LAW',
+        search: 'law',
         schoolIds: [schoolId, otherSchoolId],
         archived: false
       }
@@ -3833,8 +4031,33 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       undefined,
       [otherProgramId]
     )) as { items: Array<{ id: string }> }
+    const searchedPrograms = (await academic.listPrograms(
+      scopedActor,
+      { page: 1, pageSize: 25 },
+      undefined,
+      undefined,
+      { search: 'software', archived: false }
+    )) as { items: Array<{ id: string }> }
+    const searchedCourses = (await academic.listCourses(
+      scopedActor,
+      { page: 1, pageSize: 25 },
+      {
+        search: 'INT',
+        programId,
+        courseIds: [courseId, otherCourseId],
+        archived: false
+      }
+    )) as { items: Array<{ id: string }> }
+    const outsideOnlyCourses = (await academic.listCourses(
+      scopedActor,
+      { page: 1, pageSize: 25 },
+      { courseIds: [otherCourseId] }
+    )) as { items: Array<{ id: string }> }
     expect(matchingPrograms.items.map((item) => item.id)).toEqual([programId])
     expect(outsideOnlyPrograms.items).toEqual([])
+    expect(searchedPrograms.items.map((item) => item.id)).toEqual([programId])
+    expect(searchedCourses.items.map((item) => item.id)).toEqual([courseId])
+    expect(outsideOnlyCourses.items).toEqual([])
   })
 
   it('rejects missing or conflicting term references instead of saving guessed values', async () => {

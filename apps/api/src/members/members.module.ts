@@ -19,7 +19,9 @@ import {
   EvaluationAssignmentRecord,
   EvaluationAssignmentSchema,
   EvaluationCycleRecord,
-  EvaluationCycleSchema
+  EvaluationCycleSchema,
+  EvaluationRecord,
+  EvaluationSchema
 } from '../evaluations/evaluation.schema.js'
 import {
   EvaluatorRecord,
@@ -58,6 +60,7 @@ import { StudentImportService } from './student-import.service.js'
         name: EvaluationAssignmentRecord.name,
         schema: EvaluationAssignmentSchema
       },
+      { name: EvaluationRecord.name, schema: EvaluationSchema },
       { name: EvaluationCycleRecord.name, schema: EvaluationCycleSchema },
       { name: StudentImportBatchRecord.name, schema: StudentImportBatchSchema },
       { name: StudentImportRowRecord.name, schema: StudentImportRowSchema },

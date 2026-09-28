@@ -4,6 +4,7 @@ import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
 import {
   buildStudentEvaluationResult,
   formatCategoryAverage,
+  type EvaluationCategoryScore,
   type StudentEvaluationRecord
 } from '~/utils/student-evaluation-result'
 import { resolveAssignmentForCycle } from '~/utils/cycle-assignment'
@@ -38,6 +39,11 @@ export interface StudentItem {
     readonly school?: SchoolItem
     readonly program?: ProgramItem
     readonly course?: CourseItem
+    readonly term?: {
+      readonly id: string
+      readonly semester: string
+      readonly academicYear: number
+    }
     readonly assignments: EvaluationAssignmentItem[]
     readonly placements: PlacementItem[]
   }
@@ -92,6 +98,11 @@ export interface EvaluationAssignmentItem {
     | 'expired'
     | 'reopened'
     | 'email_error'
+  readonly categoryScores?: {
+    readonly hardSkill: EvaluationCategoryScore
+    readonly softSkill: EvaluationCategoryScore
+    readonly scoringPolicyVersion: string
+  }
   readonly evaluator?: EvaluatorItem
 }
 
@@ -100,6 +111,11 @@ export interface PlacementItem {
   readonly studentId: string
   readonly organizationId: string
   readonly academicTermId?: string
+  readonly academicTerm?: {
+    readonly id: string
+    readonly semester: string
+    readonly academicYear: number
+  }
   readonly positionTitle?: LocalizedText
   readonly startsAt?: string
   readonly endsAt?: string
@@ -281,9 +297,8 @@ export interface EnrichedStudentRow {
     | 'assignment_load_error'
   statusTh: string
   statusEn: string
-  scoreDisplay: string
-  gradeDisplay: string
-  gradeDisplayEn: string
+  hardSkillScore?: EvaluationCategoryScore
+  softSkillScore?: EvaluationCategoryScore
   commentsTh: string
   commentsEn: string
 }
@@ -323,6 +338,11 @@ function enrichStudents(
         (!selectedCycle && studentPlacements.length === 1
           ? studentPlacements[0]
           : undefined)
+    const directoryTerm = student.directoryRelations?.term
+    const studentTerm =
+      directoryTerm?.id === student.academicTermId
+        ? directoryTerm
+        : placement?.academicTerm
 
     // ข้อมูลจริง: ถ้าไม่มี ให้แสดง '-' ตามที่ผู้ใช้กำหนด (ห้ามสร้างขึ้นมาเอง)
     const advisorTh = student.advisor?.th || '-'
@@ -355,14 +375,17 @@ function enrichStudents(
     let yearEn: number | string = '-'
     const academicYear = selectedCycle
       ? selectedTerm?.academicYear
-      : student.academicYear
+      : (studentTerm?.academicYear ?? student.academicYear)
     if (typeof academicYear === 'number' && Number.isFinite(academicYear)) {
       yearTh = academicYear > 2400 ? academicYear : academicYear + 543
       yearEn = academicYear > 2400 ? academicYear - 543 : academicYear
     }
 
     const rawSem =
-      (selectedCycle ? selectedTerm?.semester : student.semester)?.trim() || ''
+      (selectedCycle
+        ? selectedTerm?.semester
+        : (studentTerm?.semester ?? student.semester)
+      )?.trim() || ''
     let semester = '-'
     if (rawSem) {
       const semLower = rawSem.toLowerCase()
@@ -410,9 +433,6 @@ function enrichStudents(
       | 'assignment_load_error' = 'pending'
     let statusTh = 'รอระบุผู้ประเมิน'
     let statusEn = 'Awaiting Evaluator'
-    const scoreDisplay = '-'
-    const gradeDisplay = '-'
-    const gradeDisplayEn = '-'
     const commentsTh = '-'
     const commentsEn = '-'
 
@@ -536,9 +556,8 @@ function enrichStudents(
       status,
       statusTh,
       statusEn,
-      scoreDisplay,
-      gradeDisplay,
-      gradeDisplayEn,
+      hardSkillScore: assignment?.categoryScores?.hardSkill,
+      softSkillScore: assignment?.categoryScores?.softSkill,
       commentsTh,
       commentsEn
     }
@@ -875,12 +894,6 @@ function openDoc(
 const isEditModalOpen = ref(false)
 const isEditSubmitting = ref(false)
 const editingStudentId = ref<string>('')
-const editReferenceDataLoading = ref(false)
-const editReferenceDataError = ref('')
-const editReferenceDataLoaded = ref(false)
-const editSchools = ref<SchoolItem[]>([])
-const editPrograms = ref<ProgramItem[]>([])
-const editCourses = ref<CourseItem[]>([])
 
 const editForm = ref({
   studentId: '',
@@ -899,49 +912,15 @@ const editForm = ref({
   admissionYear: '' as number | string
 })
 
-const availableProgramsForEditSchool = computed(() => {
-  if (!editForm.value.schoolId) return editPrograms.value
-  return editPrograms.value.filter(
-    (p) => p.schoolId === editForm.value.schoolId
-  )
-})
-
-async function loadEditReferenceData(): Promise<void> {
-  if (editReferenceDataLoaded.value || editReferenceDataLoading.value) return
-  editReferenceDataLoading.value = true
-  editReferenceDataError.value = ''
-  try {
-    const [schools, programs, courses] = await Promise.all([
-      loadAllPages((page, pageSize) =>
-        api<PaginatedItems<SchoolItem>>('/academic/schools', {
-          query: { page, pageSize }
-        })
-      ),
-      loadAllPages((page, pageSize) =>
-        api<PaginatedItems<ProgramItem>>('/academic/programs', {
-          query: { page, pageSize }
-        })
-      ),
-      loadAllPages((page, pageSize) =>
-        api<PaginatedItems<CourseItem>>('/academic/courses', {
-          query: { page, pageSize }
-        })
-      )
-    ])
-    editSchools.value = schools.items
-    editPrograms.value = programs.items
-    editCourses.value = courses.items
-    editReferenceDataLoaded.value = true
-  } catch (error) {
-    editReferenceDataError.value =
-      'ไม่สามารถโหลดสำนักวิชา หลักสูตร และรายวิชาได้ กรุณาลองใหม่'
-    console.error('Failed to load Student edit references:', error)
-  } finally {
-    editReferenceDataLoading.value = false
+function setEditSchool(value: string): void {
+  if (editForm.value.schoolId !== value) {
+    editForm.value.programId = ''
+    editForm.value.courseId = ''
   }
+  editForm.value.schoolId = value
 }
 
-async function openEditModal(row: EnrichedStudentRow): Promise<void> {
+function openEditModal(row: EnrichedStudentRow): void {
   const s = row.student
   editingStudentId.value = s.id
   editForm.value = {
@@ -964,7 +943,6 @@ async function openEditModal(row: EnrichedStudentRow): Promise<void> {
     admissionYear: s.admissionYear ?? ''
   }
   isEditModalOpen.value = true
-  await loadEditReferenceData()
 }
 
 async function handleEditSubmit() {
@@ -1158,8 +1136,8 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
         { wch: 28 }, // ตำแหน่งผู้ประเมิน
         { wch: 28 }, // อีเมลผู้ประเมิน
         { wch: 20 }, // สถานะ
-        { wch: 20 }, // คะแนนเฉลี่ย
-        { wch: 22 } // ผลการประเมิน
+        { wch: 24 }, // คะแนน Hard Skill
+        { wch: 24 } // คะแนน Soft Skill
       ]
 
       const wb = XLSX.utils.book_new()
@@ -1200,8 +1178,8 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
         { wch: 28 }, // Evaluator Position
         { wch: 28 }, // Evaluator Email
         { wch: 20 }, // Evaluation Status
-        { wch: 24 }, // Average Score
-        { wch: 24 } // Grade
+        { wch: 24 }, // Hard Skill Average
+        { wch: 24 } // Soft Skill Average
       ]
 
       const wb = XLSX.utils.book_new()
@@ -2462,39 +2440,14 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                 >
                   สำนักวิชา (School) <span class="text-rose-500">*</span>
                 </label>
-                <select
-                  v-model="editForm.schoolId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                <PaginatedLookupSelect
+                  :model-value="editForm.schoolId"
+                  api-path="/academic/schools"
+                  id-query-param="schoolIds"
+                  label="สำนักวิชา"
                   required
-                  :disabled="editReferenceDataLoading"
-                >
-                  <option v-if="editReferenceDataLoading" value="" disabled>
-                    กำลังโหลดสำนักวิชา…
-                  </option>
-                  <option
-                    v-for="school in editSchools"
-                    :key="school.id"
-                    :value="school.id"
-                  >
-                    {{ school.name?.th }} ({{ school.name?.en }})
-                  </option>
-                </select>
-                <UAlert
-                  v-if="editReferenceDataError"
-                  class="mt-2"
-                  color="error"
-                  :description="editReferenceDataError"
-                  title="โหลดข้อมูลอ้างอิงไม่สำเร็จ"
-                  variant="soft"
-                />
-                <UButton
-                  v-if="editReferenceDataError"
-                  class="mt-2"
-                  color="error"
-                  label="ลองอีกครั้ง"
-                  size="xs"
-                  variant="outline"
-                  @click="loadEditReferenceData"
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  @update:model-value="setEditSchool"
                 />
               </div>
 
@@ -2506,23 +2459,17 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                   สาขาวิชา / หลักสูตร (Program)
                   <span class="text-rose-500">*</span>
                 </label>
-                <select
+                <PaginatedLookupSelect
                   v-model="editForm.programId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                  api-path="/academic/programs"
+                  id-query-param="programIds"
+                  label="สาขาวิชา / หลักสูตร"
+                  :query="
+                    editForm.schoolId ? { schoolId: editForm.schoolId } : {}
+                  "
                   required
-                  :disabled="editReferenceDataLoading"
-                >
-                  <option v-if="editReferenceDataLoading" value="" disabled>
-                    กำลังโหลดหลักสูตร…
-                  </option>
-                  <option
-                    v-for="prog in availableProgramsForEditSchool"
-                    :key="prog.id"
-                    :value="prog.id"
-                  >
-                    {{ prog.name?.th }} ({{ prog.name?.en }})
-                  </option>
-                </select>
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
               </div>
 
               <!-- 6. รายวิชาที่ฝึกงาน -->
@@ -2532,20 +2479,17 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                 >
                   รายวิชาที่ฝึกงาน (Course)
                 </label>
-                <select
+                <PaginatedLookupSelect
                   v-model="editForm.courseId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                  :disabled="editReferenceDataLoading"
-                >
-                  <option value="">-- ไม่ระบุรายวิชา --</option>
-                  <option v-if="editReferenceDataLoading" value="" disabled>
-                    กำลังโหลดรายวิชา…
-                  </option>
-                  <option v-for="c in editCourses" :key="c.id" :value="c.id">
-                    {{ c.courseCode ? c.courseCode + ' — ' : ''
-                    }}{{ c.name?.th }} ({{ c.name?.en }})
-                  </option>
-                </select>
+                  api-path="/academic/courses"
+                  id-query-param="courseIds"
+                  label="รายวิชาที่ฝึกงาน"
+                  empty-label="-- ไม่ระบุรายวิชา --"
+                  :query="
+                    editForm.programId ? { programId: editForm.programId } : {}
+                  "
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
               </div>
 
               <!-- 7. ภาคการศึกษา -->

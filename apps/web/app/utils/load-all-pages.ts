@@ -32,7 +32,7 @@ function assertPageMetadata<T extends { readonly id: string }>(
 
 export async function loadAllPages<T extends { readonly id: string }>(
   loadPage: (page: number, pageSize: number) => Promise<PaginatedItems<T>>,
-  pageSize = 500
+  pageSize = 100
 ): Promise<PaginatedItems<T>> {
   if (!Number.isInteger(pageSize) || pageSize < 1) {
     throw new Error('PAGINATION_PAGE_SIZE_INVALID')

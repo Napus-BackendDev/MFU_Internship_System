@@ -122,6 +122,43 @@ describe('runtime baseline', () => {
     ).toThrow('Development MONGODB_URI must use localhost')
   })
 
+  it('rejects a development MongoDB seed list containing any remote host', () => {
+    expect(() =>
+      loadEnvironment({
+        ...developmentEnvironment,
+        MONGODB_URI:
+          'mongodb://localhost:27017,db.example.invalid:27017/internship'
+      })
+    ).toThrow('Development MONGODB_URI must use localhost')
+  })
+
+  it('rejects malformed MongoDB URIs without echoing credentials', () => {
+    const secret = 'synthetic-only-password'
+    let caught: unknown
+
+    try {
+      loadEnvironment({
+        ...developmentEnvironment,
+        MONGODB_URI: `mongodb://${secret}@/internship`
+      })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(Error)
+    expect(String(caught)).toContain('MONGODB_URI must be a valid MongoDB')
+    expect(String(caught)).not.toContain(secret)
+  })
+
+  it('accepts a loopback IPv6 MongoDB endpoint for Development', () => {
+    expect(
+      loadEnvironment({
+        ...developmentEnvironment,
+        MONGODB_URI: 'mongodb://[::1]:27017/internship_transcript_v2_dev'
+      }).MONGODB_URI
+    ).toBe('mongodb://[::1]:27017/internship_transcript_v2_dev')
+  })
+
   it('rejects unresolved production secrets', () => {
     expect(() =>
       loadEnvironment({
@@ -146,6 +183,28 @@ describe('runtime baseline', () => {
     expect(loadEnvironment(productionEnvironment).SMTP_FROM).toBe(
       'Internship <no-reply@example.test>'
     )
+  })
+
+  it('accepts a valid TLS-enabled Production MongoDB seed list', () => {
+    const mongoUri =
+      'mongodb://user:encoded%40password@db1.example.test:27017,db2.example.test:27018/internship?replicaSet=rs0&tls=true'
+
+    expect(
+      loadEnvironment({
+        ...productionEnvironment,
+        MONGODB_URI: mongoUri
+      }).MONGODB_URI
+    ).toBe(mongoUri)
+  })
+
+  it('rejects a Production MongoDB seed list containing any loopback host', () => {
+    expect(() =>
+      loadEnvironment({
+        ...productionEnvironment,
+        MONGODB_URI:
+          'mongodb://db.example.test:27017,127.0.0.1:27018/internship?tls=true'
+      })
+    ).toThrow('Production data services must not use localhost')
   })
 
   it('requires TLS for standard Production MongoDB connection strings', () => {

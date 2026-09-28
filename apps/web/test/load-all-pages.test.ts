@@ -36,6 +36,17 @@ describe('loadAllPages', () => {
     expect(loadPage.mock.calls.map(([page]) => page)).toEqual([1, 2])
   })
 
+  it('uses a page size accepted by document list endpoints by default', async () => {
+    const loadPage = vi.fn(async (page: number, pageSize: number) => ({
+      items: [{ id: 'document-1' }],
+      meta: { page, pageSize, total: 1, totalPages: 1 }
+    }))
+
+    await loadAllPages(loadPage)
+
+    expect(loadPage).toHaveBeenCalledWith(1, 100)
+  })
+
   it('fails closed when result count changes between pages', async () => {
     const loadPage = vi.fn(async (page: number, pageSize: number) => ({
       items:

@@ -1,3 +1,4 @@
+import { isIP } from 'node:net'
 import { z } from 'zod'
 
 export {
@@ -37,7 +38,7 @@ const environmentSchema = z.object({
   CONTAINERIZED: booleanString.default(false),
   PORT: z.coerce.number().int().min(1).max(65_535).default(8081),
   WORKER_HEALTH_PORT: z.coerce.number().int().min(1).max(65_535).default(8082),
-  MONGODB_URI: z.url(),
+  MONGODB_URI: z.string().min(1),
   REDIS_URL: z.url(),
   TRUSTED_PROXY_CIDRS: z.string().default(''),
   PUBLIC_WEB_URL: z.url(),
@@ -88,6 +89,162 @@ export type AppEnvironment = z.infer<typeof environmentSchema> & {
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 
+interface ParsedMongoConnectionString {
+  protocol: 'mongodb:' | 'mongodb+srv:'
+  hosts: string[]
+  options: Array<[string, string]>
+}
+
+function invalidMongoConnectionString(): never {
+  throw new Error('MONGODB_URI must be a valid MongoDB connection string.')
+}
+
+function splitMongoHosts(value: string): string[] {
+  const hosts: string[] = []
+  let host = ''
+  let inIpv6Address = false
+
+  for (const character of value) {
+    if (character === '[') {
+      if (inIpv6Address || host.length > 0)
+        return invalidMongoConnectionString()
+      inIpv6Address = true
+      host += character
+      continue
+    }
+
+    if (character === ']') {
+      if (!inIpv6Address) return invalidMongoConnectionString()
+      inIpv6Address = false
+      host += character
+      continue
+    }
+
+    if (character === ',' && !inIpv6Address) {
+      if (!host) return invalidMongoConnectionString()
+      hosts.push(host)
+      host = ''
+      continue
+    }
+
+    host += character
+  }
+
+  if (inIpv6Address || !host) return invalidMongoConnectionString()
+  hosts.push(host)
+  return hosts
+}
+
+function parseMongoHost(value: string): string {
+  let port: string | undefined
+
+  if (value.startsWith('[')) {
+    const match = /^\[([\da-f:.]+)\](?::(\d+))?$/i.exec(value)
+    const address = match?.[1]
+    if (!address || isIP(address) !== 6) return invalidMongoConnectionString()
+    port = match[2]
+  } else {
+    const match = /^([a-z\d.-]+)(?::(\d+))?$/i.exec(value)
+    const address = match?.[1]
+    if (!address) return invalidMongoConnectionString()
+    port = match[2]
+
+    const labels = address.replace(/\.$/, '').split('.')
+    if (
+      address.length > 253 ||
+      labels.some(
+        (label) =>
+          label.length < 1 ||
+          label.length > 63 ||
+          !/^[a-z\d](?:[a-z\d-]*[a-z\d])?$/i.test(label)
+      )
+    ) {
+      return invalidMongoConnectionString()
+    }
+  }
+
+  if (port !== undefined && (Number(port) < 1 || Number(port) > 65_535)) {
+    return invalidMongoConnectionString()
+  }
+
+  try {
+    const parsed = new URL(`http://${value}/`)
+    return parsed.hostname
+      .replace(/^\[|\]$/g, '')
+      .toLowerCase()
+      .replace(/\.$/, '')
+  } catch {
+    return invalidMongoConnectionString()
+  }
+}
+
+function parseMongoConnectionString(
+  value: string
+): ParsedMongoConnectionString {
+  const protocol = value.startsWith('mongodb+srv://')
+    ? 'mongodb+srv:'
+    : value.startsWith('mongodb://')
+      ? 'mongodb:'
+      : null
+
+  if (!protocol) {
+    throw new Error('MONGODB_URI must use a supported service URL scheme.')
+  }
+
+  if (/[\s#]/.test(value)) return invalidMongoConnectionString()
+
+  const connection = value.slice(protocol.length + 2)
+  const suffixStart = connection.search(/[/?]/)
+  const authority =
+    suffixStart < 0 ? connection : connection.slice(0, suffixStart)
+  const suffix = suffixStart < 0 ? '' : connection.slice(suffixStart)
+  const atIndex = authority.lastIndexOf('@')
+  const userInfo = atIndex < 0 ? '' : authority.slice(0, atIndex)
+  const hostList = atIndex < 0 ? authority : authority.slice(atIndex + 1)
+
+  if (
+    !authority ||
+    !hostList ||
+    (atIndex >= 0 && (!userInfo || userInfo.includes('@')))
+  ) {
+    return invalidMongoConnectionString()
+  }
+
+  if (userInfo) {
+    try {
+      for (const part of userInfo.split(':')) decodeURIComponent(part)
+    } catch {
+      return invalidMongoConnectionString()
+    }
+  }
+
+  const hosts = splitMongoHosts(hostList).map(parseMongoHost)
+  const srvHost = hosts[0]
+  if (
+    protocol === 'mongodb+srv:' &&
+    (hosts.length !== 1 ||
+      !srvHost ||
+      isIP(srvHost) !== 0 ||
+      /:\d+$/.test(hostList))
+  ) {
+    return invalidMongoConnectionString()
+  }
+
+  const queryStart = suffix.indexOf('?')
+  const pathname = queryStart < 0 ? suffix : suffix.slice(0, queryStart)
+  if (pathname && !/^\/[^/]*$/.test(pathname)) {
+    return invalidMongoConnectionString()
+  }
+
+  let options: Array<[string, string]> = []
+  if (queryStart >= 0) {
+    const query = suffix.slice(queryStart + 1)
+    options = [...new URLSearchParams(query).entries()]
+  }
+
+  return { protocol, hosts, options }
+}
+
 function hostname(value: string): string {
   return new URL(value).hostname.replace(/^\[|\]$/g, '').toLowerCase()
 }
@@ -113,10 +270,11 @@ function isExactProductionCorsOrigin(value: string): boolean {
 }
 
 function mongoConnectionUsesValidatedTls(value: string): boolean {
-  const url = new URL(value)
-  const options: Array<[string, string]> = [...url.searchParams.entries()].map(
-    ([key, option]) => [key.toLowerCase(), option.toLowerCase()]
-  )
+  const { protocol, options: rawOptions } = parseMongoConnectionString(value)
+  const options: Array<[string, string]> = rawOptions.map(([key, option]) => [
+    key.toLowerCase(),
+    option.toLowerCase()
+  ])
   const tlsOptions = options
     .filter(([key]) => ['tls', 'ssl'].includes(key))
     .map(([, option]) => option)
@@ -137,19 +295,13 @@ function mongoConnectionUsesValidatedTls(value: string): boolean {
   }
 
   if (tlsOptions.includes('true')) return true
-  return url.protocol === 'mongodb+srv:'
+  return protocol === 'mongodb+srv:'
 }
 
 function assertServiceUrlSchemes(
   environment: z.infer<typeof environmentSchema>
 ): void {
-  if (
-    !['mongodb:', 'mongodb+srv:'].includes(
-      new URL(environment.MONGODB_URI).protocol
-    )
-  ) {
-    throw new Error('MONGODB_URI must use a supported service URL scheme.')
-  }
+  parseMongoConnectionString(environment.MONGODB_URI)
 
   if (
     !['redis:', 'rediss:'].includes(new URL(environment.REDIS_URL).protocol)
@@ -174,12 +326,10 @@ function assertEnvironmentIsolation(
   }
 
   if (environment.NODE_ENV === 'development') {
+    const { hosts } = parseMongoConnectionString(environment.MONGODB_URI)
     if (
-      !LOCAL_HOSTS.has(hostname(environment.MONGODB_URI)) &&
-      !(
-        environment.CONTAINERIZED &&
-        hostname(environment.MONGODB_URI) === 'mongodb'
-      )
+      !hosts.every((host) => LOCAL_HOSTS.has(host)) &&
+      !(environment.CONTAINERIZED && hosts.every((host) => host === 'mongodb'))
     ) {
       throw new Error('Development MONGODB_URI must use localhost.')
     }
@@ -228,7 +378,9 @@ function assertEnvironmentIsolation(
   }
 
   if (
-    LOCAL_HOSTS.has(hostname(environment.MONGODB_URI)) ||
+    parseMongoConnectionString(environment.MONGODB_URI).hosts.some((host) =>
+      LOCAL_HOSTS.has(host)
+    ) ||
     LOCAL_HOSTS.has(hostname(environment.REDIS_URL))
   ) {
     throw new Error('Production data services must not use localhost.')

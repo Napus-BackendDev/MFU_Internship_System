@@ -86,6 +86,9 @@ const auth = useAuthStore()
 const toast = useToast()
 const page = ref(1)
 const pageSize = 25
+const cycleSearch = ref('')
+const cycleSearchQuery = ref('')
+const cycleStatus = ref('')
 const referencePageSize = 25
 const termPage = ref(1)
 const termSearch = ref('')
@@ -99,12 +102,8 @@ const competencySetSearchQuery = ref('')
 const operationCycleId = ref('')
 const previews = reactive<Record<string, CyclePreview | undefined>>({})
 const versions = ref<readonly CompetencyVersion[]>([])
-const programs = ref<readonly Program[]>([])
-const programsPending = ref(false)
-const programsError = ref(false)
 const versionsError = ref(false)
 const submitting = ref(false)
-let programLoadVersion = 0
 
 function bindDebouncedSearch(
   input: Ref<string>,
@@ -134,6 +133,10 @@ bindDebouncedSearch(
   competencySetSearchQuery,
   competencySetPage
 )
+bindDebouncedSearch(cycleSearch, cycleSearchQuery, page)
+watch(cycleStatus, () => {
+  page.value = 1
+})
 
 const cycleScopes = computed(() => {
   const actor = auth.actor
@@ -175,9 +178,14 @@ const {
   'evaluation-cycle-management',
   () =>
     api<PageResult<EvaluationCycle>>('/evaluation-cycles', {
-      query: { page: page.value, pageSize }
+      query: {
+        page: page.value,
+        pageSize,
+        search: cycleSearchQuery.value || undefined,
+        status: cycleStatus.value || undefined
+      }
     }),
-  { watch: [page] }
+  { watch: [page, cycleSearchQuery, cycleStatus] }
 )
 
 const cycleProgramIds = computed(() =>
@@ -428,41 +436,10 @@ async function onCompetencySetChange(event: Event): Promise<void> {
   await loadVersions(competencySetId)
 }
 
-async function loadProgramsForSchool(schoolId: string): Promise<void> {
-  const requestVersion = ++programLoadVersion
-  programs.value = []
-  programsError.value = false
-  if (!schoolId) {
-    programsPending.value = false
-    return
-  }
-
-  programsPending.value = true
-  try {
-    const result = await loadAllPages((page, pageSize) =>
-      api<PageResult<Program>>('/academic/programs', {
-        query: { page, pageSize, schoolId }
-      })
-    )
-    if (requestVersion === programLoadVersion) {
-      programs.value = result.items
-    }
-  } catch {
-    if (requestVersion === programLoadVersion) {
-      programsError.value = true
-    }
-  } finally {
-    if (requestVersion === programLoadVersion) {
-      programsPending.value = false
-    }
-  }
-}
-
 watch(
   () => draft.schoolId,
-  async (schoolId) => {
+  () => {
     draft.programId = ''
-    await loadProgramsForSchool(schoolId)
   }
 )
 
@@ -519,9 +496,7 @@ async function createCycle(): Promise<void> {
     (!canCreateTenantCycle.value && !draft.schoolId) ||
     (requiresProgram.value && !draft.programId) ||
     referencesPending.value ||
-    referenceError.value ||
-    programsPending.value ||
-    programsError.value
+    referenceError.value
   ) {
     toast.add({
       title: 'ข้อมูลรอบประเมินไม่ครบหรือไม่ถูกต้อง',
@@ -1010,43 +985,17 @@ async function closeCycle(cycle: EvaluationCycle): Promise<void> {
             <span class="font-medium"
               >หลักสูตร{{ requiresProgram ? '' : ' (ไม่บังคับ)' }}</span
             >
-            <select
+            <PaginatedLookupSelect
               v-model="draft.programId"
+              api-path="/academic/programs"
+              id-query-param="programIds"
+              :query="{ schoolId: draft.schoolId, archived: 'false' }"
+              :empty-label="'ทุกหลักสูตรในสำนักวิชา'"
               :required="requiresProgram"
-              class="w-full rounded-lg border border-default bg-default px-3 py-2"
-            >
-              <option value="" :disabled="requiresProgram">
-                ทุกหลักสูตรในสำนักวิชา
-              </option>
-              <option
-                v-for="program in programs"
-                :key="program.id"
-                :value="program.id"
-              >
-                {{ program.programCode }} · {{ program.name.th }}
-              </option>
-            </select>
+              label="หลักสูตร"
+              control-class="!text-sm !py-2"
+            />
           </label>
-          <div
-            v-if="draft.schoolId && (programsPending || programsError)"
-            class="flex items-center gap-2 text-xs"
-            role="status"
-          >
-            <span v-if="programsPending" class="text-muted"
-              >กำลังโหลดหลักสูตร...</span
-            >
-            <template v-else>
-              <span class="text-error" role="alert">โหลดหลักสูตรไม่สำเร็จ</span>
-              <UButton
-                type="button"
-                color="neutral"
-                label="ลองอีกครั้ง"
-                size="xs"
-                variant="outline"
-                @click="loadProgramsForSchool(draft.schoolId)"
-              />
-            </template>
-          </div>
         </template>
         <label class="space-y-1 text-sm">
           <span class="font-medium">เปิดรับผล (เวลาไทย)</span>
@@ -1073,12 +1022,7 @@ async function closeCycle(cycle: EvaluationCycle): Promise<void> {
             icon="i-lucide-plus"
             label="บันทึกรอบฉบับร่าง"
             :loading="submitting"
-            :disabled="
-              referencesPending ||
-              Boolean(referenceError) ||
-              programsPending ||
-              programsError
-            "
+            :disabled="referencesPending || Boolean(referenceError)"
           />
         </div>
       </form>
@@ -1102,6 +1046,25 @@ async function closeCycle(cycle: EvaluationCycle): Promise<void> {
           <p class="text-xs text-muted">
             {{ totalCycles }} รอบ · แสดงหน้า {{ page }}
           </p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <UInput
+              v-model="cycleSearch"
+              aria-label="ค้นหารอบประเมิน"
+              class="w-full sm:w-64"
+              icon="i-lucide-search"
+              placeholder="ค้นหารหัสหรือชื่อรอบ"
+            />
+            <select
+              v-model="cycleStatus"
+              aria-label="กรองสถานะรอบ"
+              class="rounded-lg border border-default bg-default px-3 py-2 text-sm"
+            >
+              <option value="">ทุกสถานะ</option>
+              <option value="draft">ฉบับร่าง</option>
+              <option value="active">เปิดรับผล</option>
+              <option value="closed">ปิดแล้ว</option>
+            </select>
+          </div>
         </div>
         <UButton
           color="neutral"
@@ -1122,7 +1085,11 @@ async function closeCycle(cycle: EvaluationCycle): Promise<void> {
         v-else-if="!cyclesError && visibleCycles.length === 0"
         class="p-8 text-center text-sm text-muted"
       >
-        ยังไม่มีรอบประเมินในขอบเขตของคุณ
+        {{
+          cycleSearchQuery || cycleStatus
+            ? 'ไม่พบรอบประเมินตามตัวกรอง'
+            : 'ยังไม่มีรอบประเมินในขอบเขตของคุณ'
+        }}
       </div>
       <div v-else class="divide-y divide-default">
         <article

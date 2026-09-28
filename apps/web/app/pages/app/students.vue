@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import * as XLSX from 'xlsx'
 import { createSandboxedEmailPreviewDocument } from '~/utils/email-preview'
-import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
 import { toSafeInvitationPath } from '~/utils/safe-invitation-path'
 
 definePageMeta({ layout: 'app', middleware: 'auth' })
@@ -31,7 +30,21 @@ interface Student {
   readonly createdAt?: string
   readonly updatedAt?: string
   readonly directoryRelations?: {
+    readonly school?: SchoolItem
+    readonly program?: ProgramItem
+    readonly course?: CourseItem
+    readonly term?: Pick<TermItem, 'id' | 'semester' | 'academicYear'>
     readonly placements?: readonly PlacementItem[]
+  }
+}
+
+interface PaginatedItems<T> {
+  readonly items: readonly T[]
+  readonly meta: {
+    readonly page: number
+    readonly pageSize: number
+    readonly total: number
+    readonly totalPages: number
   }
 }
 
@@ -73,6 +86,11 @@ interface EvaluationCycleItem {
   readonly name: { readonly th: string; readonly en: string }
   readonly academicTermId: string
   readonly status: 'draft' | 'active' | 'closed'
+  readonly academicTerm?: {
+    readonly id: string
+    readonly semester: string
+    readonly academicYear: number
+  }
 }
 
 interface OrganizationItem {
@@ -143,27 +161,29 @@ const search = ref('')
 const selectedSchool = ref('all')
 const selectedProgram = ref('all')
 const selectedCycleId = ref('all')
+const selectedCycleItem = ref<EvaluationCycleItem | null>(null)
 const selectedEvaluationStatus = ref('all')
 const page = ref(1)
 const pageSize = ref(5)
 
 const {
-  data: cyclesData,
+  data: activeCyclesData,
   error: cyclesError,
   pending: cyclesPending,
   refresh: refreshCycles
 } = await useAsyncData('students-evaluation-cycles', () =>
-  loadAllPages((cyclePage, cyclePageSize) =>
-    api<PaginatedItems<EvaluationCycleItem>>('/evaluation-cycles', {
-      query: { page: cyclePage, pageSize: cyclePageSize }
-    })
-  )
+  api<PaginatedItems<EvaluationCycleItem>>('/evaluation-cycles', {
+    query: { page: 1, pageSize: 2, status: 'active' }
+  })
 )
-const activeCycles = (cyclesData.value?.items ?? []).filter(
-  (cycle) => cycle.status === 'active'
-)
-if (activeCycles.length === 1) {
-  selectedCycleId.value = activeCycles[0]!.id
+if (activeCyclesData.value?.meta.total === 1) {
+  selectedCycleItem.value = activeCyclesData.value.items[0] ?? null
+  selectedCycleId.value = selectedCycleItem.value?.id ?? 'all'
+}
+
+function setSelectedCycleItem(item: unknown): void {
+  selectedCycleItem.value =
+    item && typeof item === 'object' ? (item as EvaluationCycleItem) : null
 }
 
 // Fetch students list with school, program, evaluationStatus, and search filters
@@ -201,12 +221,6 @@ const { data, error, pending, refresh } = await useAsyncData(
   }
 )
 
-const availablePrograms = computed(() => {
-  const allProgs = programsData.value?.items ?? []
-  if (selectedSchool.value === 'all') return allProgs
-  return allProgs.filter((p) => p.schoolId === selectedSchool.value)
-})
-
 watch(selectedSchool, () => {
   selectedProgram.value = 'all'
   page.value = 1
@@ -236,53 +250,6 @@ function resetFilters(): void {
   selectedEvaluationStatus.value = 'all'
   page.value = 1
 }
-
-// Fetch schools and programs for dropdowns and matching
-function loadReferencePages<T extends { readonly id: string }>(
-  path: string
-): Promise<PaginatedItems<T>> {
-  return loadAllPages((referencePage, referencePageSize) =>
-    api<PaginatedItems<T>>(path, {
-      query: { page: referencePage, pageSize: referencePageSize }
-    })
-  )
-}
-
-const {
-  data: schoolsData,
-  error: schoolsError,
-  pending: schoolsPending,
-  refresh: refreshSchools
-} = await useAsyncData('students-schools', () =>
-  loadReferencePages<SchoolItem>('/academic/schools')
-)
-
-const {
-  data: programsData,
-  error: programsError,
-  pending: programsPending,
-  refresh: refreshPrograms
-} = await useAsyncData('students-programs', () =>
-  loadReferencePages<ProgramItem>('/academic/programs')
-)
-
-const {
-  data: coursesData,
-  error: coursesError,
-  pending: coursesPending,
-  refresh: refreshCourses
-} = await useAsyncData('students-courses', () =>
-  loadReferencePages<CourseItem>('/academic/courses')
-)
-
-const {
-  data: termsData,
-  error: termsError,
-  pending: termsPending,
-  refresh: refreshTerms
-} = await useAsyncData('students-terms', () =>
-  loadReferencePages<TermItem>('/academic/terms')
-)
 
 interface ProvinceMasterItem {
   id: string
@@ -352,6 +319,7 @@ interface PlacementItem {
   readonly organizationId?: string
   readonly academicTermId: string
   readonly courseId?: string
+  readonly academicTerm?: Pick<TermItem, 'id' | 'semester' | 'academicYear'>
   readonly organization?: OrganizationItem
 }
 
@@ -387,44 +355,39 @@ interface CompetencyVersionItem {
   readonly sections: readonly SectionPreview[]
 }
 
+const competencyFormSearch = ref('')
+const competencyFormPage = ref(1)
+watch(competencyFormSearch, () => {
+  competencyFormPage.value = 1
+})
 const {
   data: evaluationFormsData,
   error: evaluationFormsError,
   pending: evaluationFormsPending,
   refresh: refreshEvaluationForms
-} = await useAsyncData('students-eval-forms', () =>
-  loadReferencePages<CompetencySetItem>('/competency-sets')
+} = await useAsyncData(
+  'students-eval-forms',
+  () =>
+    api<PaginatedItems<CompetencySetItem>>('/competency-sets', {
+      query: {
+        page: competencyFormPage.value,
+        pageSize: 25,
+        search: competencyFormSearch.value.trim() || undefined,
+        archived: false
+      }
+    }),
+  { watch: [competencyFormSearch, competencyFormPage] }
 )
 
 const referenceDataError = computed(() =>
-  Boolean(
-    schoolsError.value ||
-    programsError.value ||
-    coursesError.value ||
-    termsError.value ||
-    provincesError.value ||
-    evaluationFormsError.value
-  )
+  Boolean(provincesError.value || evaluationFormsError.value)
 )
 const referenceDataPending = computed(
-  () =>
-    schoolsPending.value ||
-    programsPending.value ||
-    coursesPending.value ||
-    termsPending.value ||
-    provincesPending.value ||
-    evaluationFormsPending.value
+  () => provincesPending.value || evaluationFormsPending.value
 )
 
 async function retryReferenceData(): Promise<void> {
-  await Promise.allSettled([
-    refreshSchools(),
-    refreshPrograms(),
-    refreshCourses(),
-    refreshTerms(),
-    refreshProvinces(),
-    refreshEvaluationForms()
-  ])
+  await Promise.allSettled([refreshProvinces(), refreshEvaluationForms()])
 }
 
 const activeCompetencyForms = computed(() =>
@@ -434,27 +397,21 @@ const activeCompetencyForms = computed(() =>
 )
 
 // Helper lookup for names
-function getSchoolDisplay(schoolId: string): string {
-  const s = schoolsData.value?.items?.find(
-    (item) => item.id === schoolId || item.schoolCode === schoolId
-  )
-  if (s) return s.name.th
+function getSchoolDisplay(schoolId: string, student?: Student): string {
+  const s = student?.directoryRelations?.school
+  if (s && (s.id === schoolId || s.schoolCode === schoolId)) return s.name.th
   return (schoolId || '-').replace(/^[A-Za-z0-9_]+\s*[-—]\s*/, '')
 }
 
-function getProgramDisplay(programId: string): string {
-  const p = programsData.value?.items?.find(
-    (item) => item.id === programId || item.programCode === programId
-  )
-  if (p) return p.name.th
+function getProgramDisplay(programId: string, student?: Student): string {
+  const p = student?.directoryRelations?.program
+  if (p && (p.id === programId || p.programCode === programId)) return p.name.th
   return (programId || '-').replace(/^[A-Za-z0-9_]+\s*[-—]\s*/, '')
 }
 
 function getStudentPlacement(student: Student): PlacementItem | undefined {
   const matches = student.directoryRelations?.placements ?? []
-  const selectedCycle = cyclesData.value?.items.find(
-    (cycle) => cycle.id === selectedCycleId.value
-  )
+  const selectedCycle = selectedCycleItem.value
   const termId =
     selectedCycle?.academicTermId ??
     (selectedCycleId.value === 'all' ? student.academicTermId : undefined)
@@ -471,21 +428,20 @@ function getCourseDisplay(student: Student): string {
   const directId =
     selectedCycleId.value === 'all' ? student.courseId : undefined
   if (directId) {
-    const c = coursesData.value?.items?.find(
-      (item) => item.id === directId || item.courseCode === directId
-    )
-    if (c) return c.name.th
+    const c = student.directoryRelations?.course
+    if (c && (c.id === directId || c.courseCode === directId)) return c.name.th
     return directId
   }
 
   // 2. From student's placement
   const placement = getStudentPlacement(student)
   if (placement?.courseId) {
-    const c = coursesData.value?.items?.find(
-      (item) =>
-        item.id === placement.courseId || item.courseCode === placement.courseId
+    const c = student.directoryRelations?.course
+    if (
+      c &&
+      (c.id === placement.courseId || c.courseCode === placement.courseId)
     )
-    if (c) return c.name.th
+      return c.name.th
     return placement.courseId
   }
 
@@ -499,19 +455,21 @@ function getStudentCourseTrack(student: Student): {
 } {
   const directId =
     selectedCycleId.value === 'all' ? student.courseId : undefined
-  const c = directId
-    ? coursesData.value?.items?.find(
-        (item) => item.id === directId || item.courseCode === directId
-      )
-    : null
+  const directCourse = student.directoryRelations?.course
+  const c =
+    directId &&
+    directCourse &&
+    (directCourse.id === directId || directCourse.courseCode === directId)
+      ? directCourse
+      : null
   const placement = getStudentPlacement(student)
-  const placementCourse = placement?.courseId
-    ? coursesData.value?.items?.find(
-        (item) =>
-          item.id === placement.courseId ||
-          item.courseCode === placement.courseId
-      )
-    : null
+  const placementCourse =
+    placement?.courseId &&
+    directCourse &&
+    (directCourse.id === placement.courseId ||
+      directCourse.courseCode === placement.courseId)
+      ? directCourse
+      : null
 
   const resolvedCourse = c || placementCourse
   const rawCourse =
@@ -579,9 +537,7 @@ function getSemesterDisplay(student: Student): string {
   if (student.semester) return student.semester
 
   // 2. From student academicTermId or placement
-  const selectedCycle = cyclesData.value?.items.find(
-    (cycle) => cycle.id === selectedCycleId.value
-  )
+  const selectedCycle = selectedCycleItem.value
   const termId =
     selectedCycle?.academicTermId ||
     (selectedCycleId.value === 'all'
@@ -589,10 +545,16 @@ function getSemesterDisplay(student: Student): string {
       : undefined)
 
   if (termId) {
-    const t = termsData.value?.items?.find(
-      (item) => item.id === termId || item.code === termId
-    )
-    if (t) return t.code
+    if (selectedCycle?.academicTermId === termId) {
+      return selectedCycle.academicTerm?.semester ?? '-'
+    }
+    if (selectedCycleId.value === 'all') {
+      const term =
+        student.directoryRelations?.term?.id === termId
+          ? student.directoryRelations.term
+          : getStudentPlacement(student)?.academicTerm
+      return term?.semester ?? student.semester ?? '-'
+    }
   }
 
   return '-'
@@ -600,9 +562,7 @@ function getSemesterDisplay(student: Student): string {
 
 function getAcademicYearDisplay(student: Student): string {
   // 1. From academicTermId linked term
-  const selectedCycle = cyclesData.value?.items.find(
-    (cycle) => cycle.id === selectedCycleId.value
-  )
+  const selectedCycle = selectedCycleItem.value
   const termId =
     selectedCycle?.academicTermId ||
     (selectedCycleId.value === 'all'
@@ -610,11 +570,17 @@ function getAcademicYearDisplay(student: Student): string {
       : undefined)
 
   if (termId) {
-    const t = termsData.value?.items?.find(
-      (item) => item.id === termId || item.code === termId
-    )
-    if (t?.academicYear) {
-      const y = Number(t.academicYear)
+    const termYear =
+      selectedCycle?.academicTermId === termId
+        ? selectedCycle.academicTerm?.academicYear
+        : selectedCycleId.value === 'all'
+          ? student.directoryRelations?.term?.id === termId
+            ? student.directoryRelations.term.academicYear
+            : (getStudentPlacement(student)?.academicTerm?.academicYear ??
+              student.academicYear)
+          : undefined
+    if (termYear) {
+      const y = Number(termYear)
       return String(y > 2400 ? y : y + 543)
     }
   }
@@ -823,14 +789,13 @@ const editForm = ref({
   admissionYear: '' as number | string
 })
 
-const availableProgramsForEditSchool = computed(() => {
-  if (!editForm.value.schoolId) return programsData.value?.items || []
-  return (
-    programsData.value?.items?.filter(
-      (p) => p.schoolId === editForm.value.schoolId
-    ) || []
-  )
-})
+function setEditSchool(value: string): void {
+  if (editForm.value.schoolId !== value) {
+    editForm.value.programId = ''
+    editForm.value.courseId = ''
+  }
+  editForm.value.schoolId = value
+}
 
 function openEditStudentModal(student: Student) {
   editingStudentId.value = student.id
@@ -953,15 +918,13 @@ const manualForm = ref<ManualStudentForm>({
   status: 'active'
 })
 
-// Filter programs when schoolId changes
-const availableProgramsForSchool = computed(() => {
-  if (!manualForm.value.schoolId) return programsData.value?.items || []
-  return (
-    programsData.value?.items?.filter(
-      (p) => p.schoolId === manualForm.value.schoolId
-    ) || []
-  )
-})
+function setManualSchool(value: string): void {
+  if (manualForm.value.schoolId !== value) {
+    manualForm.value.programId = ''
+    manualForm.value.courseId = ''
+  }
+  manualForm.value.schoolId = value
+}
 
 function openManualAddModal() {
   manualForm.value = {
@@ -1441,8 +1404,8 @@ function handleBulkExport() {
     ชื่อภาษาอังกฤษ: s.name.en,
     'อีเมลนักศึกษา (Student Email)': s.email,
     'อีเมลส่วนตัว (Personal Email)': s.personalEmail || '-',
-    สำนักวิชา: getSchoolDisplay(s.schoolId),
-    หลักสูตร: getProgramDisplay(s.programId),
+    สำนักวิชา: getSchoolDisplay(s.schoolId, s),
+    หลักสูตร: getProgramDisplay(s.programId, s),
     ปีการศึกษา: getAcademicYearDisplay(s),
     ภาคการศึกษา: getSemesterDisplay(s),
     รายวิชา: getCourseDisplay(s),
@@ -2105,19 +2068,14 @@ function handleModalBackdropClick() {
             <UIcon name="i-lucide-school" class="size-3.5 text-primary" />
             สำนักวิชา (School)
           </label>
-          <select
+          <PaginatedLookupSelect
             v-model="selectedSchool"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
-          >
-            <option value="all">ทุกสำนักวิชา (All Schools)</option>
-            <option
-              v-for="sch in schoolsData?.items ?? []"
-              :key="sch.id"
-              :value="sch.id"
-            >
-              {{ sch.name.th }}
-            </option>
-          </select>
+            api-path="/academic/schools"
+            id-query-param="schoolIds"
+            label="สำนักวิชา"
+            empty-label="ทุกสำนักวิชา (All Schools)"
+            empty-value="all"
+          />
         </div>
 
         <!-- 2. ตัวกรองสาขาวิชา/หลักสูตร -->
@@ -2128,19 +2086,17 @@ function handleModalBackdropClick() {
             <UIcon name="i-lucide-book-open" class="size-3.5 text-primary" />
             สาขาวิชา / หลักสูตร (Program)
           </label>
-          <select
+          <PaginatedLookupSelect
             v-model="selectedProgram"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
-          >
-            <option value="all">ทุกหลักสูตร (All Programs)</option>
-            <option
-              v-for="prog in availablePrograms"
-              :key="prog.id"
-              :value="prog.id"
-            >
-              {{ prog.name.th }}
-            </option>
-          </select>
+            api-path="/academic/programs"
+            id-query-param="programIds"
+            label="สาขาวิชา / หลักสูตร"
+            empty-label="ทุกหลักสูตร (All Programs)"
+            empty-value="all"
+            :query="
+              selectedSchool !== 'all' ? { schoolId: selectedSchool } : {}
+            "
+          />
         </div>
 
         <!-- 3. เลือกรอบเพื่อแสดงสถานะจาก Assignment ของรอบนั้น -->
@@ -2154,21 +2110,15 @@ function handleModalBackdropClick() {
             />
             รอบการประเมิน (Evaluation Cycle)
           </label>
-          <select
+          <PaginatedLookupSelect
             v-model="selectedCycleId"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
-          >
-            <option value="all">เลือกรอบประเมิน</option>
-            <option
-              v-for="cycle in cyclesData?.items ?? []"
-              :key="cycle.id"
-              :value="cycle.id"
-            >
-              {{ cycle.code }} — {{ cycle.name.th || cycle.name.en }} ({{
-                cycle.status
-              }})
-            </option>
-          </select>
+            api-path="/evaluation-cycles"
+            id-query-param="cycleIds"
+            label="รอบการประเมิน"
+            empty-label="เลือกรอบประเมิน"
+            empty-value="all"
+            @selected="setSelectedCycleItem"
+          />
         </div>
 
         <!-- 4. ตัวกรองสถานะการประเมิน (แบบ 3) -->
@@ -2460,10 +2410,10 @@ function handleModalBackdropClick() {
                     <p
                       class="font-medium text-highlighted text-xs leading-snug"
                     >
-                      {{ getSchoolDisplay(student.schoolId) }}
+                      {{ getSchoolDisplay(student.schoolId, student) }}
                     </p>
                     <p class="text-[11px] text-muted leading-snug">
-                      {{ getProgramDisplay(student.programId) }}
+                      {{ getProgramDisplay(student.programId, student) }}
                     </p>
                   </div>
                   <div class="pt-0.5">
@@ -2701,28 +2651,16 @@ function handleModalBackdropClick() {
                 >
                   สำนักวิชา (School) <span class="text-rose-500">*</span>
                 </label>
-                <select
-                  v-model="manualForm.schoolId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                <PaginatedLookupSelect
+                  :model-value="manualForm.schoolId"
+                  api-path="/academic/schools"
+                  id-query-param="schoolIds"
+                  label="สำนักวิชา"
+                  empty-label="-- เลือกสำนักวิชา --"
                   required
-                  @change="
-                    () => {
-                      const p = programsData?.items?.find(
-                        (item) => item.schoolId === manualForm.schoolId
-                      )
-                      manualForm.programId = p?.id || ''
-                    }
-                  "
-                >
-                  <option value="" disabled>-- เลือกสำนักวิชา --</option>
-                  <option
-                    v-for="school in schoolsData?.items"
-                    :key="school.id"
-                    :value="school.id"
-                  >
-                    {{ school.name.th }} ({{ school.name.en }})
-                  </option>
-                </select>
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  @update:model-value="setManualSchool"
+                />
               </div>
 
               <!-- Program Selection -->
@@ -2733,20 +2671,18 @@ function handleModalBackdropClick() {
                   สาขาวิชา / หลักสูตร (Program)
                   <span class="text-rose-500">*</span>
                 </label>
-                <select
+                <PaginatedLookupSelect
                   v-model="manualForm.programId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                  api-path="/academic/programs"
+                  id-query-param="programIds"
+                  label="สาขาวิชา / หลักสูตร"
+                  empty-label="-- เลือกหลักสูตร --"
+                  :query="
+                    manualForm.schoolId ? { schoolId: manualForm.schoolId } : {}
+                  "
                   required
-                >
-                  <option value="" disabled>-- เลือกหลักสูตร --</option>
-                  <option
-                    v-for="prog in availableProgramsForSchool"
-                    :key="prog.id"
-                    :value="prog.id"
-                  >
-                    {{ prog.name.th }} ({{ prog.name.en }})
-                  </option>
-                </select>
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
               </div>
 
               <!-- Course Selection (Full Width) -->
@@ -2756,20 +2692,19 @@ function handleModalBackdropClick() {
                 >
                   รายวิชาที่ฝึกงาน (Course)
                 </label>
-                <select
+                <PaginatedLookupSelect
                   v-model="manualForm.courseId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                >
-                  <option value="">-- ไม่ระบุรายวิชา --</option>
-                  <option
-                    v-for="c in coursesData?.items"
-                    :key="c.id"
-                    :value="c.id"
-                  >
-                    {{ c.courseCode ? c.courseCode + ' — ' : ''
-                    }}{{ c.name.th }} ({{ c.name.en }})
-                  </option>
-                </select>
+                  api-path="/academic/courses"
+                  id-query-param="courseIds"
+                  label="รายวิชาที่ฝึกงาน"
+                  empty-label="-- ไม่ระบุรายวิชา --"
+                  :query="
+                    manualForm.programId
+                      ? { programId: manualForm.programId }
+                      : {}
+                  "
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
               </div>
 
               <!-- Academic Term & Province Selection (2-Column Subgrid) -->
@@ -2780,20 +2715,14 @@ function handleModalBackdropClick() {
                   >
                     รอบ/ภาคการศึกษาฝึกงาน (Term)
                   </label>
-                  <select
+                  <PaginatedLookupSelect
                     v-model="manualForm.academicTermId"
-                    class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                  >
-                    <option value="">-- ยังไม่ระบุรอบฝึกงาน --</option>
-                    <option
-                      v-for="term in termsData?.items ?? []"
-                      :key="term.id"
-                      :value="term.id"
-                    >
-                      {{ term.code }} — {{ term.semester }}
-                      {{ term.academicYear }}
-                    </option>
-                  </select>
+                    api-path="/academic/terms"
+                    id-query-param="termIds"
+                    label="รอบ/ภาคการศึกษาฝึกงาน"
+                    empty-label="-- ยังไม่ระบุรอบฝึกงาน --"
+                    control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  />
                 </div>
 
                 <div>
@@ -3190,12 +3119,24 @@ function handleModalBackdropClick() {
                   <td class="p-2">
                     <span class="font-semibold text-highlighted">{{
                       row.student?.programReference ||
-                      getProgramDisplay(row.student?.programId || '')
+                      getProgramDisplay(
+                        row.student?.programId || '',
+                        data?.items.find(
+                          (student) =>
+                            student.studentId === row.student?.studentId
+                        )
+                      )
                     }}</span>
                     <span class="text-muted text-[10px] ml-1"
                       >({{
                         row.student?.schoolReference ||
-                        getSchoolDisplay(row.student?.schoolId || '')
+                        getSchoolDisplay(
+                          row.student?.schoolId || '',
+                          data?.items.find(
+                            (student) =>
+                              student.studentId === row.student?.studentId
+                          )
+                        )
                       }})</span
                     >
                   </td>
@@ -3520,19 +3461,15 @@ function handleModalBackdropClick() {
                 >
                   สำนักวิชา (School) <span class="text-rose-500">*</span>
                 </label>
-                <select
-                  v-model="editForm.schoolId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                <PaginatedLookupSelect
+                  :model-value="editForm.schoolId"
+                  api-path="/academic/schools"
+                  id-query-param="schoolIds"
+                  label="สำนักวิชา"
                   required
-                >
-                  <option
-                    v-for="school in schoolsData?.items"
-                    :key="school.id"
-                    :value="school.id"
-                  >
-                    {{ school.name.th }} ({{ school.name.en }})
-                  </option>
-                </select>
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  @update:model-value="setEditSchool"
+                />
               </div>
 
               <!-- 5. สาขาวิชา / หลักสูตร -->
@@ -3543,19 +3480,17 @@ function handleModalBackdropClick() {
                   สาขาวิชา / หลักสูตร (Program)
                   <span class="text-rose-500">*</span>
                 </label>
-                <select
+                <PaginatedLookupSelect
                   v-model="editForm.programId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
+                  api-path="/academic/programs"
+                  id-query-param="programIds"
+                  label="สาขาวิชา / หลักสูตร"
                   required
-                >
-                  <option
-                    v-for="prog in availableProgramsForEditSchool"
-                    :key="prog.id"
-                    :value="prog.id"
-                  >
-                    {{ prog.name.th }} ({{ prog.name.en }})
-                  </option>
-                </select>
+                  :query="
+                    editForm.schoolId ? { schoolId: editForm.schoolId } : {}
+                  "
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
               </div>
 
               <!-- 6. รายวิชาที่ฝึกงาน -->
@@ -3565,20 +3500,17 @@ function handleModalBackdropClick() {
                 >
                   รายวิชาที่ฝึกงาน (Course)
                 </label>
-                <select
+                <PaginatedLookupSelect
                   v-model="editForm.courseId"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                >
-                  <option value="">-- ไม่ระบุรายวิชา --</option>
-                  <option
-                    v-for="c in coursesData?.items"
-                    :key="c.id"
-                    :value="c.id"
-                  >
-                    {{ c.courseCode ? c.courseCode + ' — ' : ''
-                    }}{{ c.name.th }} ({{ c.name.en }})
-                  </option>
-                </select>
+                  api-path="/academic/courses"
+                  id-query-param="courseIds"
+                  label="รายวิชาที่ฝึกงาน"
+                  empty-label="-- ไม่ระบุรายวิชา --"
+                  :query="
+                    editForm.programId ? { programId: editForm.programId } : {}
+                  "
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
               </div>
 
               <!-- 7. ภาคการศึกษา -->
@@ -4185,9 +4117,17 @@ function handleModalBackdropClick() {
                 <span>1. แบบประเมิน (Form)</span>
               </div>
               <span class="text-[11px] text-muted font-medium"
-                >{{ activeCompetencyForms.length }} แบบ</span
+                >{{ evaluationFormsData?.meta.total ?? 0 }} แบบ</span
               >
             </div>
+
+            <UInput
+              v-model="competencyFormSearch"
+              icon="i-lucide-search"
+              placeholder="ค้นหาแบบประเมิน…"
+              size="sm"
+              aria-label="ค้นหาแบบประเมิน"
+            />
 
             <!-- List of Forms -->
             <div class="space-y-2.5 overflow-y-auto pr-1 flex-1 max-h-[560px]">
@@ -4252,6 +4192,35 @@ function handleModalBackdropClick() {
                   คลิกเพื่อไปสร้างแบบประเมิน
                 </NuxtLink>
               </div>
+            </div>
+            <div class="flex items-center justify-between gap-2 text-xs">
+              <UButton
+                color="neutral"
+                icon="i-lucide-chevron-left"
+                label="ก่อนหน้า"
+                size="xs"
+                variant="outline"
+                :disabled="competencyFormPage <= 1 || evaluationFormsPending"
+                @click="competencyFormPage -= 1"
+              />
+              <span class="text-muted">
+                {{
+                  evaluationFormsData?.meta.totalPages ? competencyFormPage : 0
+                }}/{{ evaluationFormsData?.meta.totalPages ?? 0 }}
+              </span>
+              <UButton
+                color="neutral"
+                trailing-icon="i-lucide-chevron-right"
+                label="ถัดไป"
+                size="xs"
+                variant="outline"
+                :disabled="
+                  competencyFormPage >=
+                    (evaluationFormsData?.meta.totalPages ?? 0) ||
+                  evaluationFormsPending
+                "
+                @click="competencyFormPage += 1"
+              />
             </div>
           </div>
 
@@ -4770,7 +4739,10 @@ function handleModalBackdropClick() {
                   }},<br />
                   มหาวิทยาลัยแม่ฟ้าหลวงขอความอนุเคราะห์ให้ท่านทำแบบประเมินผลการฝึกงานของ
                   <strong>{{ sendModalStudent?.name.th }}</strong> ({{
-                    getProgramDisplay(sendModalStudent?.programId || '')
+                    getProgramDisplay(
+                      sendModalStudent?.programId || '',
+                      sendModalStudent ?? undefined
+                    )
                   }})
                 </p>
               </div>

@@ -61,6 +61,7 @@ function serviceWith(models: {
     {} as Model<AcademicTermRecord>,
     (models.assignments ?? {}) as Model<EvaluationAssignmentRecord>,
     {} as never,
+    {} as never,
     (models.schools ?? {}) as never,
     (models.programs ?? {}) as never,
     (models.courses ?? {}) as never,

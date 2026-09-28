@@ -30,6 +30,17 @@ const pageSchema = z.object({
     .string()
     .regex(/^[a-fA-F0-9]{24}$/)
     .optional(),
+  organizationId: z
+    .string()
+    .regex(/^[a-fA-F0-9]{24}$/)
+    .optional()
+    .transform((value) => value?.toLowerCase()),
+  search: z
+    .string()
+    .trim()
+    .max(100)
+    .optional()
+    .transform((value) => value || undefined),
   status: z
     .enum([
       'pending',
@@ -54,6 +65,37 @@ const competencySetListSchema = z.object({
     .enum(['true', 'false'])
     .transform((value) => value === 'true')
     .optional()
+})
+const cycleListSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(500).default(25),
+  search: z
+    .string()
+    .trim()
+    .max(100)
+    .optional()
+    .transform((value) => value || undefined),
+  cycleIds: z
+    .string()
+    .max(2499)
+    .optional()
+    .transform((value) => value?.split(','))
+    .pipe(
+      z
+        .array(z.string().regex(/^[a-f\d]{24}$/i))
+        .max(100)
+        .optional()
+    )
+    .transform((ids) =>
+      ids === undefined
+        ? undefined
+        : [...new Set(ids.map((id) => id.toLowerCase()))]
+    ),
+  termId: z
+    .string()
+    .regex(/^[a-f\d]{24}$/i)
+    .optional(),
+  status: z.enum(['draft', 'active', 'closed']).optional()
 })
 const questionSchema = z
   .object({
@@ -216,7 +258,13 @@ export class EvaluationsController {
     @Req() request: AuthenticatedRequest,
     @Query() raw: unknown
   ): Promise<unknown> {
-    return this.service.listCycles(request.actor!, pageSchema.parse(raw))
+    const query = cycleListSchema.parse(raw)
+    return this.service.listCycles(request.actor!, query, {
+      search: query.search,
+      cycleIds: query.cycleIds,
+      termId: query.termId,
+      status: query.status
+    })
   }
 
   @RequirePermissions('cycles.manage')

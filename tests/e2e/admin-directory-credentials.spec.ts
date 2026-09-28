@@ -30,7 +30,10 @@ test('student directory never renders or searches legacy invitation credentials'
   page
 }) => {
   const aggregateRelationLoads: string[] = []
-  const masterReferenceLoads: string[] = []
+  const masterReferenceLoads: Array<{
+    path: string
+    query: Record<string, string>
+  }> = []
   await page.route('**/api/v2/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api/v2', '')
@@ -43,7 +46,10 @@ test('student directory never renders or searches legacy invitation credentials'
         '/academic/terms'
       ].includes(path)
     ) {
-      masterReferenceLoads.push(path)
+      masterReferenceLoads.push({
+        path,
+        query: Object.fromEntries(new URL(request.url()).searchParams.entries())
+      })
     }
     if (
       request.method() === 'GET' &&
@@ -99,15 +105,15 @@ test('student directory never renders or searches legacy invitation credentials'
               cycleId: 'cycle-e2e',
               placementId: 'placement-e2e',
               studentId: 'student-record-e2e',
-              evaluatorId: 'evaluator-e2e',
+              evaluatorId: '64f000000000000000000021',
               deadlineAt: '2026-12-31T23:59:59.000Z',
               status: 'pending',
               accessPin: leakedPin,
               accessPinHash: 'LEGACY-HASH-MUST-NOT-LEAK',
               invitationToken: leakedToken,
               evaluator: {
-                id: 'evaluator-e2e',
-                organizationId: 'organization-e2e',
+                id: '64f000000000000000000021',
+                organizationId: '64f000000000000000000020',
                 email: 'evaluator@example.test',
                 name: { th: 'ผู้ประเมินทดสอบ', en: 'Test Evaluator' },
                 position: { th: 'หัวหน้างาน', en: 'Supervisor' },
@@ -119,12 +125,12 @@ test('student directory never renders or searches legacy invitation credentials'
             {
               id: 'placement-e2e',
               studentId: 'student-record-e2e',
-              organizationId: 'organization-e2e',
+              organizationId: '64f000000000000000000020',
               academicTermId: 'term-e2e',
               positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
               status: 'active',
               organization: {
-                id: 'organization-e2e',
+                id: '64f000000000000000000020',
                 organizationCode: 'TEST',
                 name: { th: 'บริษัททดสอบ', en: 'Test Company' },
                 address: { province: 'Chiang Rai' }
@@ -247,7 +253,7 @@ test('student directory never renders or searches legacy invitation credentials'
             id: 'assignment-e2e',
             studentId: 'student-record-e2e',
             cycleId: 'cycle-e2e',
-            evaluatorId: 'evaluator-e2e',
+            evaluatorId: '64f000000000000000000021',
             deadlineAt: '2026-12-31T23:59:59.000Z',
             status: 'pending',
             accessPin: leakedPin,
@@ -282,8 +288,17 @@ test('student directory never renders or searches legacy invitation credentials'
     .click()
   await page.getByRole('menuitem', { name: 'แก้ไขข้อมูล' }).click()
   await expect
-    .poll(() => [...masterReferenceLoads].sort())
+    .poll(() =>
+      [...new Set(masterReferenceLoads.map(({ path }) => path))].sort()
+    )
     .toEqual(['/academic/courses', '/academic/programs', '/academic/schools'])
+  for (const { path, query } of masterReferenceLoads) {
+    const pageSize = Number(query.pageSize)
+    expect(
+      Number.isInteger(pageSize) && pageSize > 0 && pageSize <= 25,
+      `${path}: ${JSON.stringify(query)}`
+    ).toBe(true)
+  }
   await expect(
     page.getByRole('heading', { name: /แก้ไขข้อมูลนักศึกษา/ })
   ).toBeVisible()

@@ -494,10 +494,12 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
         - name: schoolId
           in: query
           schema:
             $ref: '#/components/schemas/ObjectId'
+        - $ref: '#/components/parameters/Archived'
         - name: programIds
           in: query
           description: Comma-separated Program ObjectIds; at most 100 IDs.
@@ -550,10 +552,20 @@ paths:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/Archived'
         - name: programId
           in: query
           schema:
             $ref: '#/components/schemas/ObjectId'
+        - name: courseIds
+          in: query
+          description: Comma-separated Course ObjectIds; at most 100 IDs. Always intersected with caller scope.
+          style: form
+          explode: false
+          schema:
+            type: string
+            maxLength: 2499
+            pattern: '^[a-fA-F0-9]{24}(,[a-fA-F0-9]{24}){0,99}$'
       responses:
         '200':
           description: Paginated Courses
@@ -749,6 +761,18 @@ paths:
           in: query
           schema:
             type: string
+        - name: studentIds
+          in: query
+          description: Return only requested Student records, intersected with the caller's effective scope. Accepts Mongo record IDs or Student numbers.
+          style: form
+          explode: false
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+              minLength: 3
+              maxLength: 30
         - name: evaluationStatus
           in: query
           description: Filters the selected cycle's assignments; requires cycleId.
@@ -950,6 +974,16 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Search'
         - $ref: '#/components/parameters/Archived'
+        - name: organizationIds
+          in: query
+          description: Return only these Organizations, intersected with the caller's effective placement scope.
+          style: form
+          explode: false
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              $ref: '#/components/schemas/ObjectId'
       responses:
         '200':
           description: Paginated Organizations
@@ -995,6 +1029,16 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/ObjectId'
+        - name: evaluatorIds
+          in: query
+          description: Return only these Evaluators, intersected with the caller's effective placement/assignment scope.
+          style: form
+          explode: false
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              $ref: '#/components/schemas/ObjectId'
       responses:
         '200':
           description: Paginated Evaluators
@@ -1261,6 +1305,16 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - name: cycleIds
+          in: query
+          description: Comma-separated Evaluation Cycle ObjectIds; at most 100 IDs. Always intersected with caller scope.
+          style: form
+          explode: false
+          schema:
+            type: string
+            maxLength: 2499
+            pattern: '^[a-fA-F0-9]{24}(,[a-fA-F0-9]{24}){0,99}$'
         - name: termId
           in: query
           schema:
@@ -1395,6 +1449,17 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/ObjectId'
+        - name: organizationId
+          in: query
+          description: Filter by the assignment Evaluator's Organization before pagination.
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+        - name: search
+          in: query
+          description: Searches related Student, Evaluator, and Organization fields before pagination.
+          schema:
+            type: string
+            maxLength: 100
         - name: status
           in: query
           schema:

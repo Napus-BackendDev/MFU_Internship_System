@@ -3323,7 +3323,10 @@ export interface operations {
             query?: {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
+                search?: components["parameters"]["Search"];
                 schoolId?: components["schemas"]["ObjectId"];
+                /** @description Set true to include archived records; false excludes them. Omission preserves the endpoint's default. */
+                archived?: components["parameters"]["Archived"];
                 /** @description Comma-separated Program ObjectIds; at most 100 IDs. */
                 programIds?: string;
             };
@@ -3378,7 +3381,11 @@ export interface operations {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
                 search?: components["parameters"]["Search"];
+                /** @description Set true to include archived records; false excludes them. Omission preserves the endpoint's default. */
+                archived?: components["parameters"]["Archived"];
                 programId?: components["schemas"]["ObjectId"];
+                /** @description Comma-separated Course ObjectIds; at most 100 IDs. Always intersected with caller scope. */
+                courseIds?: string;
             };
             header?: never;
             path?: never;
@@ -3590,6 +3597,8 @@ export interface operations {
                 /** @description Selects the evaluation cycle used to derive status; required when evaluationStatus is provided. */
                 cycleId?: components["schemas"]["ObjectId"];
                 studentId?: string;
+                /** @description Return only requested Student records, intersected with the caller's effective scope. Accepts Mongo record IDs or Student numbers. */
+                studentIds?: string[];
                 /** @description Filters the selected cycle's assignments; requires cycleId. */
                 evaluationStatus?: "awaiting_evaluator" | "awaiting_response" | "submitted" | "email_error" | "pending" | "inProgress" | "expired" | "assignment_ambiguous";
             };
@@ -3814,6 +3823,8 @@ export interface operations {
                 search?: components["parameters"]["Search"];
                 /** @description Set true to include archived records; false excludes them. Omission preserves the endpoint's default. */
                 archived?: components["parameters"]["Archived"];
+                /** @description Return only these Organizations, intersected with the caller's effective placement scope. */
+                organizationIds?: components["schemas"]["ObjectId"][];
             };
             header?: never;
             path?: never;
@@ -3866,6 +3877,8 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 search?: components["parameters"]["Search"];
                 organizationId?: components["schemas"]["ObjectId"];
+                /** @description Return only these Evaluators, intersected with the caller's effective placement/assignment scope. */
+                evaluatorIds?: components["schemas"]["ObjectId"][];
             };
             header?: never;
             path?: never;
@@ -4162,6 +4175,9 @@ export interface operations {
             query?: {
                 page?: components["parameters"]["Page"];
                 limit?: components["parameters"]["Limit"];
+                search?: components["parameters"]["Search"];
+                /** @description Comma-separated Evaluation Cycle ObjectIds; at most 100 IDs. Always intersected with caller scope. */
+                cycleIds?: string;
                 termId?: components["schemas"]["ObjectId"];
                 status?: components["schemas"]["CycleStatus"];
             };
@@ -4297,6 +4313,10 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 cycleId?: components["schemas"]["ObjectId"];
                 studentId?: components["schemas"]["ObjectId"];
+                /** @description Filter by the assignment Evaluator's Organization before pagination. */
+                organizationId?: components["schemas"]["ObjectId"];
+                /** @description Searches related Student, Evaluator, and Organization fields before pagination. */
+                search?: string;
                 status?: components["schemas"]["AssignmentStatus"];
             };
             header?: never;

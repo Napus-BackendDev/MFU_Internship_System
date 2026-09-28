@@ -67,6 +67,23 @@ const canManageCycles = computed(() =>
 const status = ref<string | undefined>()
 const page = ref(1)
 const pageSize = ref(5)
+const searchQuery = ref('')
+const debouncedSearchQuery = ref('')
+const selectedOrg = ref('all')
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+
+watch(searchQuery, (value) => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    debouncedSearchQuery.value = value.trim()
+  }, 250)
+})
+watch([status, selectedOrg, debouncedSearchQuery], () => {
+  page.value = 1
+})
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 
 const { data, error, pending, refresh } = await useAsyncData(
   'assignments',
@@ -75,50 +92,105 @@ const { data, error, pending, refresh } = await useAsyncData(
       query: {
         page: page.value,
         pageSize: pageSize.value,
-        status: status.value
+        status: status.value,
+        organizationId:
+          selectedOrg.value === 'all' ? undefined : selectedOrg.value,
+        search: debouncedSearchQuery.value || undefined
       }
     }),
-  { watch: [status, page, pageSize] }
+  { watch: [status, selectedOrg, debouncedSearchQuery, page, pageSize] }
 )
 
 watch(pageSize, () => {
   page.value = 1
 })
 
-// Fetch students to map studentId (ObjectId) to student name, email, company, and province
+const assignmentStudentIds = computed(() =>
+  [...new Set((data.value?.items ?? []).map((item) => item.studentId))]
+    .filter(Boolean)
+    .sort()
+    .join(',')
+)
 const {
   data: studentsData,
   error: studentsError,
   pending: studentsPending,
   refresh: refreshStudents
-} = await useAsyncData('evaluations-students', () =>
-  api<{ items: StudentItem[] }>('/students', {
-    query: { pageSize: 500 }
-  })
+} = await useAsyncData(
+  'evaluations-students',
+  () => {
+    const studentIds = assignmentStudentIds.value.split(',').filter(Boolean)
+    return studentIds.length
+      ? api<{ items: StudentItem[] }>('/students', {
+          query: {
+            studentIds: studentIds.join(','),
+            pageSize: studentIds.length
+          }
+        })
+      : Promise.resolve({ items: [] })
+  },
+  { watch: [assignmentStudentIds] }
 )
 
-// Fetch evaluators to map evaluatorId (ObjectId) to evaluator email and name
+const assignmentEvaluatorIds = computed(() =>
+  [...new Set((data.value?.items ?? []).map((item) => item.evaluatorId))]
+    .filter((id) => /^[a-f\d]{24}$/i.test(id))
+    .sort()
+    .join(',')
+)
 const {
   data: evaluatorsData,
   error: evaluatorsError,
   pending: evaluatorsPending,
   refresh: refreshEvaluators
-} = await useAsyncData('evaluations-evaluators', () =>
-  api<{ items: EvaluatorItem[] }>('/evaluators', {
-    query: { pageSize: 500 }
-  })
+} = await useAsyncData(
+  'evaluations-evaluators',
+  () => {
+    const evaluatorIds = assignmentEvaluatorIds.value.split(',').filter(Boolean)
+    return evaluatorIds.length
+      ? api<{ items: EvaluatorItem[] }>('/evaluators', {
+          query: {
+            evaluatorIds: evaluatorIds.join(','),
+            pageSize: evaluatorIds.length
+          }
+        })
+      : Promise.resolve({ items: [] })
+  },
+  { watch: [assignmentEvaluatorIds] }
 )
 
-// Fetch organizations to map evaluator organization
+const assignmentOrganizationIds = computed(() =>
+  [
+    ...new Set(
+      (evaluatorsData.value?.items ?? [])
+        .map((item) => item.organizationId)
+        .filter((id): id is string => Boolean(id && /^[a-f\d]{24}$/i.test(id)))
+    )
+  ]
+    .sort()
+    .join(',')
+)
 const {
   data: organizationsData,
   error: organizationsError,
   pending: organizationsPending,
   refresh: refreshOrganizations
-} = await useAsyncData('evaluations-organizations', () =>
-  api<{ items: OrganizationItem[] }>('/organizations', {
-    query: { pageSize: 500 }
-  })
+} = await useAsyncData(
+  'evaluations-organizations',
+  () => {
+    const organizationIds = assignmentOrganizationIds.value
+      .split(',')
+      .filter(Boolean)
+    return organizationIds.length
+      ? api<{ items: OrganizationItem[] }>('/organizations', {
+          query: {
+            organizationIds: organizationIds.join(','),
+            pageSize: organizationIds.length
+          }
+        })
+      : Promise.resolve({ items: [] })
+  },
+  { watch: [assignmentOrganizationIds] }
 )
 
 const relationDataError = computed(
@@ -286,53 +358,19 @@ const statusOptions = [
   }
 ] as const
 
-const searchQuery = ref('')
-const selectedOrg = ref('all')
-
 const setStatus = (value?: string) => {
   status.value = value
   page.value = 1
-  void refresh()
 }
 
-const filteredItems = computed(() => {
-  let items = data.value?.items ?? []
-  if (status.value === 'email_error') {
-    items = items.filter((item) => item.status === 'email_error')
-  }
-  if (selectedOrg.value !== 'all') {
-    items = items.filter((item) => {
-      const e = getEvaluator(item.evaluatorId)
-      return e?.organizationId === selectedOrg.value
-    })
-  }
-  const q = searchQuery.value.trim().toLowerCase()
-  if (q) {
-    items = items.filter((item) => {
-      const student = getStudent(item.studentId)
-      const evaluator = getEvaluator(item.evaluatorId)
-      const company = getCompany(item.studentId, item.evaluatorId)
-      return (
-        (student?.studentId && student.studentId.toLowerCase().includes(q)) ||
-        (student?.name?.th && student.name.th.toLowerCase().includes(q)) ||
-        (student?.name?.en && student.name.en.toLowerCase().includes(q)) ||
-        (student?.email && student.email.toLowerCase().includes(q)) ||
-        (evaluator?.name?.th && evaluator.name.th.toLowerCase().includes(q)) ||
-        (evaluator?.name?.en && evaluator.name.en.toLowerCase().includes(q)) ||
-        (evaluator?.email && evaluator.email.toLowerCase().includes(q)) ||
-        company.toLowerCase().includes(q)
-      )
-    })
-  }
-  return items
-})
+const filteredItems = computed(() => data.value?.items ?? [])
 
 function resetFilters(): void {
   status.value = undefined
   searchQuery.value = ''
+  debouncedSearchQuery.value = ''
   selectedOrg.value = 'all'
   page.value = 1
-  void refresh()
 }
 
 // ---------------------------------------------------------------------------
@@ -660,19 +698,14 @@ async function refreshAfterEmailAction(): Promise<boolean> {
             <UIcon name="i-lucide-building-2" class="size-3.5 text-primary" />
             สถานประกอบการ (Company)
           </label>
-          <select
+          <PaginatedLookupSelect
             v-model="selectedOrg"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
-          >
-            <option value="all">ทุกสถานประกอบการ (All Companies)</option>
-            <option
-              v-for="org in organizationsData?.items ?? []"
-              :key="org.id"
-              :value="org.id"
-            >
-              {{ org.name.th }}
-            </option>
-          </select>
+            api-path="/organizations"
+            id-query-param="organizationIds"
+            label="สถานประกอบการ"
+            empty-label="ทุกสถานประกอบการ (All Companies)"
+            empty-value="all"
+          />
         </div>
 
         <!-- ช่องค้นหาด่วน -->
@@ -711,8 +744,8 @@ async function refreshAfterEmailAction(): Promise<boolean> {
         class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-default/70 text-xs text-muted"
       >
         <div>
-          แสดงผล <strong>{{ filteredItems.length }}</strong> รายการ (จากทั้งหมด
-          {{ data?.meta?.total ?? 0 }} รายการในระบบ)
+          แสดง <strong>{{ filteredItems.length }}</strong> รายการในหน้านี้ (พบ
+          {{ data?.meta?.total ?? 0 }} รายการตามตัวกรอง)
         </div>
 
         <button

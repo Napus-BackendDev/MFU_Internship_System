@@ -25,6 +25,10 @@ const failNextApiPaths = new Map()
 const injectedFailureCounts = new Map()
 const apiRequestCounts = new Map()
 const cycleReferenceQueries = []
+const studentReferenceQueries = []
+const evaluationDirectoryQueries = []
+const e2eOrganizationId = '64f000000000000000000020'
+const e2eEvaluatorId = '64f000000000000000000021'
 const corsHeaders = {
   'access-control-allow-origin': 'http://127.0.0.1:18080',
   'access-control-allow-credentials': 'true',
@@ -99,6 +103,38 @@ const server = createServer((request, response) => {
     response.end(JSON.stringify(cycleReferenceQueries))
     return
   }
+  if (
+    request.method === 'POST' &&
+    path === '/__test/reset-student-reference-queries'
+  ) {
+    studentReferenceQueries.length = 0
+    response.writeHead(204).end()
+    return
+  }
+  if (
+    request.method === 'GET' &&
+    path === '/__test/student-reference-queries'
+  ) {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(studentReferenceQueries))
+    return
+  }
+  if (
+    request.method === 'POST' &&
+    path === '/__test/reset-evaluation-directory-queries'
+  ) {
+    evaluationDirectoryQueries.length = 0
+    response.writeHead(204).end()
+    return
+  }
+  if (
+    request.method === 'GET' &&
+    path === '/__test/evaluation-directory-queries'
+  ) {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(evaluationDirectoryQueries))
+    return
+  }
   if (request.method === 'POST' && path === '/__test/fail-next') {
     const target = new URL(
       request.url ?? '/',
@@ -150,6 +186,34 @@ const server = createServer((request, response) => {
       ].includes(path)
     ) {
       cycleReferenceQueries.push({
+        path: path.replace('/api/v2', ''),
+        query: Object.fromEntries(requestUrl.searchParams.entries())
+      })
+    }
+    if (
+      [
+        '/api/v2/students',
+        '/api/v2/evaluators',
+        '/api/v2/organizations',
+        '/api/v2/evaluation-assignments'
+      ].includes(path)
+    ) {
+      evaluationDirectoryQueries.push({
+        path: path.replace('/api/v2', ''),
+        query: Object.fromEntries(requestUrl.searchParams.entries())
+      })
+    }
+    if (
+      [
+        '/api/v2/academic/terms',
+        '/api/v2/academic/schools',
+        '/api/v2/academic/programs',
+        '/api/v2/academic/courses',
+        '/api/v2/evaluation-cycles',
+        '/api/v2/competency-sets'
+      ].includes(path)
+    ) {
+      studentReferenceQueries.push({
         path: path.replace('/api/v2', ''),
         query: Object.fromEntries(requestUrl.searchParams.entries())
       })
@@ -298,7 +362,7 @@ const server = createServer((request, response) => {
       }
     }
   } else if (request.method === 'GET' && path === '/api/v2/students') {
-    payload = page([
+    const studentItems = [
       {
         id: 'student-record-e2e',
         studentId: '6631503001',
@@ -310,15 +374,31 @@ const server = createServer((request, response) => {
         semester: '1',
         academicYear: 2026,
         directoryRelations: {
+          school: {
+            id: 'school-e2e',
+            schoolCode: 'SCI',
+            name: { th: 'สำนักวิชาวิทยาศาสตร์', en: 'Science' }
+          },
+          program: {
+            id: 'program-e2e',
+            programCode: 'SE',
+            name: { th: 'วิศวกรรมซอฟต์แวร์', en: 'Software Engineering' }
+          },
+          term: { id: 'term-e2e', semester: '1', academicYear: 2026 },
           placements: [
             {
               id: 'placement-e2e',
               studentId: 'student-record-e2e',
-              organizationId: 'organization-e2e',
+              organizationId: e2eOrganizationId,
               academicTermId: 'term-e2e',
+              academicTerm: {
+                id: 'term-e2e',
+                semester: '1',
+                academicYear: 2026
+              },
               status: 'active',
               organization: {
-                id: 'organization-e2e',
+                id: e2eOrganizationId,
                 organizationCode: 'TEST',
                 name: { th: 'บริษัททดสอบ', en: 'Test Company' },
                 address: {
@@ -331,39 +411,94 @@ const server = createServer((request, response) => {
         },
         status: 'active'
       }
-    ])
+    ]
+    const requestedStudentIds = requestUrl.searchParams
+      .get('studentIds')
+      ?.split(',')
+    payload = queryPage(
+      requestedStudentIds?.length
+        ? studentItems.filter(
+            (student) =>
+              requestedStudentIds.includes(student.id) ||
+              requestedStudentIds.includes(student.studentId)
+          )
+        : studentItems,
+      request.url
+    )
   } else if (request.method === 'GET' && path === '/api/v2/evaluators') {
-    payload = page([
+    const evaluatorItems = [
       {
-        id: 'evaluator-e2e',
-        organizationId: 'organization-e2e',
+        id: e2eEvaluatorId,
+        organizationId: e2eOrganizationId,
         name: { th: 'ผู้ประเมินทดสอบ', en: 'Test Evaluator' },
         email: 'evaluator@example.test',
         position: { th: 'หัวหน้างาน', en: 'Supervisor' }
       }
-    ])
+    ]
+    const requestedEvaluatorIds = requestUrl.searchParams
+      .get('evaluatorIds')
+      ?.split(',')
+    payload = queryPage(
+      requestedEvaluatorIds?.length
+        ? evaluatorItems.filter((item) =>
+            requestedEvaluatorIds.includes(item.id)
+          )
+        : evaluatorItems,
+      request.url
+    )
   } else if (request.method === 'GET' && path === '/api/v2/organizations') {
-    payload = page([
+    const organizationItems = [
       {
-        id: 'organization-e2e',
+        id: e2eOrganizationId,
         organizationCode: 'TEST',
         name: { th: 'บริษัททดสอบ', en: 'Test Company' }
       }
-    ])
+    ]
+    const requestedOrganizationIds = requestUrl.searchParams
+      .get('organizationIds')
+      ?.split(',')
+    payload = queryPage(
+      requestedOrganizationIds?.length
+        ? organizationItems.filter((item) =>
+            requestedOrganizationIds.includes(item.id)
+          )
+        : organizationItems,
+      request.url
+    )
   } else if (
     request.method === 'GET' &&
     path === '/api/v2/evaluation-assignments'
   ) {
-    payload = page([
+    const assignmentItems = [
       {
         id: 'assignment-e2e',
         studentId: 'student-record-e2e',
         cycleId: 'cycle-e2e',
-        evaluatorId: 'evaluator-e2e',
+        evaluatorId: e2eEvaluatorId,
         deadlineAt: '2026-12-31T23:59:59.000Z',
         status: 'pending'
       }
-    ])
+    ]
+    const organizationId = requestUrl.searchParams.get('organizationId')
+    const status = requestUrl.searchParams.get('status')
+    const search = requestUrl.searchParams.get('search')?.toLocaleLowerCase()
+    const filteredAssignments = assignmentItems.filter((item) => {
+      if (organizationId && organizationId !== e2eOrganizationId) return false
+      if (status && status !== item.status) return false
+      if (!search) return true
+      return [
+        '6631503001',
+        'นักศึกษาทดสอบ',
+        'example student',
+        'student@example.test',
+        'ผู้ประเมินทดสอบ',
+        'test evaluator',
+        'evaluator@example.test',
+        'test company',
+        'test'
+      ].some((value) => value.toLocaleLowerCase().includes(search))
+    })
+    payload = queryPage(filteredAssignments, request.url)
   } else if (request.method === 'GET' && path === '/api/v2/academic/terms') {
     payload = queryPage(
       [
@@ -413,7 +548,7 @@ const server = createServer((request, response) => {
       {
         id: 'placement-e2e',
         studentId: 'student-record-e2e',
-        organizationId: 'organization-e2e',
+        organizationId: e2eOrganizationId,
         academicTermId: 'term-e2e',
         status: 'active'
       }

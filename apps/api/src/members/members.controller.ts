@@ -55,6 +55,45 @@ const listSchema = z.object({
     ])
     .optional()
 })
+const objectIdCsvSchema = (maximum: number): z.ZodType<string[] | undefined> =>
+  z
+    .string()
+    .max(maximum * 25 - 1)
+    .optional()
+    .transform((value) => value?.split(','))
+    .pipe(
+      z
+        .array(z.string().regex(/^[a-f\d]{24}$/i))
+        .max(maximum)
+        .optional()
+    )
+    .transform((ids) =>
+      ids === undefined
+        ? undefined
+        : [...new Set(ids.map((id) => id.toLowerCase()))]
+    )
+const studentIdCsvSchema = z
+  .string()
+  .max(3099)
+  .optional()
+  .transform((value) => value?.split(','))
+  .pipe(z.array(z.string().trim().min(3).max(30)).max(100).optional())
+  .transform((ids) =>
+    ids === undefined
+      ? undefined
+      : [
+          ...new Set(
+            ids.map((id) => (/^[a-f\d]{24}$/i.test(id) ? id.toLowerCase() : id))
+          )
+        ]
+  )
+const studentListSchema = listSchema.extend({ studentIds: studentIdCsvSchema })
+const organizationListSchema = listSchema.extend({
+  organizationIds: objectIdCsvSchema(100)
+})
+const evaluatorListSchema = listSchema.extend({
+  evaluatorIds: objectIdCsvSchema(100)
+})
 const studentSchema = z.object({
   studentId: z.string().min(3).max(30),
   name: nameSchema,
@@ -222,7 +261,10 @@ export class MembersController {
     @Req() request: AuthenticatedRequest,
     @Query() raw: unknown
   ): Promise<unknown> {
-    return this.service.listStudents(request.actor!, listSchema.parse(raw))
+    return this.service.listStudents(
+      request.actor!,
+      studentListSchema.parse(raw)
+    )
   }
 
   @RequirePermissions('students.read')
@@ -283,7 +325,10 @@ export class MembersController {
     @Req() request: AuthenticatedRequest,
     @Query() raw: unknown
   ): Promise<unknown> {
-    return this.service.listOrganizations(request.actor!, listSchema.parse(raw))
+    return this.service.listOrganizations(
+      request.actor!,
+      organizationListSchema.parse(raw)
+    )
   }
 
   @RequirePermissions('organizations.manage')
@@ -305,7 +350,10 @@ export class MembersController {
     @Req() request: AuthenticatedRequest,
     @Query() raw: unknown
   ): Promise<unknown> {
-    return this.service.listEvaluators(request.actor!, listSchema.parse(raw))
+    return this.service.listEvaluators(
+      request.actor!,
+      evaluatorListSchema.parse(raw)
+    )
   }
 
   @RequirePermissions('organizations.manage')

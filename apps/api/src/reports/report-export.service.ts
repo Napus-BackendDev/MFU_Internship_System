@@ -44,7 +44,7 @@ import {
   ReportExportRecord,
   ReportExportSnapshotRecord
 } from './report-export.schema.js'
-import type { ReportFilters, ReportsService } from './reports.service.js'
+import { ReportsService, type ReportFilters } from './reports.service.js'
 
 const MAX_EXPORT_ROWS = 5000
 const EXPORT_TTL_MS = 24 * 60 * 60 * 1000

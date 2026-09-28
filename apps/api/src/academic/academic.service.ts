@@ -290,13 +290,13 @@ export class AcademicService {
       })
     }
     if (options.search) {
+      const search = boundedSearch(options.search)
       filters.push({
-        schoolCode: {
-          $regex: new RegExp(
-            `^${boundedSearch(options.search).toUpperCase()}`,
-            'u'
-          )
-        }
+        $or: [
+          { schoolCode: { $regex: new RegExp(`^${search}`, 'iu') } },
+          { 'name.th': { $regex: new RegExp(`^${search}`, 'iu') } },
+          { 'name.en': { $regex: new RegExp(`^${search}`, 'iu') } }
+        ]
       })
     }
     if (options.archived === false)
@@ -436,7 +436,8 @@ export class AcademicService {
     actor: AuthenticatedActor,
     page: PaginationInput,
     schoolId?: string,
-    programIds?: readonly string[]
+    programIds?: readonly string[],
+    options: { readonly search?: string; readonly archived?: boolean } = {}
   ): Promise<unknown> {
     const baseFilter = this.programFilterForScopes(
       this.actorAcademicScopes(actor)
@@ -445,6 +446,21 @@ export class AcademicService {
     if (schoolId) filters.push({ schoolId })
     if (programIds !== undefined) {
       filters.push({ _id: { $in: [...programIds] } })
+    }
+    if (options.search) {
+      const search = new RegExp(`^${boundedSearch(options.search)}`, 'iu')
+      filters.push({
+        $or: [
+          { programCode: search },
+          { 'name.th': search },
+          { 'name.en': search }
+        ]
+      })
+    }
+    if (options.archived !== undefined) {
+      filters.push({
+        status: options.archived ? 'archived' : { $ne: 'archived' }
+      })
     }
     const filter: QueryFilter<ProgramRecord> =
       filters.length === 1 ? baseFilter : { $and: filters }
@@ -583,28 +599,58 @@ export class AcademicService {
 
   public async listCourses(
     actor: AuthenticatedActor,
-    page: PaginationInput
+    page: PaginationInput,
+    options: {
+      readonly search?: string
+      readonly programId?: string
+      readonly courseIds?: readonly string[]
+      readonly archived?: boolean
+    } = {}
   ): Promise<unknown> {
     const scopes = this.actorAcademicScopes(actor)
+    const filters: QueryFilter<CourseRecord>[] = []
     if (scopes.some((scope) => scope.tenant)) {
-      return paginate(this.courses, {}, page, { courseCode: 1, _id: 1 })
+      // Tenant-scoped readers already have access to every Course.
+    } else {
+      const authorizedProgramIds = new Set<string>()
+      for (const scope of scopes) {
+        if (scope.schoolIds.length === 0 && scope.programIds.length === 0)
+          continue
+        const programs = await this.programs
+          .find(this.programFilterForScopes([scope]))
+          .select('_id')
+          .exec()
+        for (const program of programs) authorizedProgramIds.add(program.id)
+      }
+      filters.push(
+        authorizedProgramIds.size > 0
+          ? { programIds: { $in: [...authorizedProgramIds] } }
+          : { _id: null }
+      )
     }
-
-    const authorizedProgramIds = new Set<string>()
-    for (const scope of scopes) {
-      if (scope.schoolIds.length === 0 && scope.programIds.length === 0)
-        continue
-      const programs = await this.programs
-        .find(this.programFilterForScopes([scope]))
-        .select('_id')
-        .exec()
-      for (const program of programs) authorizedProgramIds.add(program.id)
+    if (options.programId) filters.push({ programIds: options.programId })
+    if (options.courseIds !== undefined) {
+      filters.push({ _id: { $in: [...options.courseIds] } })
     }
-    const filter: QueryFilter<CourseRecord> =
-      authorizedProgramIds.size > 0
-        ? { programIds: { $in: [...authorizedProgramIds] } }
-        : { _id: null }
-    return paginate(this.courses, filter, page, { courseCode: 1, _id: 1 })
+    if (options.search) {
+      const search = new RegExp(`^${boundedSearch(options.search)}`, 'iu')
+      filters.push({
+        $or: [
+          { courseCode: search },
+          { 'name.th': search },
+          { 'name.en': search }
+        ]
+      })
+    }
+    if (options.archived !== undefined) {
+      filters.push({
+        status: options.archived ? 'archived' : { $ne: 'archived' }
+      })
+    }
+    return paginate(this.courses, andFilters(filters), page, {
+      courseCode: 1,
+      _id: 1
+    })
   }
 
   public async createCourse(

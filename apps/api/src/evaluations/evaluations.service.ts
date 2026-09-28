@@ -574,8 +574,29 @@ export class EvaluationsService {
 
   public async listCycles(
     actor: AuthenticatedActor,
-    page: PaginationInput
+    page: PaginationInput,
+    options: {
+      readonly search?: string
+      readonly cycleIds?: readonly string[]
+      readonly termId?: string
+      readonly status?: EvaluationCycleRecord['status']
+    } = {}
   ): Promise<unknown> {
+    const filters: QueryFilter<EvaluationCycleRecord>[] = []
+    if (options.cycleIds !== undefined) {
+      filters.push({ _id: { $in: options.cycleIds } })
+    }
+    if (options.termId) filters.push({ academicTermId: options.termId })
+    if (options.status) filters.push({ status: options.status })
+    if (options.search) {
+      const search = new RegExp(`^${boundedSearch(options.search)}`, 'iu')
+      filters.push({
+        $or: [{ code: search }, { 'name.th': search }, { 'name.en': search }]
+      })
+    }
+    const applyFilters = (
+      scope: QueryFilter<EvaluationCycleRecord>
+    ): QueryFilter<EvaluationCycleRecord> => andFilters([scope, ...filters])
     const cycleScope = scopeFilter<EvaluationCycleRecord>(actor)
     const hasTenantStaffScope =
       actor.roleScopes?.some(
@@ -590,7 +611,7 @@ export class EvaluationsService {
         actor.scope.tenant)
     if (actor.roles.includes('systemAdmin') || hasTenantStaffScope) {
       return this.attachCycleTermSummaries(
-        await paginate(this.cycles, cycleScope, page)
+        await paginate(this.cycles, applyFilters(cycleScope), page)
       )
     }
 
@@ -691,7 +712,7 @@ export class EvaluationsService {
         ? visibleCycleScopes[0]!
         : { $or: visibleCycleScopes }
     return this.attachCycleTermSummaries(
-      await paginate(this.cycles, filter, page)
+      await paginate(this.cycles, applyFilters(filter), page)
     )
   }
 
@@ -1303,6 +1324,8 @@ export class EvaluationsService {
     input: PaginationInput & {
       cycleId?: string
       studentId?: string
+      organizationId?: string
+      search?: string
       status?: EvaluationAssignmentRecord['status']
     }
   ): Promise<unknown> {
@@ -1312,8 +1335,192 @@ export class EvaluationsService {
     if (input.cycleId) filters.push({ cycleId: input.cycleId })
     if (input.studentId) filters.push({ studentId: input.studentId })
     if (input.status) filters.push({ status: input.status })
-    const filter = filters.length === 1 ? filters[0] : { $and: filters }
-    return paginate(this.assignments, filter ?? {}, input)
+    const filter: QueryFilter<EvaluationAssignmentRecord> =
+      filters.length === 1 ? filters[0]! : { $and: filters }
+    if (!input.search && !input.organizationId) {
+      return paginate(this.assignments, filter, input)
+    }
+
+    const pipeline: PipelineStage[] = [
+      { $match: filter },
+      {
+        $lookup: {
+          from: this.students.collection.name,
+          let: { studentReference: '$studentId' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    {
+                      $eq: [{ $toString: '$_id' }, '$$studentReference']
+                    },
+                    { $eq: ['$studentId', '$$studentReference'] }
+                  ]
+                }
+              }
+            },
+            {
+              $project: {
+                studentId: 1,
+                email: 1,
+                name: 1,
+                company: 1,
+                companyAddress: 1,
+                province: 1
+              }
+            }
+          ],
+          as: 'directoryStudent'
+        }
+      },
+      {
+        $lookup: {
+          from: this.evaluators.collection.name,
+          let: { evaluatorReference: '$evaluatorId' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $eq: [{ $toString: '$_id' }, '$$evaluatorReference']
+                }
+              }
+            },
+            ...(input.organizationId
+              ? [{ $match: { organizationId: input.organizationId } }]
+              : []),
+            {
+              $project: {
+                email: 1,
+                name: 1,
+                position: 1,
+                organizationId: 1
+              }
+            }
+          ],
+          as: 'directoryEvaluator'
+        }
+      }
+    ]
+
+    if (input.organizationId) {
+      pipeline.push({
+        $match: {
+          $expr: { $gt: [{ $size: '$directoryEvaluator' }, 0] }
+        }
+      })
+    }
+
+    if (input.search) {
+      pipeline.push({
+        $lookup: {
+          from: this.organizations.collection.name,
+          let: {
+            organizationReference: {
+              $arrayElemAt: ['$directoryEvaluator.organizationId', 0]
+            }
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $eq: [{ $toString: '$_id' }, '$$organizationReference']
+                }
+              }
+            },
+            {
+              $project: {
+                organizationCode: 1,
+                name: 1,
+                'address.province': 1
+              }
+            }
+          ],
+          as: 'directoryOrganization'
+        }
+      })
+
+      const search = boundedSearch(input.search)
+      const matches = (value: unknown): Record<string, unknown> => ({
+        $regexMatch: {
+          input: { $ifNull: [value, ''] },
+          regex: search,
+          options: 'i'
+        }
+      })
+      pipeline.push({
+        $match: {
+          $expr: {
+            $or: [
+              ...[
+                '$directoryStudent.studentId',
+                '$directoryStudent.email',
+                '$directoryStudent.name.th',
+                '$directoryStudent.name.en',
+                '$directoryStudent.company',
+                '$directoryStudent.companyAddress',
+                '$directoryStudent.province',
+                '$directoryEvaluator.email',
+                '$directoryEvaluator.name.th',
+                '$directoryEvaluator.name.en',
+                '$directoryEvaluator.position.th',
+                '$directoryEvaluator.position.en',
+                '$directoryOrganization.organizationCode',
+                '$directoryOrganization.name.th',
+                '$directoryOrganization.name.en',
+                '$directoryOrganization.address.province'
+              ].map((path) => matches({ $arrayElemAt: [path, 0] }))
+            ]
+          }
+        }
+      })
+    }
+
+    const projection = {
+      _id: 1,
+      cycleId: 1,
+      placementId: 1,
+      evaluatorId: 1,
+      studentId: 1,
+      schoolId: 1,
+      programId: 1,
+      questionSnapshot: 1,
+      competencySetVersionId: 1,
+      deadlineAt: 1,
+      status: 1,
+      evaluationVersion: 1,
+      createdAt: 1,
+      updatedAt: 1
+    } as const
+    pipeline.push(
+      { $sort: { createdAt: -1, _id: -1 } },
+      {
+        $facet: {
+          items: [
+            { $skip: (input.page - 1) * input.pageSize },
+            { $limit: input.pageSize },
+            { $project: projection }
+          ],
+          total: [{ $count: 'count' }]
+        }
+      }
+    )
+    const [result] = await this.assignments.aggregate<{
+      items: EvaluationAssignmentRecord[]
+      total: { count: number }[]
+    }>(pipeline)
+    const total = result?.total[0]?.count ?? 0
+    return {
+      items: (result?.items ?? []).map((item) =>
+        this.assignments.hydrate(item).toJSON()
+      ),
+      meta: {
+        page: input.page,
+        pageSize: input.pageSize,
+        total,
+        totalPages: Math.ceil(total / input.pageSize)
+      }
+    }
   }
 
   public async createAssignment(

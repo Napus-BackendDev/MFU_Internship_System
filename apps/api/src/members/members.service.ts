@@ -30,7 +30,8 @@ import {
 import { lockActiveAcademicScope } from '../academic/academic-reference-lock.js'
 import {
   EvaluationAssignmentRecord,
-  EvaluationCycleRecord
+  EvaluationCycleRecord,
+  EvaluationRecord
 } from '../evaluations/evaluation.schema.js'
 import {
   EvaluatorRecord,
@@ -120,6 +121,8 @@ export class MembersService {
     private readonly academicTerms: Model<AcademicTermRecord>,
     @InjectModel(EvaluationAssignmentRecord.name)
     private readonly assignments: Model<EvaluationAssignmentRecord>,
+    @InjectModel(EvaluationRecord.name)
+    private readonly evaluations: Model<EvaluationRecord>,
     @InjectModel(EvaluationCycleRecord.name)
     private readonly cycles: Model<EvaluationCycleRecord>,
     @InjectModel(SchoolRecord.name)
@@ -141,6 +144,7 @@ export class MembersService {
       cycleId?: string
       evaluationStatus?: string
       studentId?: string
+      studentIds?: readonly string[]
       academicYear?: number
       semester?: string
       includeDirectoryData?: boolean
@@ -161,6 +165,22 @@ export class MembersService {
     let directoryCycleProgramId: string | undefined
     const requestedFilters: QueryFilter<StudentRecord>[] = []
     if (input.studentId) requestedFilters.push({ studentId: input.studentId })
+    if (input.studentIds?.length) {
+      const requestedObjectIds = input.studentIds
+        .filter((id) => Types.ObjectId.isValid(id))
+        .map((id) => new Types.ObjectId(id))
+      const referenceFilters: QueryFilter<StudentRecord>[] = [
+        { studentId: { $in: [...input.studentIds] } }
+      ]
+      if (requestedObjectIds.length > 0) {
+        referenceFilters.push({ _id: { $in: requestedObjectIds } })
+      }
+      requestedFilters.push(
+        referenceFilters.length === 1
+          ? referenceFilters[0]!
+          : { $or: referenceFilters }
+      )
+    }
     if (input.schoolId) requestedFilters.push({ schoolId: input.schoolId })
     if (input.programId) requestedFilters.push({ programId: input.programId })
     if (input.academicTermId) {
@@ -648,8 +668,32 @@ export class MembersService {
     const courseObjectIds = courseReferences
       .filter((reference) => Types.ObjectId.isValid(reference))
       .map((reference) => new Types.ObjectId(reference))
+    const defaultAssignmentScope =
+      scopeFilter<EvaluationAssignmentRecord>(actor)
+    const ownStudentReferences =
+      actor.roles.includes('student') && actor.scope.studentId
+        ? await this.studentReferences(actor.scope.studentId)
+        : undefined
     const pageAssignmentScope =
-      assignmentScope ?? scopeFilter<EvaluationAssignmentRecord>(actor)
+      assignmentScope ??
+      (ownStudentReferences
+        ? {
+            $or: [
+              defaultAssignmentScope,
+              { studentId: { $in: ownStudentReferences } }
+            ]
+          }
+        : defaultAssignmentScope)
+    const placementScopes: QueryFilter<PlacementRecord>[] = [
+      scopeFilter<PlacementRecord>(actor)
+    ]
+    if (ownStudentReferences) {
+      placementScopes.push({ studentId: { $in: ownStudentReferences } })
+    }
+    const pagePlacementScope =
+      placementScopes.length === 1
+        ? placementScopes[0]!
+        : { $or: placementScopes }
     const [
       pageAssignments,
       pagePlacements,
@@ -676,7 +720,7 @@ export class MembersService {
             ...(directoryCycleTermId
               ? [{ academicTermId: directoryCycleTermId }]
               : []),
-            scopeFilter<PlacementRecord>(actor)
+            pagePlacementScope
           ]
         })
         .select(
@@ -709,6 +753,57 @@ export class MembersService {
             .exec()
         : Promise.resolve([] as HydratedDocument<CourseRecord>[])
     ])
+    const submittedAssignmentIds = pageAssignments
+      .filter((assignment) => assignment.status === 'submitted')
+      .map((assignment) => assignment.id)
+    const activeFinalByAssignmentId = new Map<
+      string,
+      Pick<EvaluationRecord, 'categoryScores'>
+    >()
+    if (submittedAssignmentIds.length > 0) {
+      const activeFinals = await this.evaluations
+        .find({
+          assignmentId: { $in: submittedAssignmentIds },
+          $or: [{ supersededAt: { $exists: false } }, { supersededAt: null }]
+        })
+        .select('assignmentId version categoryScores')
+        .sort({ version: -1 })
+        .lean<
+          Array<
+            Pick<EvaluationRecord, 'assignmentId' | 'version' | 'categoryScores'>
+          >
+        >()
+        .exec()
+      for (const evaluation of activeFinals) {
+        if (!activeFinalByAssignmentId.has(evaluation.assignmentId)) {
+          activeFinalByAssignmentId.set(evaluation.assignmentId, evaluation)
+        }
+      }
+    }
+    const directoryTermIds = [
+      ...new Set(
+        [
+          ...result.items.map((item) => item.academicTermId),
+          ...pagePlacements.map((placement) => placement.academicTermId)
+        ].filter(
+          (termId): termId is string =>
+            typeof termId === 'string' && Types.ObjectId.isValid(termId)
+        )
+      )
+    ]
+    const pageTerms =
+      directoryTermIds.length > 0
+        ? await this.academicTerms
+            .find({
+              _id: {
+                $in: directoryTermIds.map(
+                  (termId) => new Types.ObjectId(termId)
+                )
+              }
+            })
+            .select('_id semester academicYear')
+            .exec()
+        : []
     const directorySchoolsById = new Map(
       pageSchools.map((school) => [school._id.toString(), school])
     )
@@ -723,6 +818,16 @@ export class MembersService {
       directoryCoursesByReference.set(course._id.toString(), course)
       directoryCoursesByReference.set(course.courseCode, course)
     }
+    const directoryTermsById = new Map(
+      pageTerms.map((term) => [
+        term.id,
+        {
+          id: term.id,
+          semester: term.semester,
+          academicYear: term.academicYear
+        }
+      ])
+    )
     const evaluatorsById = new Map<string, HydratedDocument<EvaluatorRecord>>()
     const evaluatorIds = [
       ...new Set(pageAssignments.map((item) => item.evaluatorId))
@@ -772,6 +877,9 @@ export class MembersService {
       matches.push(placement)
       placementsByStudentReference.set(placement.studentId, matches)
     }
+    const placementsById = new Map(
+      pagePlacements.map((placement) => [placement.id, placement])
+    )
     const items = result.items.map((item) => {
       const projected: Record<string, unknown> = { ...item }
       delete projected.evaluationStatus
@@ -790,11 +898,31 @@ export class MembersService {
         typeof projected.courseId === 'string'
           ? directoryCoursesByReference.get(projected.courseId)
           : undefined
+      const studentTerm =
+        typeof projected.academicTermId === 'string'
+          ? directoryTermsById.get(projected.academicTermId)
+          : undefined
       const assignments = [
         ...(assignmentsByStudentReference.get(studentId) ?? []),
         ...(assignmentsByStudentReference.get(studentCode) ?? [])
       ]
-      const uniqueAssignments = [...new Set(assignments)]
+      const uniquePlacements = [
+        ...(placementsByStudentReference.get(studentId) ?? []),
+        ...(placementsByStudentReference.get(studentCode) ?? [])
+      ]
+      const studentPlacementIds = new Set(
+        uniquePlacements.map((placement) => placement.id)
+      )
+      const uniqueAssignments = [...new Set(assignments)].filter((related) => {
+        const relatedPlacement = placementsById.get(related.placementId)
+        const relatedEvaluator = evaluatorsById.get(related.evaluatorId)
+        return Boolean(
+          relatedPlacement &&
+          studentPlacementIds.has(related.placementId) &&
+          [studentId, studentCode].includes(relatedPlacement.studentId) &&
+          relatedEvaluator?.organizationId === relatedPlacement.organizationId
+        )
+      })
       const assignment =
         uniqueAssignments.length === 1 ? uniqueAssignments[0] : undefined
       if (input.cycleId) {
@@ -822,11 +950,6 @@ export class MembersService {
         projected.evaluatorEmail = evaluator.email
         projected.evaluatorName = evaluator.name?.th || evaluator.name?.en
       }
-      const studentPlacements = [
-        ...(placementsByStudentReference.get(studentId) ?? []),
-        ...(placementsByStudentReference.get(studentCode) ?? [])
-      ]
-      const uniquePlacements = [...new Set(studentPlacements)]
       projected.directoryRelations = {
         ...(school
           ? {
@@ -856,10 +979,14 @@ export class MembersService {
               }
             }
           : {}),
+        ...(studentTerm ? { term: studentTerm } : {}),
         assignments: uniqueAssignments.map((relatedAssignment) => {
           const relatedEvaluator = evaluatorsById.get(
             relatedAssignment.evaluatorId
           )
+          const categoryScores = activeFinalByAssignmentId.get(
+            relatedAssignment.id
+          )?.categoryScores
           return {
             id: relatedAssignment.id,
             cycleId: relatedAssignment.cycleId,
@@ -870,6 +997,25 @@ export class MembersService {
             programId: relatedAssignment.programId,
             status: relatedAssignment.status,
             deadlineAt: relatedAssignment.deadlineAt,
+            ...(categoryScores
+              ? {
+                  categoryScores: {
+                    hardSkill: {
+                      average: categoryScores.hardSkill.average,
+                      answeredCount: categoryScores.hardSkill.answeredCount,
+                      scaleMin: categoryScores.hardSkill.scaleMin,
+                      scaleMax: categoryScores.hardSkill.scaleMax
+                    },
+                    softSkill: {
+                      average: categoryScores.softSkill.average,
+                      answeredCount: categoryScores.softSkill.answeredCount,
+                      scaleMin: categoryScores.softSkill.scaleMin,
+                      scaleMax: categoryScores.softSkill.scaleMax
+                    },
+                    scoringPolicyVersion: categoryScores.scoringPolicyVersion
+                  }
+                }
+              : {}),
             ...(relatedEvaluator
               ? {
                   evaluator: {
@@ -887,6 +1033,9 @@ export class MembersService {
           const organization = organizationsById.get(
             relatedPlacement.organizationId
           )
+          const academicTerm = directoryTermsById.get(
+            relatedPlacement.academicTermId
+          )
           return {
             id: relatedPlacement.id,
             studentId,
@@ -898,6 +1047,7 @@ export class MembersService {
             startsAt: relatedPlacement.startsAt,
             endsAt: relatedPlacement.endsAt,
             status: relatedPlacement.status,
+            ...(academicTerm ? { academicTerm } : {}),
             ...(organization
               ? {
                   organization: {
@@ -2003,7 +2153,10 @@ export class MembersService {
 
   public listOrganizations(
     actor: AuthenticatedActor,
-    input: PaginationInput & { search?: string }
+    input: PaginationInput & {
+      search?: string
+      organizationIds?: readonly string[]
+    }
   ): Promise<unknown> {
     const search = input.search ? boundedSearch(input.search) : undefined
     return this.listScopedOrganizations(actor, input, search)
@@ -2011,12 +2164,22 @@ export class MembersService {
 
   private async listScopedOrganizations(
     actor: AuthenticatedActor,
-    input: PaginationInput & { search?: string },
+    input: PaginationInput & {
+      search?: string
+      organizationIds?: readonly string[]
+    },
     search?: string
   ): Promise<unknown> {
     const clauses: QueryFilter<OrganizationRecord>[] = []
     const visibleIds = await this.visibleOrganizationIds(actor)
     if (visibleIds !== undefined) clauses.push({ _id: { $in: visibleIds } })
+    if (input.organizationIds?.length) {
+      clauses.push({
+        _id: {
+          $in: input.organizationIds.map((id) => new Types.ObjectId(id))
+        }
+      })
+    }
     if (search) {
       clauses.push({
         $or: [
@@ -2079,14 +2242,22 @@ export class MembersService {
 
   public listEvaluators(
     actor: AuthenticatedActor,
-    input: PaginationInput & { organizationId?: string; search?: string }
+    input: PaginationInput & {
+      organizationId?: string
+      evaluatorIds?: readonly string[]
+      search?: string
+    }
   ): Promise<unknown> {
     return this.listScopedEvaluators(actor, input)
   }
 
   private async listScopedEvaluators(
     actor: AuthenticatedActor,
-    input: PaginationInput & { organizationId?: string; search?: string }
+    input: PaginationInput & {
+      organizationId?: string
+      evaluatorIds?: readonly string[]
+      search?: string
+    }
   ): Promise<unknown> {
     const clauses: QueryFilter<EvaluatorRecord>[] = []
     const visibleIds = await this.visibleOrganizationIds(actor)
@@ -2100,6 +2271,13 @@ export class MembersService {
     }
     if (input.organizationId) {
       clauses.push({ organizationId: input.organizationId })
+    }
+    if (input.evaluatorIds?.length) {
+      clauses.push({
+        _id: {
+          $in: input.evaluatorIds.map((id) => new Types.ObjectId(id))
+        }
+      })
     }
     if (input.search) {
       const search = boundedSearch(input.search)

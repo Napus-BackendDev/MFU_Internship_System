@@ -364,6 +364,83 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
     expect(widenedAssignments.items).toEqual([])
   })
 
+  it('searches related assignment data before pagination and intersects actor scope', async () => {
+    const earlier = await seedWorkflow('directory-earlier')
+    const visible = await seedWorkflow(
+      'directory-visible-target',
+      'cycle-directory-visible'
+    )
+    const foreign = await seedWorkflow(
+      'directory-foreign-target',
+      'cycle-directory-foreign'
+    )
+    const organization = await organizations.create({
+      organizationCode: 'DIRECTORY-TARGET',
+      name: { th: 'บริษัทเป้าหมาย', en: 'Directory Target Company' },
+      status: 'active'
+    })
+    const evaluator = await evaluators.create({
+      name: { th: 'ผู้ประเมินเป้าหมาย', en: 'Directory Target Evaluator' },
+      email: 'directory-target@example.test',
+      position: { th: 'ผู้จัดการ', en: 'Manager' },
+      organizationId: organization.id,
+      status: 'active'
+    })
+    await assignments.updateOne(
+      { _id: visible.assignment.id },
+      { $set: { evaluatorId: evaluator.id, createdAt: new Date('2026-01-02') } }
+    )
+    await assignments.updateOne(
+      { _id: foreign.assignment.id },
+      {
+        $set: {
+          evaluatorId: evaluator.id,
+          schoolId: 'school-outside-scope',
+          programId: 'program-outside-scope',
+          createdAt: new Date('2026-01-03')
+        }
+      }
+    )
+    await assignments.updateOne(
+      { _id: earlier.assignment.id },
+      { $set: { createdAt: new Date('2026-01-01') } }
+    )
+    const staff: AuthenticatedActor = {
+      id: 'directory-scope-staff',
+      email: 'directory-staff@example.test',
+      displayName: 'Directory staff',
+      roles: ['internshipStaff'],
+      scope: {
+        tenant: false,
+        schoolIds: [testSchoolId],
+        programIds: [testProgramId]
+      }
+    }
+
+    const page = (await service.listAssignments(staff, {
+      page: 1,
+      pageSize: 1,
+      search: 'directory target company',
+      organizationId: organization.id
+    })) as {
+      items: readonly { id: string }[]
+      meta: { total: number }
+    }
+
+    expect(page.meta.total).toBe(1)
+    expect(page.items.map(({ id }) => id)).toEqual([visible.assignment.id])
+
+    const byStudentCode = (await service.listAssignments(staff, {
+      page: 1,
+      pageSize: 1,
+      search: 'directory-visible-target'
+    })) as { items: readonly { id: string }[]; meta: { total: number } }
+    expect(byStudentCode.meta.total).toBe(1)
+    expect(byStudentCode.items.map(({ id }) => id)).toEqual([
+      visible.assignment.id
+    ])
+  })
+
   it('combines Student own assignments with another role scope authorized for reads', async () => {
     const own = await seedWorkflow('student-multi-role-own')
     const scoped = await seedWorkflow(
@@ -1654,7 +1731,7 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
       schoolId: 'school-foreign',
       programId: 'program-foreign'
     })
-    await cycles.create({
+    const foreignCycle = await cycles.create({
       code: 'cycle-foreign-scoped',
       name: { th: 'รอบต่างสำนัก', en: 'Foreign cycle' },
       competencySetVersionId: visibleCycle.competencySetVersionId,
@@ -1700,6 +1777,29 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
     })
     expect(result.meta.total).toBe(1)
     expect(unrelated.assignment.cycleId).not.toBe(visibleCycle.id)
+
+    const boundedLookup = (await service.listCycles(
+      staff,
+      { page: 1, pageSize: 25 },
+      {
+        search: 'cycle-global-visible',
+        cycleIds: [visibleCycle.id],
+        termId: student.academicTermId,
+        status: 'active'
+      }
+    )) as { items: readonly { id: string }[]; meta: { total: number } }
+    expect(boundedLookup.items.map((cycle) => cycle.id)).toEqual([
+      visibleCycle.id
+    ])
+    expect(boundedLookup.meta.total).toBe(1)
+
+    const attemptedScopeExpansion = (await service.listCycles(
+      staff,
+      { page: 1, pageSize: 25 },
+      { cycleIds: [foreignCycle.id] }
+    )) as { items: readonly { id: string }[]; meta: { total: number } }
+    expect(attemptedScopeExpansion.items).toEqual([])
+    expect(attemptedScopeExpansion.meta.total).toBe(0)
   })
 
   it('limits Student and Evaluator cycle reads to own placements and assignments', async () => {

@@ -1,3 +1,5 @@
+import type { EvaluationCategoryScore } from './student-evaluation-result'
+
 export interface StudentDirectoryExportSource {
   readonly studentId: string
   readonly nameTh: string
@@ -24,15 +26,36 @@ export interface StudentDirectoryExportSource {
   readonly evaluatorEmail: string
   readonly statusTh: string
   readonly statusEn: string
-  readonly scoreDisplay: string
-  readonly gradeDisplay: string
-  readonly gradeDisplayEn: string
+  readonly hardSkillScore?: EvaluationCategoryScore
+  readonly softSkillScore?: EvaluationCategoryScore
 }
 
 export type StudentDirectoryExportLocale = 'th' | 'en'
 export type StudentDirectoryExportRow = Readonly<
   Record<string, string | number>
 >
+
+function formatScore(
+  score: EvaluationCategoryScore | undefined,
+  locale: StudentDirectoryExportLocale
+): string {
+  if (typeof score?.average !== 'number' || !Number.isFinite(score.average)) {
+    return '-'
+  }
+
+  const scale =
+    typeof score.scaleMin === 'number' && typeof score.scaleMax === 'number'
+      ? ` / ${score.scaleMin}–${score.scaleMax}`
+      : ''
+  const answeredCount =
+    Number.isInteger(score.answeredCount) && score.answeredCount > 0
+      ? locale === 'th'
+        ? ` (${score.answeredCount} ข้อ)`
+        : ` (${score.answeredCount} items)`
+      : ''
+
+  return `${score.average.toFixed(1)}${scale}${answeredCount}`
+}
 
 export function buildStudentDirectoryExportRows(
   rows: readonly StudentDirectoryExportSource[],
@@ -59,8 +82,8 @@ export function buildStudentDirectoryExportRows(
       ตำแหน่งผู้ประเมิน: row.evaluatorPositionTh,
       อีเมลผู้ประเมิน: row.evaluatorEmail,
       สถานะการประเมิน: row.statusTh,
-      'คะแนนเฉลี่ย (เต็ม 5.0)': row.scoreDisplay,
-      ผลการประเมิน: row.gradeDisplay
+      'คะแนน Hard Skill (เฉลี่ย)': formatScore(row.hardSkillScore, locale),
+      'คะแนน Soft Skill (เฉลี่ย)': formatScore(row.softSkillScore, locale)
     }))
   }
 
@@ -85,7 +108,7 @@ export function buildStudentDirectoryExportRows(
     'Evaluator Position': row.evaluatorPositionEn,
     'Evaluator Email': row.evaluatorEmail,
     'Evaluation Status': row.statusEn,
-    'Average Score (out of 5.0)': row.scoreDisplay,
-    'Grade / Evaluation Result': row.gradeDisplayEn
+    'Hard Skill Average': formatScore(row.hardSkillScore, locale),
+    'Soft Skill Average': formatScore(row.softSkillScore, locale)
   }))
 }

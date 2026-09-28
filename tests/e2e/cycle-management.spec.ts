@@ -14,9 +14,19 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
   const cycles: Array<Record<string, unknown>> = []
   let createPayload: Record<string, unknown> | undefined
   const observedVersionRequests: string[] = []
+  const cycleListQueries: Array<{
+    readonly page: string | null
+    readonly pageSize: string | null
+    readonly search: string | null
+    readonly status: string | null
+  }> = []
   const programListQueries: Array<{
     readonly schoolId: string | null
     readonly programIds: string | null
+    readonly page: string | null
+    readonly pageSize: string | null
+    readonly search: string | null
+    readonly archived: string | null
   }> = []
   const referenceListQueries: Record<
     'terms' | 'schools' | 'competencySets',
@@ -95,10 +105,39 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
       return
     }
     if (method === 'GET' && path === '/evaluation-cycles') {
+      cycleListQueries.push({
+        page: url.searchParams.get('page'),
+        pageSize: url.searchParams.get('pageSize'),
+        search: url.searchParams.get('search'),
+        status: url.searchParams.get('status')
+      })
+      const search = url.searchParams.get('search')?.toLocaleLowerCase()
+      const status = url.searchParams.get('status')
+      const filteredCycles = cycles.filter((cycle) => {
+        const name = cycle.name as
+          { readonly th?: string; readonly en?: string } | undefined
+        return (
+          (!status || cycle.status === status) &&
+          (!search ||
+            [cycle.code, name?.th, name?.en]
+              .filter((value): value is string => typeof value === 'string')
+              .some((value) => value.toLocaleLowerCase().includes(search)))
+        )
+      })
+      const requestedPage = Number(url.searchParams.get('page') ?? 1)
+      const requestedPageSize = Number(url.searchParams.get('pageSize') ?? 25)
       await route.fulfill({
         json: {
-          items: cycles,
-          meta: { total: cycles.length, page: 1, pageSize: 25, totalPages: 1 }
+          items: filteredCycles.slice(
+            (requestedPage - 1) * requestedPageSize,
+            requestedPage * requestedPageSize
+          ),
+          meta: {
+            total: filteredCycles.length,
+            page: requestedPage,
+            pageSize: requestedPageSize,
+            totalPages: Math.ceil(filteredCycles.length / requestedPageSize)
+          }
         }
       })
       return
@@ -150,8 +189,14 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
     if (method === 'GET' && path === '/academic/programs') {
       programListQueries.push({
         schoolId: url.searchParams.get('schoolId'),
-        programIds: url.searchParams.get('programIds')
+        programIds: url.searchParams.get('programIds'),
+        page: url.searchParams.get('page'),
+        pageSize: url.searchParams.get('pageSize'),
+        search: url.searchParams.get('search'),
+        archived: url.searchParams.get('archived')
       })
+      const requestedPage = Number(url.searchParams.get('page') ?? 1)
+      const requestedPageSize = Number(url.searchParams.get('pageSize') ?? 25)
       await route.fulfill({
         json: {
           items: [
@@ -162,7 +207,12 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
               name: { th: 'วิศวกรรมซอฟต์แวร์', en: 'Software Engineering' }
             }
           ],
-          meta: { total: 1, page: 1, pageSize: 500, totalPages: 1 }
+          meta: {
+            total: 1,
+            page: requestedPage,
+            pageSize: requestedPageSize,
+            totalPages: 1
+          }
         }
       })
       return
@@ -248,6 +298,24 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
   await expect(
     page.getByRole('heading', { name: 'รอบประเมิน', exact: true })
   ).toBeVisible()
+  const cycleSearch = page.getByRole('textbox', { name: 'ค้นหารอบประเมิน' })
+  await cycleSearch.fill('2026-TEST')
+  await expect
+    .poll(() => cycleListQueries.some(({ search }) => search === '2026-TEST'))
+    .toBe(true)
+  await expect(page.getByText('ไม่พบรอบประเมินตามตัวกรอง')).toBeVisible()
+  await page.getByLabel('กรองสถานะรอบ').selectOption('active')
+  await expect
+    .poll(() =>
+      cycleListQueries.some(
+        ({ search, status }) => search === '2026-TEST' && status === 'active'
+      )
+    )
+    .toBe(true)
+  await cycleSearch.fill('')
+  await expect.poll(() => cycleListQueries.at(-1)?.search === null).toBe(true)
+  await page.getByLabel('กรองสถานะรอบ').selectOption('')
+  await expect.poll(() => cycleListQueries.at(-1)?.status === null).toBe(true)
   const queryResponse = await page.request.get(
     'http://127.0.0.1:18081/__test/cycle-reference-queries'
   )
@@ -303,13 +371,28 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
   await nextSchoolPage.click()
   await expect.poll(() => referenceListQueries.schools.length).toBe(2)
   await page.getByLabel('สำนักวิชา (ไม่บังคับ)').selectOption('school-e2e')
-  await expect(page.getByLabel('หลักสูตร (ไม่บังคับ)')).toBeVisible()
-  await expect.poll(() => programListQueries.length).toBe(1)
-  expect(programListQueries[0]).toEqual({
-    schoolId: 'school-e2e',
-    programIds: null
-  })
-  await page.getByLabel('หลักสูตร (ไม่บังคับ)').selectOption('program-e2e')
+  await expect(page.getByLabel('หลักสูตร', { exact: true })).toBeVisible()
+  await expect
+    .poll(() =>
+      programListQueries.some(
+        (query) =>
+          query.schoolId === 'school-e2e' &&
+          query.programIds === null &&
+          query.page === '1' &&
+          query.pageSize === '25' &&
+          query.archived === 'false'
+      )
+    )
+    .toBe(true)
+  await page.getByRole('searchbox', { name: 'หลักสูตร ค้นหา' }).fill('SE')
+  await expect
+    .poll(() =>
+      programListQueries.some(
+        (query) => query.schoolId === 'school-e2e' && query.search === 'SE'
+      )
+    )
+    .toBe(true)
+  await page.getByLabel('หลักสูตร', { exact: true }).selectOption('program-e2e')
   await page.waitForLoadState('networkidle')
 
   await page
@@ -344,11 +427,13 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
   await page.getByRole('button', { name: 'บันทึกรอบฉบับร่าง' }).click()
 
   await expect(page.getByText('2026-TEST-CYCLE')).toBeVisible()
-  await expect.poll(() => programListQueries.length).toBe(2)
-  expect(programListQueries[1]).toEqual({
-    schoolId: null,
-    programIds: 'program-e2e'
-  })
+  await expect
+    .poll(() =>
+      programListQueries.some(
+        (query) => query.programIds === 'program-e2e' && query.pageSize === '1'
+      )
+    )
+    .toBe(true)
   await expect(
     page.getByText('สำนักวิชาวิทยาศาสตร์ · วิศวกรรมซอฟต์แวร์')
   ).toBeVisible()
@@ -370,9 +455,13 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
   ).toBeVisible()
   await expect(activateButton).toBeEnabled()
   await activateButton.click()
-  await expect(page.getByText('เปิดรับผล', { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole('article').getByText('เปิดรับผล', { exact: true })
+  ).toBeVisible()
 
   await page.getByRole('button', { name: 'ปิดรอบ' }).click()
-  await expect(page.getByText('ปิดแล้ว', { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole('article').getByText('ปิดแล้ว', { exact: true })
+  ).toBeVisible()
   await expect(page.getByRole('button', { name: 'ปิดรอบ' })).toHaveCount(0)
 })

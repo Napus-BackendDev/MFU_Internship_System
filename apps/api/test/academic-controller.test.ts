@@ -67,7 +67,9 @@ describe('AcademicController program lookup contract', () => {
     await controller.listPrograms(request, {
       page: '1',
       pageSize: '25',
+      search: '  SOFTWARE ',
       schoolId: 'school-1',
+      archived: 'false',
       programIds: programIds.join(',')
     })
 
@@ -76,11 +78,14 @@ describe('AcademicController program lookup contract', () => {
       {
         page: 1,
         pageSize: 25,
+        search: 'SOFTWARE',
         schoolId: 'school-1',
+        archived: false,
         programIds
       },
       'school-1',
-      programIds
+      programIds,
+      { search: 'SOFTWARE', archived: false }
     )
   })
 
@@ -96,6 +101,62 @@ describe('AcademicController program lookup contract', () => {
     expect(() =>
       controller.listPrograms(request, {
         programIds: Array.from({ length: 101 }, () => 'a'.repeat(24)).join(',')
+      })
+    ).toThrow(ZodError)
+  })
+})
+
+describe('AcademicController bounded Course lookups', () => {
+  it('parses scoped Course search, program, archive, and Course ID filters', async () => {
+    const listCourses = vi.fn().mockResolvedValue({ items: [] })
+    const controller = new AcademicController({
+      listCourses
+    } as unknown as AcademicService)
+    const actor = { id: 'staff-1' }
+    const request = { actor } as AuthenticatedRequest
+    const courseId = 'C'.repeat(24)
+    const programId = 'D'.repeat(24)
+
+    await controller.listCourses(request, {
+      page: '2',
+      pageSize: '25',
+      search: '  INT ',
+      programId,
+      courseIds: courseId,
+      archived: 'false'
+    })
+
+    expect(listCourses).toHaveBeenCalledWith(
+      actor,
+      {
+        page: 2,
+        pageSize: 25,
+        search: 'INT',
+        programId,
+        courseIds: [courseId.toLowerCase()],
+        archived: false
+      },
+      {
+        search: 'INT',
+        programId,
+        courseIds: [courseId.toLowerCase()],
+        archived: false
+      }
+    )
+  })
+
+  it('rejects malformed and excessive Course ID filters', () => {
+    const controller = new AcademicController({
+      listCourses: vi.fn()
+    } as unknown as AcademicService)
+    const request = { actor: { id: 'staff-1' } } as AuthenticatedRequest
+
+    expect(() =>
+      controller.listCourses(request, { courseIds: 'not-an-object-id' })
+    ).toThrow(ZodError)
+    expect(() =>
+      controller.listCourses(request, {
+        courseIds: Array.from({ length: 101 }, () => 'a'.repeat(24)).join(',')
       })
     ).toThrow(ZodError)
   })
