@@ -190,6 +190,44 @@ const filteredProgramsForForm = computed(() => {
   return programs.value.filter((p) => p.schoolId === form.value.schoolId)
 })
 
+const roleFilterOptions = [
+  { value: 'all', label: 'ทุกบทบาท (All Roles)' },
+  { value: 'internshipStaff', label: '💼 เจ้าหน้าที่ฝึกงาน (Internship Staff)' },
+  { value: 'coordinator', label: '🧑‍🏫 อาจารย์ที่ปรึกษา (Advisor)' },
+  { value: 'student', label: '🎓 นักศึกษา (Student)' },
+  { value: 'systemAdmin', label: '🛡️ ผู้ดูแลระบบ (System Admin)' }
+]
+
+const schoolFilterOptions = computed(() => [
+  { value: 'all', label: 'ทุกสำนักวิชา (All Schools)' },
+  ...schools.value.map((s) => ({
+    value: s.id,
+    label: `${s.name.th || s.name.en} ${s.schoolCode ? `(${s.schoolCode})` : ''}`.trim()
+  }))
+])
+
+const formSchoolOptions = computed(() => [
+  { value: '', label: '-- ไม่ระบุ หรือ ทั่วทั้งระบบ --' },
+  ...schools.value.map((s) => ({
+    value: s.id,
+    label: `${s.name.th || s.name.en} (${s.schoolCode})`.trim()
+  }))
+])
+
+const formProgramOptions = computed(() => [
+  { value: '', label: '-- ทุกสาขาวิชาในสำนัก --' },
+  ...filteredProgramsForForm.value.map((p) => ({
+    value: p.id,
+    label: `${p.name.th || p.name.en} (${p.programCode})`.trim()
+  }))
+])
+
+const statusFilterOptions = [
+  { value: 'all', label: 'ทุกสถานะ (All Statuses)' },
+  { value: 'active', label: '🟢 ใช้งานปกติ (Active)' },
+  { value: 'suspended', label: '🔴 ระงับการใช้งาน (Suspended)' }
+]
+
 // Data Loaders
 async function loadSummary(): Promise<void> {
   try {
@@ -744,18 +782,12 @@ onMounted(() => {
             <UIcon name="i-lucide-shield" class="size-3.5 text-primary" />
             บทบาทผู้ใช้งาน (Role)
           </label>
-          <select
+          <SearchableSelect
             v-model="selectedRole"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-          >
-            <option value="all">ทุกบทบาท (All Roles)</option>
-            <option value="internshipStaff">
-              💼 เจ้าหน้าที่ฝึกงาน (Internship Staff)
-            </option>
-            <option value="coordinator">🧑‍🏫 อาจารย์ที่ปรึกษา (Advisor)</option>
-            <option value="student">🎓 นักศึกษา (Student)</option>
-            <option value="systemAdmin">🛡️ ผู้ดูแลระบบ (System Admin)</option>
-          </select>
+            :options="roleFilterOptions"
+            search-placeholder="ค้นหาบทบาท…"
+            aria-label="บทบาทผู้ใช้งาน"
+          />
         </div>
 
         <!-- 2.3 สำนักวิชา -->
@@ -766,16 +798,12 @@ onMounted(() => {
             <UIcon name="i-lucide-school" class="size-3.5 text-primary" />
             สำนักวิชาที่สังกัด (School)
           </label>
-          <select
+          <SearchableSelect
             v-model="selectedSchool"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate cursor-pointer"
-          >
-            <option value="all">ทุกสำนักวิชา (All Schools)</option>
-            <option v-for="s in schools" :key="s.id" :value="s.id">
-              {{ s.name.th || s.name.en }}
-              {{ s.schoolCode ? `(${s.schoolCode})` : '' }}
-            </option>
-          </select>
+            :options="schoolFilterOptions"
+            search-placeholder="ค้นหาสำนักวิชา…"
+            aria-label="สำนักวิชาที่สังกัด"
+          />
         </div>
 
         <!-- 2.4 สถานะบัญชี -->
@@ -786,14 +814,12 @@ onMounted(() => {
             <UIcon name="i-lucide-activity" class="size-3.5 text-primary" />
             สถานะบัญชี (Status)
           </label>
-          <select
+          <SearchableSelect
             v-model="selectedStatus"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-          >
-            <option value="all">ทุกสถานะ (All Statuses)</option>
-            <option value="active">🟢 ใช้งานปกติ (Active)</option>
-            <option value="suspended">🔴 ระงับการใช้งาน (Suspended)</option>
-          </select>
+            :options="statusFilterOptions"
+            search-placeholder="ค้นหาสถานะ…"
+            aria-label="สถานะบัญชี"
+          />
         </div>
       </div>
 
@@ -1226,15 +1252,12 @@ onMounted(() => {
             <label class="mb-1.5 block text-xs font-semibold text-highlighted"
               >สำนักวิชาที่สังกัด</label
             >
-            <select
+            <SearchableSelect
               v-model="form.schoolId"
-              class="w-full rounded-lg border border-neutral-300 bg-white px-3.5 py-2.5 text-xs text-highlighted shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary dark:border-neutral-700 dark:bg-neutral-900 sm:text-sm"
-            >
-              <option value="">-- ไม่ระบุ หรือ ทั่วทั้งระบบ --</option>
-              <option v-for="s in schools" :key="s.id" :value="s.id">
-                {{ s.name.th || s.name.en }} ({{ s.schoolCode }})
-              </option>
-            </select>
+              :options="formSchoolOptions"
+              search-placeholder="ค้นหาสำนักวิชา…"
+              placeholder="-- ไม่ระบุ หรือ ทั่วทั้งระบบ --"
+            />
           </div>
 
           <!-- Program Selection -->
@@ -1242,19 +1265,12 @@ onMounted(() => {
             <label class="mb-1.5 block text-xs font-semibold text-highlighted"
               >สาขาวิชา / หลักสูตร</label
             >
-            <select
+            <SearchableSelect
               v-model="form.programId"
-              class="w-full rounded-lg border border-neutral-300 bg-white px-3.5 py-2.5 text-xs text-highlighted shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary dark:border-neutral-700 dark:bg-neutral-900 sm:text-sm"
-            >
-              <option value="">-- ทุกสาขาวิชาในสำนัก --</option>
-              <option
-                v-for="p in filteredProgramsForForm"
-                :key="p.id"
-                :value="p.id"
-              >
-                {{ p.name.th || p.name.en }} ({{ p.programCode }})
-              </option>
-            </select>
+              :options="formProgramOptions"
+              search-placeholder="ค้นหาสาขาวิชา…"
+              placeholder="-- ทุกสาขาวิชาในสำนัก --"
+            />
           </div>
 
           <!-- Status Selection -->

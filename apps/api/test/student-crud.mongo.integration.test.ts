@@ -1,6 +1,9 @@
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { createConnection, Types, type Connection, type Model } from 'mongoose'
-import { HttpException } from '@nestjs/common'
+import { HttpException, type INestApplication } from '@nestjs/common'
+import { Reflector } from '@nestjs/core'
+import { Test } from '@nestjs/testing'
+import request from 'supertest'
 import type { AuthenticatedActor } from '@internship/shared-types'
 import {
   afterAll,
@@ -58,6 +61,9 @@ import {
   MembersService,
   type StudentCreateInput
 } from '../src/members/members.service.js'
+import { MembersController } from '../src/members/members.controller.js'
+import { StudentImportService } from '../src/members/student-import.service.js'
+import { AccessGuard } from '../src/auth/access.guard.js'
 import {
   migrateStudentEmailUniqueIndex,
   profileStudentEmailUniqueness
@@ -284,6 +290,99 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       programId
     }
   }
+
+  it('reads Student and joined directory references from one MongoDB snapshot', async () => {
+    const term = await terms.create({
+      code: 'SNAPSHOT-1/2567',
+      academicYear: 2567,
+      semester: '1',
+      startsAt: new Date('2024-06-01T00:00:00.000Z'),
+      endsAt: new Date('2024-10-31T00:00:00.000Z'),
+      status: 'open'
+    })
+    const student = await students.create({
+      ...input('6631505001', 'snapshot.student@example.com'),
+      academicTermId: term.id,
+      academicYear: 2567,
+      semester: '1'
+    })
+    const replacementOrganization = await organizations.create({
+      organizationCode: 'MFU-SNAPSHOT-NEW',
+      name: { th: 'องค์กรใหม่', en: 'Replacement Organization' },
+      status: 'active'
+    })
+    await placements.create({
+      studentId: student.studentId,
+      organizationId,
+      academicTermId: term.id,
+      schoolId,
+      programId,
+      positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
+      startsAt: new Date('2024-06-15T00:00:00.000Z'),
+      endsAt: new Date('2024-08-15T00:00:00.000Z'),
+      status: 'completed'
+    })
+
+    const session = await connection.startSession()
+    try {
+      await session.withTransaction(
+        async () => {
+          await students.findById(student.id).session(session).exec()
+
+          await placements.updateOne(
+            { studentId: student.studentId },
+            { $set: { organizationId: replacementOrganization.id } }
+          )
+          await organizations.updateOne(
+            { _id: organizationId },
+            { $set: { 'name.en': 'Updated Organization' } }
+          )
+
+          const directory = (await service.listStudents(
+            admin,
+            { page: 1, pageSize: 10, studentId: student.studentId },
+            session
+          )) as {
+            items: Array<{
+              directoryRelations?: {
+                placements?: Array<{
+                  organizationId: string
+                  organization?: { name: { en: string } }
+                }>
+              }
+            }>
+          }
+          const joinedPlacement =
+            directory.items[0]?.directoryRelations?.placements?.[0]
+          expect(joinedPlacement?.organizationId).toBe(organizationId)
+          expect(joinedPlacement?.organization?.name.en).toBe(
+            'Test Organization'
+          )
+
+          const currentDirectory = (await service.listStudents(admin, {
+            page: 1,
+            pageSize: 10,
+            studentId: student.studentId
+          })) as typeof directory
+          const currentPlacement =
+            currentDirectory.items[0]?.directoryRelations?.placements?.[0]
+          expect(currentPlacement?.organizationId).toBe(
+            replacementOrganization.id
+          )
+          expect(currentPlacement?.organization?.name.en).toBe(
+            'Replacement Organization'
+          )
+        },
+        {
+          readConcern: { level: 'snapshot' },
+          readPreference: 'primary',
+          writeConcern: { w: 'majority' }
+        }
+      )
+    } finally {
+      await session.endSession()
+    }
+  })
 
   it('blocks Program and School archive with live descendants, then preserves history', async () => {
     const academic = new AcademicService(
@@ -713,6 +812,78 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
     })) as { items: Array<{ id: string }> }
 
     expect(result.items.map((student) => student.id)).toEqual([firstStudent.id])
+  })
+
+  it('keeps legacy placeholder organization references from breaking directory reads', async () => {
+    const student = await students.create(
+      input('6631503099', 'legacy.organization@example.com')
+    )
+    await placements.create({
+      studentId: student.studentId,
+      organizationId: 'default-org',
+      academicTermId: 'legacy-term',
+      schoolId,
+      programId,
+      positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
+      startsAt: new Date('2024-06-15T00:00:00.000Z'),
+      endsAt: new Date('2024-08-15T00:00:00.000Z'),
+      status: 'completed'
+    })
+    await placements.create({
+      studentId: student.studentId,
+      organizationId,
+      academicTermId: 'legacy-term-current',
+      schoolId,
+      programId,
+      positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
+      startsAt: new Date('2024-06-15T00:00:00.000Z'),
+      endsAt: new Date('2024-08-15T00:00:00.000Z'),
+      status: 'completed'
+    })
+
+    const result = (await service.listStudents(admin, {
+      page: 1,
+      pageSize: 10,
+      studentId: student.studentId,
+      includeDirectoryData: true
+    })) as {
+      items: Array<{
+        directoryRelations?: {
+          placements?: Array<{
+            organizationId: string
+            organization?: unknown
+          }>
+        }
+      }>
+      directory?: { summary: { all: number } }
+    }
+
+    expect(result.items).toHaveLength(1)
+    expect(result.directory?.summary.all).toBe(1)
+    expect(result.items[0]?.directoryRelations?.placements?.[0]).toMatchObject({
+      organizationId: 'default-org'
+    })
+    expect(
+      result.items[0]?.directoryRelations?.placements?.[0]?.organization
+    ).toBeUndefined()
+
+    const studentActor: AuthenticatedActor = {
+      ...admin,
+      id: 'legacy-organization-student',
+      roles: ['student'],
+      scope: {
+        tenant: false,
+        schoolIds: [],
+        programIds: [],
+        studentId: student.studentId
+      }
+    }
+    await expect(
+      service.listOrganizations(studentActor, { page: 1, pageSize: 10 })
+    ).resolves.toMatchObject({
+      items: [{ id: organizationId }],
+      meta: { total: 1 }
+    })
   })
 
   it('filters the student directory by displayed academic year and semester', async () => {
@@ -1161,23 +1332,21 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
     expect(
       withoutCycle.items.find((student) => student.id === staleSubmitted.id)
         ?.evaluationStatus
-    ).toBeUndefined()
+    ).toBe('pending')
     await expect(
       service.getStudent(admin, staleSubmitted.id)
     ).resolves.not.toHaveProperty('evaluatorEmail')
     await expect(
       service.getStudent(admin, staleSubmitted.id)
     ).resolves.not.toHaveProperty('evaluationStatus')
-    await expect(
-      service.listStudents(admin, {
-        page: 1,
-        pageSize: 25,
-        evaluationStatus: 'submitted'
-      })
-    ).rejects.toMatchObject({
-      status: 422,
-      response: { code: 'EVALUATION_STATUS_REQUIRES_CYCLE' }
-    })
+    const withoutCycleSubmitted = (await service.listStudents(admin, {
+      page: 1,
+      pageSize: 25,
+      evaluationStatus: 'submitted'
+    })) as { items: Array<{ id: string }> }
+    expect(withoutCycleSubmitted.items.map((student) => student.id)).toEqual([
+      actualSubmitted.id
+    ])
 
     const outOfScopeStaff: AuthenticatedActor = {
       ...admin,
@@ -2877,6 +3046,115 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
         search: 'mismatch@company.example'
       })
     ).resolves.toMatchObject({ items: [], meta: { total: 0 } })
+
+    const moduleRef = await Test.createTestingModule({
+      controllers: [MembersController],
+      providers: [
+        { provide: MembersService, useValue: service },
+        { provide: StudentImportService, useValue: {} }
+      ]
+    }).compile()
+    const routeApp: INestApplication = moduleRef.createNestApplication()
+    routeApp.setGlobalPrefix('api/v2')
+    let routeActor = firstStudentActor
+    routeApp.useGlobalGuards(
+      new AccessGuard(
+        new Reflector(),
+        {
+          verifyAccessToken: vi.fn().mockImplementation(() => ({
+            sessionId: 'student-directory-route-session',
+            actor: routeActor
+          }))
+        } as never,
+        {
+          assertAccessTokenCurrent: vi.fn().mockImplementation(() => routeActor)
+        } as never
+      )
+    )
+    await routeApp.init()
+    try {
+      const server = routeApp.getHttpServer() as Parameters<typeof request>[0]
+      const authorization = 'Bearer isolated-student-route-token'
+      const routeOrganizations = await request(server)
+        .get('/api/v2/organizations')
+        .set('Authorization', authorization)
+        .expect(200)
+      const organizationItems = routeOrganizations.body as {
+        items: Array<{ id: string }>
+      }
+      expect(organizationItems.items.map(({ id }) => id).sort()).toEqual(
+        [organizationId, secondOwnOrganization.id].sort()
+      )
+
+      const foreignOrganizationLookup = await request(server)
+        .get(`/api/v2/organizations?organizationIds=${secondOrganization.id}`)
+        .set('Authorization', authorization)
+        .expect(200)
+      expect(
+        (foreignOrganizationLookup.body as { items: unknown[] }).items
+      ).toEqual([])
+
+      const routeEvaluators = await request(server)
+        .get('/api/v2/evaluators')
+        .set('Authorization', authorization)
+        .expect(200)
+      expect(
+        (routeEvaluators.body as { items: Array<{ email: string }> }).items.map(
+          ({ email }) => email
+        )
+      ).toEqual(['first@company.example'])
+
+      const foreignEvaluatorLookup = await request(server)
+        .get(`/api/v2/evaluators?evaluatorIds=${foreignEvaluator.id}`)
+        .set('Authorization', authorization)
+        .expect(200)
+      expect(
+        (foreignEvaluatorLookup.body as { items: unknown[] }).items
+      ).toEqual([])
+
+      await request(server)
+        .post('/api/v2/organizations')
+        .set('Authorization', authorization)
+        .send({
+          organizationCode: 'STUDENT-CANNOT-CREATE',
+          name: { th: 'ห้ามสร้าง', en: 'Must Not Create' }
+        })
+        .expect(403)
+      await expect(
+        organizations.countDocuments({
+          organizationCode: 'STUDENT-CANNOT-CREATE'
+        })
+      ).resolves.toBe(0)
+
+      const unplacedStudent = await students.create(
+        input('6631503003', 'unplaced.student@example.com')
+      )
+      routeActor = {
+        ...firstStudentActor,
+        id: 'student-without-placement',
+        scope: {
+          ...firstStudentActor.scope,
+          studentId: unplacedStudent.studentId
+        }
+      }
+      const unplacedOrganizations = await request(server)
+        .get('/api/v2/organizations')
+        .set('Authorization', authorization)
+        .expect(200)
+      expect(
+        (unplacedOrganizations.body as { items: unknown[] }).items
+      ).toEqual([])
+
+      const unplacedEvaluators = await request(server)
+        .get('/api/v2/evaluators')
+        .set('Authorization', authorization)
+        .expect(200)
+      expect((unplacedEvaluators.body as { items: unknown[] }).items).toEqual(
+        []
+      )
+    } finally {
+      await routeApp.close()
+    }
 
     const invalidTenantCoordinator: AuthenticatedActor = {
       ...scopedCoordinator,

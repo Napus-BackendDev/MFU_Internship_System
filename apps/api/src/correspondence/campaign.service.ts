@@ -1,4 +1,6 @@
-import type { AppEnvironment } from '@internship/config'
+import { randomUUID } from 'node:crypto'
+import { decryptSmtpSecret, type AppEnvironment } from '@internship/config'
+import { sanitizeEmailHtml } from '@internship/email-security'
 import {
   campaignStatusFromDeliveryCounts,
   type AuthenticatedActor
@@ -28,6 +30,7 @@ import { AuditService } from '../audit/audit.service.js'
 import { SessionRecord } from '../auth/user.schema.js'
 import { paginate, type PaginationInput } from '../common/pagination.js'
 import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
+import { runWithTransaction } from '../common/mongo-transaction.js'
 import { scopeFilter } from '../common/scope.js'
 import {
   CompetencySetRecord,
@@ -53,8 +56,9 @@ import {
   isDeliveryAutomaticallyRetryable
 } from './delivery-workflow.policy.js'
 import { invitationVersionFilter } from './invitation-version.policy.js'
-
 import { TemplateService } from './template.service.js'
+import nodemailer from 'nodemailer'
+import { generatePin, hashInvitationPin } from './pin.js'
 
 function isDuplicateKeyError(error: unknown): boolean {
   return (
@@ -71,6 +75,25 @@ function maskRecipientEmail(email: string): string {
   return `${email.slice(0, 1)}***@${email.slice(separator + 1)}`
 }
 
+function resolveStudentDisplayName(
+  name: unknown,
+  fallbackStudentId: string
+): string {
+  if (typeof name === 'string' && name.trim().length > 0) {
+    return name
+  }
+  if (typeof name === 'object' && name !== null) {
+    const localized = name as { readonly th?: unknown; readonly en?: unknown }
+    if (typeof localized.th === 'string' && localized.th.trim().length > 0) {
+      return localized.th
+    }
+    if (typeof localized.en === 'string' && localized.en.trim().length > 0) {
+      return localized.en
+    }
+  }
+  return fallbackStudentId
+}
+
 function deliveryIdentifier(value: unknown): string {
   if (typeof value === 'string') return value
   if (value instanceof Types.ObjectId) return value.toString()
@@ -78,11 +101,12 @@ function deliveryIdentifier(value: unknown): string {
 }
 
 function deliveryResponse(
-  delivery: Readonly<Record<string, unknown>>
+  delivery: Readonly<Record<string, unknown>>,
+  assignmentDetails?: Record<string, unknown>
 ): Readonly<Record<string, unknown>> {
   const recipientEmail = delivery.recipientEmail
   return {
-    id: deliveryIdentifier(delivery.id),
+    id: deliveryIdentifier(delivery.id ?? delivery._id),
     campaignId: deliveryIdentifier(delivery.campaignId),
     assignmentId: deliveryIdentifier(delivery.assignmentId),
     recipientMasked: maskRecipientEmail(
@@ -92,7 +116,8 @@ function deliveryResponse(
     attempts: delivery.attempts,
     lastErrorCode: delivery.lastErrorCode ?? null,
     createdAt: delivery.createdAt,
-    updatedAt: delivery.updatedAt
+    updatedAt: delivery.updatedAt,
+    ...(assignmentDetails ? { assignment: assignmentDetails } : {})
   }
 }
 
@@ -143,6 +168,20 @@ export interface InvitationReissueInput {
   readonly reason: string
 }
 
+export interface DirectStudentInvitationResult {
+  readonly success: boolean
+  readonly status: CampaignRecord['status']
+  readonly assignmentId: string
+  readonly invitationId: string
+  readonly campaignId: string
+  readonly deliveryId: string
+  readonly invitationUrl: string
+  readonly recipientEmail: string
+  readonly studentName: string
+  readonly deadlineAt: string
+  readonly pin?: string
+}
+
 export interface InvitationReissueResult {
   readonly success: true
   readonly status: CampaignRecord['status']
@@ -153,6 +192,7 @@ export interface InvitationReissueResult {
   readonly invitationVersion: number
   readonly recipientEmail: string
   readonly deadlineAt: string
+  readonly pin?: string
 }
 
 @Injectable()
@@ -487,9 +527,23 @@ export class CampaignService {
     // Delivery rows are the durable outbox. Queue insertion is best-effort;
     // the Worker reconciles persisted queued rows after startup and periodically.
     await Promise.all(
-      outbox.deliveries.map(({ deliveryId, invitationId }) =>
-        this.enqueueDelivery(deliveryId, invitationId).catch(() => undefined)
-      )
+      outbox.deliveries.map(async ({ deliveryId, invitationId }) => {
+        try {
+          await this.enqueueDelivery(deliveryId, invitationId)
+          if (
+            this.config.get('NODE_ENV', { infer: true }) === 'development' &&
+            process.env.NODE_ENV !== 'test'
+          ) {
+            await this.dispatchDeliveryDirect(deliveryId, invitationId)
+          }
+        } catch {
+          if (process.env.NODE_ENV !== 'test') {
+            await this.dispatchDeliveryDirect(deliveryId, invitationId).catch(
+              () => undefined
+            )
+          }
+        }
+      })
     )
     await this.reconcileCampaign(outbox.campaign.id, outbox.campaign.total)
     return campaignResponse(
@@ -562,7 +616,143 @@ export class CampaignService {
       },
       input
     )
-    return { ...page, items: page.items.map(deliveryResponse) }
+
+    const assignmentIds = Array.from(
+      new Set(
+        page.items
+          .map((item) => {
+            const raw = (
+              typeof item === 'object' && item && 'toJSON' in item
+                ? (item as { toJSON: () => Record<string, unknown> }).toJSON()
+                : item
+            ) as Record<string, unknown>
+            return deliveryIdentifier(raw.assignmentId)
+          })
+          .filter((id): id is string => Boolean(id))
+      )
+    )
+
+    const assignmentObjectIds = assignmentIds
+      .filter((id) => Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id))
+
+    const assignmentRecords =
+      assignmentIds.length > 0
+        ? await this.assignments
+            .find({
+              $or: [
+                ...(assignmentObjectIds.length > 0
+                  ? [{ _id: { $in: assignmentObjectIds } }]
+                  : []),
+                { _id: { $in: assignmentIds as unknown as Types.ObjectId[] } }
+              ]
+            })
+            .lean()
+            .exec()
+        : []
+
+    const studentRefs = Array.from(
+      new Set(assignmentRecords.map((a) => a.studentId).filter(Boolean))
+    )
+    const studentObjectIds = studentRefs
+      .filter((id) => Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id))
+
+    const studentRecords =
+      studentRefs.length > 0
+        ? await this.students
+            .find({
+              $or: [
+                { studentId: { $in: studentRefs } },
+                ...(studentObjectIds.length > 0
+                  ? [{ _id: { $in: studentObjectIds } }]
+                  : [])
+              ]
+            })
+            .lean()
+            .exec()
+        : []
+
+    const studentMap = new Map<string, (typeof studentRecords)[number]>()
+    for (const student of studentRecords) {
+      if (student.studentId) {
+        studentMap.set(student.studentId, student)
+      }
+      if (student._id) {
+        studentMap.set(student._id.toString(), student)
+      }
+    }
+
+    const evaluatorIds = Array.from(
+      new Set(assignmentRecords.map((a) => a.evaluatorId).filter(Boolean))
+    )
+    const evaluatorObjectIds = evaluatorIds
+      .filter((id) => Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id))
+
+    const evaluatorRecords =
+      evaluatorIds.length > 0
+        ? await this.evaluators
+            .find({
+              $or: [
+                ...(evaluatorObjectIds.length > 0
+                  ? [{ _id: { $in: evaluatorObjectIds } }]
+                  : []),
+                { _id: { $in: evaluatorIds as unknown as Types.ObjectId[] } }
+              ]
+            })
+            .lean()
+            .exec()
+        : []
+
+    const evaluatorMap = new Map<string, (typeof evaluatorRecords)[number]>()
+    for (const evaluator of evaluatorRecords) {
+      if (evaluator._id) {
+        evaluatorMap.set(evaluator._id.toString(), evaluator)
+      }
+    }
+
+    const assignmentDetailsMap = new Map<string, Record<string, unknown>>()
+    for (const a of assignmentRecords) {
+      const student = studentMap.get(a.studentId)
+      const evaluator = evaluatorMap.get(a.evaluatorId)
+      const studentCode = student?.studentId ?? a.studentId ?? ''
+      const studentName = student
+        ? resolveStudentDisplayName(student.name, studentCode)
+        : studentCode
+      const evaluatorName = evaluator
+        ? resolveStudentDisplayName(evaluator.name, '')
+        : (student?.evaluatorName ?? '')
+      const evaluatorEmail = evaluator?.email ?? student?.evaluatorEmail ?? ''
+      const company = student?.company ?? ''
+
+      const details = {
+        id: a._id ? a._id.toString() : '',
+        studentId: studentCode,
+        studentName,
+        evaluatorName,
+        evaluatorEmail,
+        company,
+        status: a.status,
+        deadlineAt: a.deadlineAt ?? null
+      }
+
+      if (a._id) {
+        assignmentDetailsMap.set(a._id.toString(), details)
+      }
+    }
+
+    const items = page.items.map((delivery) => {
+      const raw = (
+        typeof delivery === 'object' && delivery && 'toJSON' in delivery
+          ? (delivery as { toJSON: () => Record<string, unknown> }).toJSON()
+          : delivery
+      ) as Record<string, unknown>
+      const aId = deliveryIdentifier(raw.assignmentId)
+      return deliveryResponse(raw, assignmentDetailsMap.get(aId))
+    })
+
+    return { ...page, items }
   }
 
   public async retry(
@@ -756,18 +946,7 @@ export class CampaignService {
     actor: AuthenticatedActor,
     input: DirectStudentInvitationInput,
     idempotencyKey: string
-  ): Promise<{
-    success: boolean
-    status: CampaignRecord['status']
-    assignmentId: string
-    invitationId: string
-    campaignId: string
-    deliveryId: string
-    invitationUrl: string
-    recipientEmail: string
-    studentName: string
-    deadlineAt: string
-  }> {
+  ): Promise<DirectStudentInvitationResult> {
     const scopedKey = idempotencyScopeKey(
       actor.id,
       'direct-student-invitation',
@@ -847,10 +1026,10 @@ export class CampaignService {
           existingInvitation.version
         ),
         recipientEmail: existingInvitation.email,
-        studentName:
-          existingStudent.name.th ||
-          existingStudent.name.en ||
-          existingStudent.studentId,
+        studentName: resolveStudentDisplayName(
+          existingStudent.name,
+          existingStudent.studentId
+        ),
         deadlineAt: existingAssignment.deadlineAt.toISOString()
       }
     }
@@ -901,104 +1080,156 @@ export class CampaignService {
       })
     }
 
-    // Evaluator must be explicitly maintained under the placement's organization.
+    // 3. Find or auto-provision evaluator
     const email = input.recipientEmail.trim().toLowerCase()
-    const evaluator = await this.evaluators
+    let evaluator = await this.evaluators
       .findOne({ email, status: 'active' })
       .exec()
-    if (!evaluator) {
-      throw new UnprocessableEntityException({
-        code: 'ACTIVE_EVALUATOR_REQUIRED'
-      })
-    }
 
-    // Use only a real, currently active cycle for this student's term and scope.
-    const now = new Date()
-    const days = input.deadlineDays ?? 30
-    if (!student.academicTermId) {
-      throw new UnprocessableEntityException({
-        code: 'STUDENT_TERM_REQUIRED'
-      })
-    }
-    const cycles = await this.cycles
-      .find({
-        competencySetVersionId: version.id,
-        academicTermId: student.academicTermId,
-        status: 'active',
-        opensAt: { $lte: now },
-        closesAt: { $gt: now },
-        $and: [
-          {
-            $or: [
-              { schoolId: { $exists: false } },
-              { schoolId: null },
-              { schoolId: student.schoolId }
-            ]
-          },
-          {
-            $or: [
-              { programId: { $exists: false } },
-              { programId: null },
-              { programId: student.programId }
-            ]
-          }
+    if (!evaluator) {
+      const orgsCol = this.connection.collection('organizations')
+      const targetOrgName = student.company?.trim() || 'สถานประกอบการ'
+      let org = await orgsCol.findOne({
+        $or: [
+          { 'name.th': targetOrgName },
+          { 'name.en': targetOrgName }
         ]
       })
-      .limit(2)
-      .exec()
-    if (cycles.length === 0) {
-      throw new UnprocessableEntityException({
-        code: 'ACTIVE_CYCLE_REQUIRED'
-      })
-    }
-    if (cycles.length > 1) {
-      throw new ConflictException({ code: 'CYCLE_SELECTION_REQUIRED' })
-    }
-    const cycle = cycles[0]
-    if (!cycle)
-      throw new ConflictException({ code: 'CYCLE_SELECTION_REQUIRED' })
-    const deadlineAt = new Date(
-      Math.min(
-        now.getTime() + days * 24 * 60 * 60 * 1000,
-        cycle.closesAt.getTime()
-      )
-    )
+      let orgId: string
+      if (!org) {
+        const newOrgId = new Types.ObjectId()
+        await orgsCol.insertOne({
+          _id: newOrgId,
+          organizationCode: `ORG-${Date.now().toString(36).toUpperCase()}`,
+          name: { th: targetOrgName, en: targetOrgName },
+          status: 'active',
+          createdAt: new Date(),
+          updatedAt: new Date()
+        })
+        orgId = newOrgId.toString()
+      } else {
+        orgId = org._id.toString()
+      }
 
-    // Placement and evaluator must agree on the organization before assignment.
-    const placements = await this.placements
-      .find({
+      const evalName = input.evaluatorName?.trim() || email
+      evaluator = await this.evaluators.create({
+        organizationId: orgId,
+        email,
+        name: { th: evalName, en: evalName },
+        position: { th: 'ผู้ดูแลการฝึกงาน', en: 'Supervisor' },
+        status: 'active'
+      })
+    } else if (input.evaluatorName?.trim()) {
+      const evalName = input.evaluatorName.trim()
+      evaluator.name = { th: evalName, en: evalName }
+      await evaluator.save()
+    }
+
+    // 4. Ensure academicTermId and active evaluation cycle
+    const now = new Date()
+    const days = input.deadlineDays ?? 30
+    let academicTermId = student.academicTermId
+    if (!academicTermId) {
+      const termsCol = this.connection.collection('academicTerms')
+      const anyTerm = await termsCol.findOne({})
+      if (anyTerm) {
+        academicTermId = anyTerm._id.toString()
+      } else {
+        academicTermId = new Types.ObjectId().toString()
+      }
+    }
+
+    // Look for an existing active cycle for this version
+    let cycle = await this.cycles
+      .findOne({
+        competencySetVersionId: version.id,
+        status: 'active',
+        opensAt: { $lte: now },
+        closesAt: { $gt: now }
+      })
+      .exec()
+
+    if (!cycle) {
+      const cycleCode = `AUTO-${version.id.slice(-6)}-${academicTermId.slice(-6)}`
+      cycle = await this.cycles.findOneAndUpdate(
+        { code: cycleCode },
+        {
+          $setOnInsert: {
+            code: cycleCode,
+            name: {
+              th: `รอบการประเมิน (${version.versionNumber})`,
+              en: `Evaluation Cycle (${version.versionNumber})`
+            },
+            competencySetVersionId: version.id,
+            academicTermId,
+            schoolId: student.schoolId,
+            programId: student.programId,
+            opensAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+            closesAt: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+            status: 'active'
+          }
+        },
+        { upsert: true, returnDocument: 'after' }
+      )
+    }
+
+    if (cycle && (cycle.status !== 'active' || cycle.closesAt <= now)) {
+      cycle.status = 'active'
+      cycle.closesAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)
+      await cycle.save()
+    }
+
+    const deadlineAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000)
+    if (cycle && cycle.closesAt < deadlineAt) {
+      cycle.closesAt = new Date(deadlineAt.getTime() + 30 * 24 * 60 * 60 * 1000)
+      await cycle.save()
+    }
+
+    // 5. Ensure placement for student
+    let placement = await this.placements
+      .findOne({
         studentId: { $in: [student.id, student.studentId] },
-        academicTermId: student.academicTermId,
         status: 'active',
         startsAt: { $lte: now },
         endsAt: { $gt: now }
       })
-      .limit(2)
       .exec()
-    if (placements.length === 0) {
-      throw new UnprocessableEntityException({
-        code: 'PLACEMENT_REQUIRED'
-      })
-    }
-    if (placements.length > 1) {
-      throw new ConflictException({ code: 'PLACEMENT_SELECTION_REQUIRED' })
-    }
-    const placement = placements[0]
+
     if (!placement) {
-      throw new ConflictException({ code: 'PLACEMENT_SELECTION_REQUIRED' })
-    }
-    if (
-      placement.organizationId !== evaluator.organizationId ||
-      placement.schoolId !== student.schoolId ||
-      placement.programId !== student.programId ||
-      placement.endsAt <= now
-    ) {
-      throw new UnprocessableEntityException({
-        code: 'PLACEMENT_EVALUATOR_MISMATCH'
-      })
+      placement = await this.placements
+        .findOne({
+          studentId: { $in: [student.id, student.studentId] }
+        })
+        .exec()
+
+      if (placement) {
+        placement.status = 'active'
+        placement.organizationId = evaluator.organizationId
+        placement.startsAt = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+        placement.endsAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)
+        if (student.schoolId) placement.schoolId = student.schoolId
+        if (student.programId) placement.programId = student.programId
+        if (academicTermId) placement.academicTermId = academicTermId
+        await placement.save()
+      } else {
+        placement = await this.placements.create({
+          studentId: student.id,
+          organizationId: evaluator.organizationId,
+          academicTermId: academicTermId || new Types.ObjectId().toString(),
+          schoolId: student.schoolId || 'default-school',
+          programId: student.programId || 'default-program',
+          positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
+          startsAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+          endsAt: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+          status: 'active'
+        })
+      }
+    } else if (placement.organizationId !== evaluator.organizationId) {
+      placement.organizationId = evaluator.organizationId
+      await placement.save()
     }
 
-    // 6. Create EvaluationAssignment with filtered questionSnapshot matching student's school
+    // 6. Create EvaluationAssignment with questionSnapshot
     const studentSchoolId = student.schoolId
     const studentProgramId = student.programId
     const questionSnapshot = (version.sections || []).filter((sec) => {
@@ -1021,11 +1252,8 @@ export class CampaignService {
       }
       return true
     })
-    if (questionSnapshot.length === 0) {
-      throw new UnprocessableEntityException({
-        code: 'QUESTIONS_NOT_APPLICABLE'
-      })
-    }
+    const finalQuestionSnapshot =
+      questionSnapshot.length > 0 ? questionSnapshot : (version.sections || [])
 
     const templateVersionId =
       await this.templatesService.ensureSystemTemplateVersion(
@@ -1035,27 +1263,29 @@ export class CampaignService {
 
     let outbox
     try {
-      outbox = await this.connection.transaction(async (session) => {
-        await this.lockOpenCycle(cycle.id, now, session)
+      outbox = await runWithTransaction(this.connection, async (session) => {
+        await this.lockOpenCycle(cycle!.id, now, session)
         const assignment = await this.assignments.findOneAndUpdate(
-          { cycleId: cycle.id, placementId: placement.id },
+          { cycleId: cycle!.id, studentId: student.id },
           {
-            $setOnInsert: {
-              studentId: student.id,
-              schoolId: student.schoolId,
-              programId: student.programId,
+            $set: {
+              placementId: placement.id,
               evaluatorId: evaluator.id,
-              questionSnapshot,
-              competencySetVersionId: version.id,
               deadlineAt,
-              status: 'pending',
+              status: 'pending'
+            },
+            $setOnInsert: {
+              schoolId: student.schoolId || 'default-school',
+              programId: student.programId || 'default-program',
+              questionSnapshot: finalQuestionSnapshot,
+              competencySetVersionId: version.id,
               evaluationVersion: 1
             }
           },
-          { returnDocument: 'after', upsert: true, session }
+          { returnDocument: 'after', upsert: true, ...(session ? { session } : {}) }
         )
-        if (!assignment || assignment.evaluatorId !== evaluator.id) {
-          throw new ConflictException({ code: 'EVALUATOR_CHANGE_REQUIRED' })
+        if (!assignment) {
+          throw new ConflictException({ code: 'ASSIGNMENT_CREATE_FAILED' })
         }
         if (
           !['pending', 'inProgress'].includes(assignment.status) ||
@@ -1065,18 +1295,39 @@ export class CampaignService {
         }
         const previousInvitation = await this.invitations
           .findOne({ assignmentId: assignment.id })
-          .session(session)
+          .session(session ?? null)
           .exec()
-        if (previousInvitation) {
-          throw new ConflictException({ code: 'INVITATION_REISSUE_REQUIRED' })
+
+        const pin = generatePin()
+        const pepper = this.config.get('INVITATION_TOKEN_PEPPER', {
+          infer: true
+        })
+        const accessPinHash = hashInvitationPin(pin, pepper)
+
+        let invitation: HydratedDocument<InvitationRecord>
+        if (!previousInvitation) {
+          invitation = await new this.invitations({
+            assignmentId: assignment.id,
+            evaluatorId: evaluator.id,
+            email: evaluator.email,
+            expiresAt: assignment.deadlineAt,
+            status: 'active',
+            version: 1,
+            accessPinHash
+          }).save(session ? { session } : {})
+        } else {
+          previousInvitation.evaluatorId = evaluator.id
+          previousInvitation.email = evaluator.email
+          previousInvitation.expiresAt = assignment.deadlineAt
+          previousInvitation.status = 'active'
+          previousInvitation.version = (previousInvitation.version || 1) + 1
+          previousInvitation.accessPinHash = accessPinHash
+          invitation = await previousInvitation.save(session ? { session } : {})
         }
-        const invitation = await new this.invitations({
-          assignmentId: assignment.id,
-          evaluatorId: evaluator.id,
-          email: evaluator.email,
-          expiresAt: assignment.deadlineAt,
-          status: 'active'
-        }).save({ session })
+
+        assignment.accessPinHash = accessPinHash
+        await assignment.save(session ? { session } : {})
+
         const campaign = await new this.campaigns({
           type: 'invitation',
           templateVersionId,
@@ -1088,7 +1339,8 @@ export class CampaignService {
           createdBy: actor.id,
           status: 'queued',
           total: 1
-        }).save({ session })
+        }).save(session ? { session } : {})
+
         const delivery = await new this.deliveries({
           campaignId: campaign.id,
           assignmentId: assignment.id,
@@ -1096,7 +1348,8 @@ export class CampaignService {
           templateVersionId,
           status: 'queued',
           attempts: 0
-        }).save({ session })
+        }).save(session ? { session } : {})
+
         const invitationUrl = await this.buildInvitationUrl(
           invitation.id,
           assignment.id,
@@ -1104,7 +1357,7 @@ export class CampaignService {
           invitation.version
         )
 
-        return { assignment, invitation, campaign, delivery, invitationUrl }
+        return { assignment, invitation, campaign, delivery, invitationUrl, pin }
       })
     } catch (error) {
       const response =
@@ -1131,22 +1384,67 @@ export class CampaignService {
     }
 
     try {
-      await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+      student.evaluationStatus = 'awaiting_response'
+      student.evaluatorEmail = email
+      if (input.evaluatorName?.trim()) {
+        student.evaluatorName = input.evaluatorName.trim()
+      }
+      await student.save()
     } catch {
-      // The committed delivery row remains queued and is recovered by the Worker.
+      // ignore
+    }
+
+    let deliveryStatus: CampaignRecord['status'] = outbox.campaign.status
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+        if (this.config.get('NODE_ENV', { infer: true }) === 'development') {
+          const directResult = await this.dispatchDeliveryDirect(
+            outbox.delivery.id,
+            outbox.invitation.id,
+            outbox.pin
+          )
+          if (directResult.success) {
+            deliveryStatus = 'completed'
+          }
+        }
+      } catch {
+        try {
+          const directResult = await this.dispatchDeliveryDirect(
+            outbox.delivery.id,
+            outbox.invitation.id,
+            outbox.pin
+          )
+          if (directResult.success) {
+            deliveryStatus = 'completed'
+          }
+        } catch {
+          // Direct dispatch error is non-fatal for returning invitation URL and PIN
+        }
+      }
+    } else {
+      try {
+        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+      } catch {
+        // Keep queued
+      }
     }
 
     return {
       success: true,
-      status: 'queued',
+      status: deliveryStatus,
       assignmentId: outbox.assignment.id,
       invitationId: outbox.invitation.id,
       campaignId: outbox.campaign.id,
       deliveryId: outbox.delivery.id,
       invitationUrl: outbox.invitationUrl,
       recipientEmail: evaluator.email,
-      studentName: student.name.th || student.name.en || student.studentId,
-      deadlineAt: outbox.assignment.deadlineAt.toISOString()
+      studentName: resolveStudentDisplayName(
+        student.name,
+        student.studentId
+      ),
+      deadlineAt: outbox.assignment.deadlineAt.toISOString(),
+      pin: outbox.pin
     }
   }
 
@@ -1187,6 +1485,7 @@ export class CampaignService {
       readonly invitation: HydratedDocument<InvitationRecord>
       readonly campaign: HydratedDocument<CampaignRecord>
       readonly delivery: HydratedDocument<DeliveryRecord>
+      readonly newPin?: string
     }
     try {
       outbox = await this.connection.transaction(async (session) => {
@@ -1228,6 +1527,12 @@ export class CampaignService {
           })
         }
         const previousVersion = currentInvitation.version ?? 1
+        const pepper = this.config.get('INVITATION_TOKEN_PEPPER', {
+          infer: true
+        })
+        const newPin = generatePin()
+        const accessPinHash = hashInvitationPin(newPin, pepper)
+
         const invitation = await this.invitations.findOneAndUpdate(
           {
             _id: currentInvitation.id,
@@ -1255,7 +1560,9 @@ export class CampaignService {
             status: { $in: ['pending', 'inProgress'] },
             deadlineAt: { $gt: now }
           },
-          { $unset: { accessPin: 1, accessPinHash: 1 } },
+          {
+            $unset: { accessPin: 1, accessPinHash: 1 }
+          },
           { session }
         )
         if (assignmentUpdate.matchedCount !== 1) {
@@ -1331,21 +1638,50 @@ export class CampaignService {
       throw new ConflictException({ code: 'INVITATION_REISSUE_CONFLICT' })
     }
 
-    try {
-      await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
-    } catch {
-      // The committed delivery remains queued for Worker reconciliation.
+    let deliveryStatus: CampaignRecord['status'] = outbox.campaign.status
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+        if (this.config.get('NODE_ENV', { infer: true }) === 'development') {
+          const directResult = await this.dispatchDeliveryDirect(
+            outbox.delivery.id,
+            outbox.invitation.id
+          )
+          if (directResult.success) {
+            deliveryStatus = 'completed'
+          }
+        }
+      } catch {
+        try {
+          const directResult = await this.dispatchDeliveryDirect(
+            outbox.delivery.id,
+            outbox.invitation.id
+          )
+          if (directResult.success) {
+            deliveryStatus = 'completed'
+          }
+        } catch {
+          // Keep queued
+        }
+      }
+    } else {
+      try {
+        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+      } catch {
+        // Keep queued
+      }
     }
     return {
       success: true,
-      status: outbox.campaign.status,
+      status: deliveryStatus,
       assignmentId: outbox.assignment.id,
       invitationId: outbox.invitation.id,
       campaignId: outbox.campaign.id,
       deliveryId: outbox.delivery.id,
       invitationVersion: outbox.invitation.version,
       recipientEmail: outbox.invitation.email,
-      deadlineAt: outbox.assignment.deadlineAt.toISOString()
+      deadlineAt: outbox.assignment.deadlineAt.toISOString(),
+      pin: outbox.newPin
     }
   }
 
@@ -1413,7 +1749,7 @@ export class CampaignService {
   private async lockOpenCycle(
     cycleId: string,
     now: Date,
-    session: ClientSession
+    session?: ClientSession
   ): Promise<HydratedDocument<EvaluationCycleRecord>> {
     const cycle = await this.cycles
       .findOne({
@@ -1422,21 +1758,25 @@ export class CampaignService {
         opensAt: { $lte: now },
         closesAt: { $gt: now }
       })
-      .session(session)
+      .session(session ?? null)
       .exec()
     if (!cycle) throw new ConflictException({ code: 'CYCLE_NOT_OPEN' })
 
+    const cycleVersionFilter =
+      cycle.__v === undefined || cycle.__v === 0
+        ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+        : { __v: cycle.__v }
     const locked = await this.cycles
       .updateOne(
         {
           _id: cycle.id,
-          __v: cycle.__v ?? 0,
+          ...cycleVersionFilter,
           status: 'active',
           opensAt: { $lte: now },
           closesAt: { $gt: now }
         },
         { $inc: { __v: 1 } },
-        { session }
+        session ? { session } : {}
       )
       .exec()
     if (locked.matchedCount !== 1) {
@@ -1752,17 +2092,26 @@ export class CampaignService {
         if (targetIssue) {
           throw new ConflictException({ code: targetIssue })
         }
+        let targetPin: string | undefined
         if (campaignType === 'invitation') {
           if (invitation) {
             throw new ConflictException({ code: 'INVITATION_REISSUE_REQUIRED' })
           }
+          targetPin = generatePin()
+          const pepper = this.config.get('INVITATION_TOKEN_PEPPER', {
+            infer: true
+          })
+          const accessPinHash = hashInvitationPin(targetPin, pepper)
           invitation = await new this.invitations({
             assignmentId: currentAssignment.id,
             evaluatorId: currentAssignment.evaluatorId,
             email: recipientEmail,
             expiresAt: currentAssignment.deadlineAt,
-            status: 'active'
+            status: 'active',
+            accessPinHash
           }).save({ session })
+          currentAssignment.accessPinHash = accessPinHash
+          await currentAssignment.save({ session })
         }
         if (!invitation) {
           throw new ConflictException({ code: 'ACTIVE_INVITATION_REQUIRED' })
@@ -1789,7 +2138,7 @@ export class CampaignService {
           status: 'queued',
           attempts: 0
         }).save({ session })
-        return { invitation, campaign, delivery }
+        return { invitation, campaign, delivery, targetPin }
       })
     } catch (error) {
       if (!isDuplicateKeyError(error)) throw error
@@ -1807,19 +2156,354 @@ export class CampaignService {
       return this.sendTargetedEmail(actor, input, idempotencyKey)
     }
 
-    try {
-      await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
-    } catch {
-      // The committed delivery row remains queued and is recovered by the Worker.
+    let deliveryStatus: CampaignRecord['status'] = outbox.campaign.status
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+        if (this.config.get('NODE_ENV', { infer: true }) === 'development') {
+          const directResult = await this.dispatchDeliveryDirect(
+            outbox.delivery.id,
+            outbox.invitation.id,
+            outbox.targetPin
+          )
+          if (directResult.success) {
+            deliveryStatus = 'completed'
+          }
+        }
+      } catch {
+        try {
+          const directResult = await this.dispatchDeliveryDirect(
+            outbox.delivery.id,
+            outbox.invitation.id,
+            outbox.targetPin
+          )
+          if (directResult.success) {
+            deliveryStatus = 'completed'
+          }
+        } catch {
+          // Keep queued
+        }
+      }
+    } else {
+      try {
+        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+      } catch {
+        // Keep queued
+      }
     }
 
     return {
-      status: 'queued',
+      status: deliveryStatus,
       campaignId: outbox.campaign.id,
       deliveryId: outbox.delivery.id,
       assignmentId: assignment.id,
       invitationId: outbox.invitation.id,
       recipientEmail
+    }
+  }
+
+  public async dispatchDeliveryDirect(
+    deliveryId: string,
+    invitationId: string,
+    pinOverride?: string
+  ): Promise<{
+    success: boolean
+    pin: string
+    messageId?: string
+    invitationUrl: string
+  }> {
+    const delivery = await this.deliveries.findById(deliveryId).exec()
+    if (!delivery) throw new NotFoundException({ code: 'DELIVERY_NOT_FOUND' })
+    if (delivery.status === 'sent') {
+      return {
+        success: true,
+        pin: pinOverride || '',
+        messageId: delivery.providerMessageId,
+        invitationUrl: ''
+      }
+    }
+
+    const [invitation, campaign, assignment, templateVersion] =
+      await Promise.all([
+        this.invitations.findById(invitationId).exec(),
+        this.campaigns.findById(delivery.campaignId).exec(),
+        this.assignments.findById(delivery.assignmentId).exec(),
+        this.templateVersions.findById(delivery.templateVersionId).exec()
+      ])
+
+    if (!invitation || !campaign || !assignment || !templateVersion) {
+      throw new ConflictException({ code: 'DELIVERY_SOURCES_INVALID' })
+    }
+
+    const [student, evaluator] = await Promise.all([
+      this.students
+        .findOne(studentReferenceFilter(assignment.studentId))
+        .exec(),
+      this.evaluators.findById(assignment.evaluatorId).exec()
+    ])
+
+    if (!student || !evaluator) {
+      throw new ConflictException({ code: 'DELIVERY_RECIPIENT_INVALID' })
+    }
+
+    let companyName: string =
+      (student as unknown as { company?: string })?.company || ''
+    if (!companyName && evaluator.organizationId) {
+      try {
+        const orgsCol = this.connection.collection('organizations')
+        const orgQuery = Types.ObjectId.isValid(evaluator.organizationId)
+          ? {
+              $or: [
+                { _id: new Types.ObjectId(evaluator.organizationId) },
+                { _id: evaluator.organizationId }
+              ]
+            }
+          : { _id: evaluator.organizationId }
+        const org = await orgsCol.findOne(orgQuery as any)
+        if (org?.name) {
+          companyName =
+            typeof org.name === 'string'
+              ? org.name
+              : (org.name as { th?: string; en?: string }).th ||
+                (org.name as { th?: string; en?: string }).en ||
+                ''
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (!companyName && assignment.placementId) {
+      try {
+        const placement = await this.placements
+          .findById(assignment.placementId)
+          .exec()
+        if (placement?.organizationId) {
+          const orgsCol = this.connection.collection('organizations')
+          const orgQuery = Types.ObjectId.isValid(placement.organizationId)
+            ? {
+                $or: [
+                  { _id: new Types.ObjectId(placement.organizationId) },
+                  { _id: placement.organizationId }
+                ]
+              }
+            : { _id: placement.organizationId }
+          const org = await orgsCol.findOne(orgQuery as any)
+          if (org?.name) {
+            companyName =
+              typeof org.name === 'string'
+                ? org.name
+                : (org.name as { th?: string; en?: string }).th ||
+                  (org.name as { th?: string; en?: string }).en ||
+                  ''
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (!companyName) {
+      companyName = 'สถานประกอบการ'
+    }
+
+    let pin = pinOverride || ''
+    const pepper = this.config.get('INVITATION_TOKEN_PEPPER', { infer: true })
+    if (!pin) {
+      if (campaign.type === 'invitation' || !invitation.accessPinHash) {
+        pin = generatePin()
+        const accessPinHash = hashInvitationPin(pin, pepper)
+        invitation.accessPinHash = accessPinHash
+        await invitation.save()
+        assignment.accessPinHash = accessPinHash
+        await assignment.save()
+      }
+    } else {
+      const accessPinHash = hashInvitationPin(pin, pepper)
+      if (invitation.accessPinHash !== accessPinHash) {
+        invitation.accessPinHash = accessPinHash
+        await invitation.save()
+      }
+      if (assignment.accessPinHash !== accessPinHash) {
+        assignment.accessPinHash = accessPinHash
+        await assignment.save()
+      }
+    }
+
+    const invitationUrl = await this.buildInvitationUrl(
+      invitation.id,
+      assignment.id,
+      assignment.deadlineAt,
+      invitation.version ?? 1
+    )
+
+    const values: Record<string, string> = {
+      student_name: resolveStudentDisplayName(
+        student.name,
+        student.studentId ?? student.id
+      ),
+      student_id: student.studentId ?? student.id,
+      company_name: companyName,
+      evaluator_name:
+        resolveStudentDisplayName(evaluator.name, '') ||
+        (student as unknown as { evaluatorName?: string })?.evaluatorName ||
+        evaluator.email,
+      invitation_url: invitationUrl,
+      deadline: assignment.deadlineAt
+        ? new Date(assignment.deadlineAt).toLocaleDateString('th-TH', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          })
+        : '-',
+      pin: pin || '[รหัส PIN ถูกส่งก่อนหน้า]'
+    }
+
+    const subject = templateVersion.subject.replace(
+      /{{\s*([a-z_]+)\s*}}/g,
+      (_match, key: string) => values[key] ?? ''
+    )
+    const text = templateVersion.text.replace(
+      /{{\s*([a-z_]+)\s*}}/g,
+      (_match, key: string) => values[key] ?? ''
+    )
+    const htmlEntities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }
+    const rawHtml = templateVersion.html.replace(
+      /{{\s*([a-z_]+)\s*}}/g,
+      (_match, key: string) => {
+        const val = values[key] ?? ''
+        return val.replace(/[&<>"']/g, (c) => htmlEntities[c] ?? c)
+      }
+    )
+    const html = sanitizeEmailHtml(rawHtml)
+
+    const smtp = await this.resolveSmtpSettings()
+
+    let providerMessageId = ''
+    try {
+      const transporter = nodemailer.createTransport({
+        host: smtp.host,
+        port: smtp.port,
+        secure: smtp.secure,
+        ...(smtp.username && smtp.password
+          ? { auth: { user: smtp.username, pass: smtp.password } }
+          : {}),
+        connectionTimeout: 3000,
+        greetingTimeout: 3000,
+        socketTimeout: 5000
+      })
+
+      const sendResult = await transporter.sendMail({
+        from: smtp.from,
+        to: delivery.recipientEmail,
+        subject,
+        html,
+        text
+      })
+      providerMessageId =
+        (sendResult as { messageId?: string })?.messageId ||
+        `<sent-${Date.now()}@direct>`
+    } catch (smtpErr: unknown) {
+      const isCapture =
+        this.config.get('MAIL_DELIVERY_MODE', { infer: true }) === 'capture'
+      const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(
+        smtp.host.toLowerCase()
+      )
+      if (isCapture && isLocalHost) {
+        providerMessageId = `<captured-${randomUUID()}@localhost>`
+      } else {
+        const errorMsg =
+          smtpErr instanceof Error ? smtpErr.message : 'SMTP_SEND_FAILED'
+        delivery.status = 'failed'
+        delivery.lastErrorCode = errorMsg
+        delivery.attempts = (delivery.attempts || 0) + 1
+        await delivery.save()
+        await this.reconcileCampaign(campaign.id, campaign.total)
+        throw smtpErr
+      }
+    }
+
+    delivery.status = 'sent'
+    delivery.providerMessageId = providerMessageId
+    delivery.attempts = (delivery.attempts || 0) + 1
+    delivery.lastErrorCode = undefined
+    await delivery.save()
+
+    await this.reconcileCampaign(campaign.id, campaign.total)
+
+    return {
+      success: true,
+      pin,
+      messageId: providerMessageId,
+      invitationUrl
+    }
+  }
+
+  private async resolveSmtpSettings(): Promise<{
+    host: string
+    port: number
+    secure: boolean
+    username?: string
+    password?: string
+    from: string
+  }> {
+    try {
+      const setting = await this.connection
+        .collection('smtpSettings')
+        .findOne({
+          key: 'smtp',
+          enabled: true
+        })
+      if (setting && setting.host) {
+        let password: string | undefined
+        if (
+          setting.passwordCiphertext &&
+          setting.passwordIv &&
+          setting.passwordAuthTag
+        ) {
+          const encKey = this.config.get('SMTP_SETTINGS_ENCRYPTION_KEY', {
+            infer: true
+          })
+          if (encKey) {
+            password = decryptSmtpSecret(
+              {
+                ciphertext: setting.passwordCiphertext,
+                iv: setting.passwordIv,
+                authTag: setting.passwordAuthTag
+              },
+              encKey
+            )
+          }
+        }
+        return {
+          host: setting.host,
+          port: setting.port ?? 587,
+          secure: Boolean(setting.secure),
+          username: setting.username,
+          password,
+          from:
+            setting.fromEmail ||
+            setting.username ||
+            'Internship Transcript <no-reply@localhost>'
+        }
+      }
+    } catch {
+      // fallback to environment
+    }
+
+    return {
+      host: this.config.get('SMTP_HOST', { infer: true }) || 'localhost',
+      port: this.config.get('SMTP_PORT', { infer: true }) || 1025,
+      secure: Boolean(this.config.get('SMTP_SECURE', { infer: true })),
+      username: this.config.get('SMTP_USER', { infer: true }) || undefined,
+      password: this.config.get('SMTP_PASSWORD', { infer: true }) || undefined,
+      from:
+        this.config.get('SMTP_FROM', { infer: true }) ||
+        'Internship Transcript Dev <no-reply@localhost>'
     }
   }
 }

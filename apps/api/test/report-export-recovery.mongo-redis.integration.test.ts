@@ -107,7 +107,7 @@ describe.skipIf(!testRedisUrl)(
         await worker.waitUntilReady()
 
         await queue.add(
-          'generate-csv',
+          'generate-report',
           { exportId: exportId.toString() },
           { attempts: 1, jobId, removeOnFail: 1000 }
         )

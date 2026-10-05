@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { SchemaTypes } from 'mongoose'
 
 import {
   LocalizedText,
@@ -27,14 +28,11 @@ export class StudentRecord {
   @Prop({ required: true, trim: true, unique: true })
   public studentId!: string
 
-  @Prop({ required: true, type: LocalizedTextSchema })
-  public name!: LocalizedText
+  @Prop({ required: true, type: SchemaTypes.Mixed })
+  public name!: string | LocalizedText
 
   @Prop({ index: true, lowercase: true, trim: true, required: true })
   public email!: string
-
-  @Prop({ index: true, lowercase: true, trim: true })
-  public personalEmail?: string
 
   @Prop({ index: true, required: true })
   public schoolId!: string
@@ -81,6 +79,7 @@ export class StudentRecord {
   @Prop({
     enum: [
       'awaiting_evaluator',
+      'evaluator_assigned',
       'awaiting_response',
       'submitted',
       'email_error',
@@ -92,6 +91,7 @@ export class StudentRecord {
   })
   public evaluationStatus?:
     | 'awaiting_evaluator'
+    | 'evaluator_assigned'
     | 'awaiting_response'
     | 'submitted'
     | 'email_error'

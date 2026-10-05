@@ -140,28 +140,50 @@ async function renderCanvasElement(
   const fillColor = element.bgColor ? color(element.bgColor) : undefined
 
   if (element.type === 'emblem') {
-    if (!element.assetKey) throw new Error('DOCUMENT_IMAGE_ASSET_REQUIRED')
-    await drawPng(pdf, page, imageBytes, element.assetKey, {
-      x: element.x,
-      y: element.y,
-      width,
-      height,
-      pageHeight: document.height
-    })
+    if (element.assetKey) {
+      if (!imageBytes.has(element.assetKey)) {
+        throw new Error('DOCUMENT_IMAGE_ASSET_NOT_FOUND')
+      }
+      await drawPng(pdf, page, imageBytes, element.assetKey, {
+        x: element.x,
+        y: element.y,
+        width,
+        height,
+        pageHeight: document.height
+      })
+    } else if (text) {
+      drawTextBox(page, element, document.height, text, font, {
+        width,
+        height,
+        padding,
+        color: color(element.color)
+      })
+    }
     return
   }
   if (element.type === 'signature') {
-    if (!element.assetKeys || element.assetKeys.length !== 2) {
-      throw new Error('DOCUMENT_IMAGE_ASSET_REQUIRED')
-    }
-    const sectionWidth = width / 2
-    for (const [index, key] of element.assetKeys.entries()) {
-      await drawPng(pdf, page, imageBytes, key, {
-        x: element.x + index * sectionWidth,
-        y: element.y,
-        width: sectionWidth,
+    if (element.assetKeys && element.assetKeys.length === 2) {
+      for (const key of element.assetKeys) {
+        if (!imageBytes.has(key)) {
+          throw new Error('DOCUMENT_IMAGE_ASSET_NOT_FOUND')
+        }
+      }
+      const sectionWidth = width / 2
+      for (const [index, key] of element.assetKeys.entries()) {
+        await drawPng(pdf, page, imageBytes, key, {
+          x: element.x + index * sectionWidth,
+          y: element.y,
+          width: sectionWidth,
+          height,
+          pageHeight: document.height
+        })
+      }
+    } else if (text) {
+      drawTextBox(page, element, document.height, text, font, {
+        width,
         height,
-        pageHeight: document.height
+        padding,
+        color: color(element.color)
       })
     }
     return

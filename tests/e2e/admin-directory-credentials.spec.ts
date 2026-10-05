@@ -11,7 +11,11 @@ const actor = {
 const leakedPin = 'LEGACY-PIN-MUST-NOT-LEAK'
 const leakedToken = 'INVITATION-TOKEN-MUST-NOT-LEAK'
 
-function pageOf(items: unknown[]): {
+function pageOf(
+  items: unknown[],
+  page = 1,
+  pageSize = 100
+): {
   items: unknown[]
   meta: { total: number; page: number; pageSize: number; totalPages: number }
 } {
@@ -19,9 +23,9 @@ function pageOf(items: unknown[]): {
     items,
     meta: {
       total: items.length,
-      page: 1,
-      pageSize: 500,
-      totalPages: items.length > 0 ? 1 : 0
+      page,
+      pageSize,
+      totalPages: Math.ceil(items.length / pageSize)
     }
   }
 }
@@ -30,6 +34,11 @@ test('student directory never renders or searches legacy invitation credentials'
   page
 }) => {
   const aggregateRelationLoads: string[] = []
+  const studentDirectoryDataRequests: boolean[] = []
+  const studentDirectoryExportRequests: Array<{
+    body: Record<string, unknown>
+    idempotencyKey: string | undefined
+  }> = []
   const masterReferenceLoads: Array<{
     path: string
     query: Record<string, string>
@@ -86,6 +95,47 @@ test('student directory never renders or searches legacy invitation credentials'
       })
       return
     }
+    if (request.method() === 'POST' && path === '/reports/exports') {
+      studentDirectoryExportRequests.push({
+        body: request.postDataJSON() as Record<string, unknown>,
+        idempotencyKey: request.headers()['idempotency-key']
+      })
+      await route.fulfill({
+        status: 202,
+        json: {
+          id: '64f000000000000000000099',
+          reportType: 'studentDirectory',
+          format: 'xlsx',
+          status: 'queued',
+          rowCount: 1
+        }
+      })
+      return
+    }
+    if (
+      request.method() === 'GET' &&
+      path === '/reports/exports/64f000000000000000000099'
+    ) {
+      await route.fulfill({
+        json: {
+          id: '64f000000000000000000099',
+          reportType: 'studentDirectory',
+          format: 'xlsx',
+          status: 'ready',
+          rowCount: 1
+        }
+      })
+      return
+    }
+    if (
+      request.method() === 'GET' &&
+      path === '/reports/exports/64f000000000000000000099/download-url'
+    ) {
+      await route.fulfill({
+        json: { url: 'http://download.example.test/student-directory.xlsx' }
+      })
+      return
+    }
     if (request.method() === 'GET' && path === '/students') {
       const student = {
         id: 'student-record-e2e',
@@ -97,7 +147,10 @@ test('student directory never renders or searches legacy invitation credentials'
         academicTermId: 'term-e2e',
         academicYear: 2026,
         semester: '1',
-        status: 'active',
+        status: 'active'
+      }
+      const studentWithDirectoryRelations = {
+        ...student,
         directoryRelations: {
           assignments: [
             {
@@ -107,7 +160,22 @@ test('student directory never renders or searches legacy invitation credentials'
               studentId: 'student-record-e2e',
               evaluatorId: '64f000000000000000000021',
               deadlineAt: '2026-12-31T23:59:59.000Z',
-              status: 'pending',
+              status: 'submitted',
+              categoryScores: {
+                hardSkill: {
+                  average: 4.25,
+                  answeredCount: 2,
+                  scaleMin: 1,
+                  scaleMax: 5
+                },
+                softSkill: {
+                  average: 3.5,
+                  answeredCount: 1,
+                  scaleMin: 1,
+                  scaleMax: 5
+                },
+                scoringPolicyVersion: 'mfu-category-mean-v1'
+              },
               accessPin: leakedPin,
               accessPinHash: 'LEGACY-HASH-MUST-NOT-LEAK',
               invitationToken: leakedToken,
@@ -140,17 +208,27 @@ test('student directory never renders or searches legacy invitation credentials'
         }
       }
       const requestUrl = new URL(request.url())
+      const includeDirectoryData =
+        requestUrl.searchParams.get('includeDirectoryData') === 'true'
+      studentDirectoryDataRequests.push(includeDirectoryData)
       const search = requestUrl.searchParams.get('search')?.toLocaleLowerCase()
+      const requestedStudent = includeDirectoryData
+        ? studentWithDirectoryRelations
+        : student
       const items = search
-        ? [student].filter((item) =>
+        ? [requestedStudent].filter((item) =>
             [item.studentId, item.email, item.name.th, item.name.en]
               .join(' ')
               .toLocaleLowerCase()
               .includes(search)
           )
-        : [student]
-      const response = pageOf(items)
-      if (requestUrl.searchParams.get('includeDirectoryData') === 'true') {
+        : [requestedStudent]
+      const response = pageOf(
+        items,
+        Number(requestUrl.searchParams.get('page') ?? 1),
+        Number(requestUrl.searchParams.get('pageSize') ?? 500)
+      )
+      if (includeDirectoryData) {
         Object.assign(response, {
           directory: {
             summary: {
@@ -267,12 +345,28 @@ test('student directory never renders or searches legacy invitation credentials'
 
     await route.fulfill({ status: 404, json: { error: { code: 'NOT_FOUND' } } })
   })
+  await page.route('http://download.example.test/**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: Buffer.from('test-xlsx-content'),
+      headers: {
+        'content-disposition':
+          'attachment; filename="MFU_Internship_Report_TH_20260929.xlsx"',
+        'content-type':
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }
+    })
+  })
 
   await page.goto('/app')
   await page.waitForLoadState('networkidle')
   await page.getByRole('button', { name: 'รีเฟรช' }).click()
   const studentRow = page.getByRole('row').filter({ hasText: '6531501001' })
   await expect(studentRow).toBeVisible()
+  await page.locator('select').first().selectOption('cycle-e2e')
+  await expect(studentRow).toContainText('Hard Skill:')
+  await expect(studentRow).toContainText('4.3')
+  await expect(studentRow).toContainText('Soft Skill:')
   expect(aggregateRelationLoads).toEqual([])
   expect(masterReferenceLoads).toEqual([])
 
@@ -303,6 +397,26 @@ test('student directory never renders or searches legacy invitation credentials'
     page.getByRole('heading', { name: /แก้ไขข้อมูลนักศึกษา/ })
   ).toBeVisible()
   await page.getByRole('button', { name: 'ยกเลิก' }).click()
+
+  const exportRequestOffset = studentDirectoryDataRequests.length
+  const downloadReady = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'ส่งออก Excel (ภาษาไทย)' }).click()
+  const download = await downloadReady
+  expect(download.suggestedFilename()).toMatch(
+    /^MFU_Internship_Report_TH_\d{8}\.xlsx$/
+  )
+  expect(studentDirectoryDataRequests).toHaveLength(exportRequestOffset)
+  expect(studentDirectoryExportRequests).toHaveLength(1)
+  expect(studentDirectoryExportRequests[0]?.body).toMatchObject({
+    reportType: 'studentDirectory',
+    filters: { cycleId: 'cycle-e2e' },
+    locale: 'th',
+    format: 'xlsx'
+  })
+  expect(studentDirectoryExportRequests[0]?.idempotencyKey).toHaveLength(36)
+  expect(JSON.stringify(studentDirectoryExportRequests[0]?.body)).not.toContain(
+    '6531501001'
+  )
 
   await studentRow
     .getByRole('button', { name: 'การจัดการข้อมูลนักศึกษา' })

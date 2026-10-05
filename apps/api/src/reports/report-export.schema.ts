@@ -3,7 +3,9 @@ import { Schema as MongooseSchema } from 'mongoose'
 
 import type {
   ReportExportField,
-  ReportExportFormat
+  ReportExportFormat,
+  ReportExportType,
+  StudentDirectoryExportLocale
 } from '@internship/shared-types'
 
 const schemaOptions = {
@@ -39,13 +41,23 @@ export class ReportExportRecord {
   @Prop({ required: true, match: /^[a-f\d]{64}$/i })
   public requestHash!: string
 
+  @Prop({
+    default: 'assignments',
+    enum: ['assignments', 'studentDirectory'],
+    type: String
+  })
+  public reportType!: ReportExportType
+
+  @Prop({ enum: ['th', 'en'], type: String })
+  public locale?: StudentDirectoryExportLocale
+
   @Prop({ required: true, type: MongooseSchema.Types.Mixed })
   public filters!: Readonly<Record<string, string>>
 
   @Prop({ required: true, type: [String] })
   public fields!: ReportExportField[]
 
-  @Prop({ required: true, enum: ['csv'], type: String })
+  @Prop({ required: true, enum: ['csv', 'xlsx'], type: String })
   public format!: ReportExportFormat
 
   @Prop({
@@ -109,7 +121,7 @@ export class ReportExportSnapshotRecord {
   public programId!: string
 
   @Prop({ required: true, type: MongooseSchema.Types.Mixed, select: false })
-  public values!: Readonly<Record<string, string>>
+  public values!: Readonly<Record<string, string | number>>
 
   @Prop({ required: true })
   public expiresAt!: Date

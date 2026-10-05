@@ -19,6 +19,7 @@ import {
 import { paginate, type PaginationInput } from '../common/pagination.js'
 import { boundedSearch } from '../common/search.js'
 import { assertActorScope, scopeFilter } from '../common/scope.js'
+import { runWithTransaction } from '../common/mongo-transaction.js'
 import { AuditService } from '../audit/audit.service.js'
 import type { AuditResourceScope } from '../audit/audit.schema.js'
 import {
@@ -47,7 +48,6 @@ export type StudentCreateInput = Pick<
   Partial<
     Pick<
       StudentRecord,
-      | 'personalEmail'
       | 'courseId'
       | 'academicTermId'
       | 'semester'
@@ -64,6 +64,18 @@ export type StudentCreateInput = Pick<
 
 function normalizedEmail(email: string): string {
   return email.trim().toLowerCase()
+}
+
+interface SessionBindable {
+  session(session: ClientSession): unknown
+}
+
+function bindSession<T extends SessionBindable>(
+  query: T,
+  session?: ClientSession
+): T {
+  if (session) query.session(session)
+  return query
 }
 
 function studentReferenceFilter(
@@ -148,15 +160,10 @@ export class MembersService {
       academicYear?: number
       semester?: string
       includeDirectoryData?: boolean
-    }
+    },
+    session?: ClientSession
   ): Promise<unknown> {
-    if (input.evaluationStatus && !input.cycleId) {
-      throw new UnprocessableEntityException({
-        code: 'EVALUATION_STATUS_REQUIRES_CYCLE'
-      })
-    }
-
-    let filter = await this.visibleStudentFilter(actor)
+    let filter = await this.visibleStudentFilter(actor, session)
     let directoryFacetFilter: QueryFilter<StudentRecord> = filter
     let directoryTerm:
       { readonly academicYear: number; readonly semester: string } | undefined
@@ -221,17 +228,21 @@ export class MembersService {
         []
       if (hasScopedDirectoryRole) {
         const cycleScope = scopeFilter<EvaluationCycleRecord>(actor)
-        cycle = await this.cycles
-          .findOne({
+        cycle = await bindSession(
+          this.cycles.findOne({
             $and: [{ _id: new Types.ObjectId(input.cycleId) }, cycleScope]
-          })
-          .exec()
+          }),
+          session
+        ).exec()
         authorizedAssignmentScopes.push(
           scopeFilter<EvaluationAssignmentRecord>(actor)
         )
       }
       if (actor.roles.includes('student') && actor.scope.studentId) {
-        const references = await this.studentReferences(actor.scope.studentId)
+        const references = await this.studentReferences(
+          actor.scope.studentId,
+          session
+        )
         authorizedAssignmentScopes.push({ studentId: { $in: references } })
       }
       if (
@@ -250,33 +261,43 @@ export class MembersService {
 
       if (!cycle) {
         if (hasScopedDirectoryRole) {
-          const candidateCycle = await this.cycles
-            .findById(input.cycleId)
-            .exec()
+          const candidateCycle = await bindSession(
+            this.cycles.findById(input.cycleId),
+            session
+          ).exec()
           if (candidateCycle) {
-            const visiblePlacement = await this.placements.exists({
-              $and: [
-                { academicTermId: candidateCycle.academicTermId },
-                ...(candidateCycle.schoolId
-                  ? [{ schoolId: candidateCycle.schoolId }]
-                  : []),
-                ...(candidateCycle.programId
-                  ? [{ programId: candidateCycle.programId }]
-                  : []),
-                scopeFilter<PlacementRecord>(actor)
-              ]
-            })
+            const visiblePlacement = await bindSession(
+              this.placements.exists({
+                $and: [
+                  { academicTermId: candidateCycle.academicTermId },
+                  ...(candidateCycle.schoolId
+                    ? [{ schoolId: candidateCycle.schoolId }]
+                    : []),
+                  ...(candidateCycle.programId
+                    ? [{ programId: candidateCycle.programId }]
+                    : []),
+                  scopeFilter<PlacementRecord>(actor)
+                ]
+              }),
+              session
+            ).exec()
             cycle = visiblePlacement ? candidateCycle : null
           }
         }
       }
 
       if (!cycle) {
-        const visibleAssignment = await this.assignments.exists({
-          $and: [{ cycleId: input.cycleId }, assignmentScope]
-        })
+        const visibleAssignment = await bindSession(
+          this.assignments.exists({
+            $and: [{ cycleId: input.cycleId }, assignmentScope]
+          }),
+          session
+        ).exec()
         cycle = visibleAssignment
-          ? await this.cycles.findById(input.cycleId).exec()
+          ? await bindSession(
+              this.cycles.findById(input.cycleId),
+              session
+            ).exec()
           : null
       }
 
@@ -291,10 +312,12 @@ export class MembersService {
         const termReferenceFilter = Types.ObjectId.isValid(cycle.academicTermId)
           ? { _id: new Types.ObjectId(cycle.academicTermId) }
           : { code: cycle.academicTermId }
-        const term = await this.academicTerms
-          .findOne(termReferenceFilter)
-          .select('academicYear semester')
-          .exec()
+        const term = await bindSession(
+          this.academicTerms
+            .findOne(termReferenceFilter)
+            .select('academicYear semester'),
+          session
+        ).exec()
         if (!term) {
           throw new UnprocessableEntityException({
             code: 'ACADEMIC_TERM_REFERENCE_NOT_FOUND'
@@ -322,39 +345,42 @@ export class MembersService {
       }
 
       const placementStudentReferences = hasScopedDirectoryRole
-        ? await this.placements
-            .distinct('studentId', {
+        ? await bindSession(
+            this.placements.distinct('studentId', {
               $and: [
                 { academicTermId: cycle.academicTermId },
                 ...(cycle.schoolId ? [{ schoolId: cycle.schoolId }] : []),
                 ...(cycle.programId ? [{ programId: cycle.programId }] : []),
                 scopeFilter<PlacementRecord>(actor)
               ]
-            })
-            .exec()
+            }),
+            session
+          ).exec()
         : []
       const ownStudentReferences =
         actor.roles.includes('student') && actor.scope.studentId
-          ? await this.studentReferences(actor.scope.studentId)
+          ? await this.studentReferences(actor.scope.studentId, session)
           : []
       const ownPlacementStudentReferences =
         ownStudentReferences.length > 0
-          ? await this.placements
-              .distinct('studentId', {
+          ? await bindSession(
+              this.placements.distinct('studentId', {
                 $and: [
                   { academicTermId: cycle.academicTermId },
                   ...(cycle.schoolId ? [{ schoolId: cycle.schoolId }] : []),
                   ...(cycle.programId ? [{ programId: cycle.programId }] : []),
                   { studentId: { $in: ownStudentReferences } }
                 ]
-              })
-              .exec()
+              }),
+              session
+            ).exec()
           : []
-      const assignedStudentReferences = await this.assignments
-        .distinct('studentId', {
+      const assignedStudentReferences = await bindSession(
+        this.assignments.distinct('studentId', {
           $and: [{ cycleId: input.cycleId }, assignmentScope]
-        })
-        .exec()
+        }),
+        session
+      ).exec()
       const normalizedCycleStudentReferences = [
         ...new Set([
           ...placementStudentReferences,
@@ -386,14 +412,21 @@ export class MembersService {
           cycleStudentFilter
         ]
       }
+    }
 
-      if (input.evaluationStatus) {
-        const assignmentFilter: QueryFilter<EvaluationAssignmentRecord> = {
-          $and: [{ cycleId: input.cycleId }, assignmentScope]
-        }
-        const allReferences = await this.assignments
-          .distinct('studentId', assignmentFilter)
-          .exec()
+    if (input.evaluationStatus) {
+      const effectiveAssignmentScope =
+        assignmentScope ?? scopeFilter<EvaluationAssignmentRecord>(actor)
+      const assignmentFilter: QueryFilter<EvaluationAssignmentRecord> = {
+        $and: [
+          ...(input.cycleId ? [{ cycleId: input.cycleId }] : []),
+          effectiveAssignmentScope
+        ]
+      }
+        const allReferences = await bindSession(
+          this.assignments.distinct('studentId', assignmentFilter),
+          session
+        ).exec()
         const normalizedAllReferences = allReferences.filter(
           (reference): reference is string => typeof reference === 'string'
         )
@@ -406,39 +439,43 @@ export class MembersService {
           ? (input.evaluationStatus as EvaluationAssignmentRecord['status'])
           : undefined
         const selectedReferences = exactStatus
-          ? await this.assignments
-              .distinct('studentId', {
+          ? await bindSession(
+              this.assignments.distinct('studentId', {
                 $and: [assignmentFilter, { status: exactStatus }]
-              })
-              .exec()
+              }),
+              session
+            ).exec()
           : input.evaluationStatus === 'awaiting_response'
-            ? await this.assignments
-                .distinct('studentId', {
+            ? await bindSession(
+                this.assignments.distinct('studentId', {
                   $and: [
                     assignmentFilter,
                     { status: { $nin: ['submitted', 'email_error'] } }
                   ]
-                })
-                .exec()
+                }),
+                session
+              ).exec()
             : input.evaluationStatus === 'pending'
-              ? await this.assignments
-                  .distinct('studentId', {
+              ? await bindSession(
+                  this.assignments.distinct('studentId', {
                     $and: [
                       assignmentFilter,
                       { status: { $in: ['pending', 'reopened'] } }
                     ]
-                  })
-                  .exec()
+                  }),
+                  session
+                ).exec()
               : input.evaluationStatus === 'assignment_ambiguous'
                 ? (
-                    await this.assignments
-                      .aggregate<{ _id: string }>([
+                    await bindSession(
+                      this.assignments.aggregate<{ _id: string }>([
                         { $match: assignmentFilter },
                         { $group: { _id: '$studentId', count: { $sum: 1 } } },
                         { $match: { count: { $gt: 1 } } },
                         { $project: { _id: 1 } }
-                      ])
-                      .exec()
+                      ]),
+                      session
+                    ).exec()
                   ).map((row) => row._id)
                 : normalizedAllReferences
         const normalizedReferences = selectedReferences.filter(
@@ -448,7 +485,14 @@ export class MembersService {
           .filter((reference) => Types.ObjectId.isValid(reference))
           .map((reference) => new Types.ObjectId(reference))
 
-        if (input.evaluationStatus === 'awaiting_evaluator') {
+        if (input.evaluationStatus === 'evaluator_assigned') {
+          requestedFilters.push({
+            $or: [
+              { evaluatorEmail: { $exists: true, $nin: ['', null] } },
+              { evaluatorName: { $exists: true, $nin: ['', null] } }
+            ]
+          })
+        } else if (input.evaluationStatus === 'awaiting_evaluator') {
           const allObjectIds = normalizedAllReferences
             .filter((reference) => Types.ObjectId.isValid(reference))
             .map((reference) => new Types.ObjectId(reference))
@@ -458,14 +502,15 @@ export class MembersService {
           })
         } else if (input.evaluationStatus === 'pending') {
           const ambiguousReferences = (
-            await this.assignments
-              .aggregate<{ _id: string }>([
+            await bindSession(
+              this.assignments.aggregate<{ _id: string }>([
                 { $match: assignmentFilter },
                 { $group: { _id: '$studentId', count: { $sum: 1 } } },
                 { $match: { count: { $gt: 1 } } },
                 { $project: { _id: 1 } }
-              ])
-              .exec()
+              ]),
+              session
+            ).exec()
           ).map((row) => row._id)
           const ambiguousObjectIds = ambiguousReferences
             .filter((reference) => Types.ObjectId.isValid(reference))
@@ -505,7 +550,6 @@ export class MembersService {
           })
         }
       }
-    }
     if (input.search) {
       const search = boundedSearch(input.search)
       const searchBranches: QueryFilter<StudentRecord>[] = [
@@ -513,7 +557,7 @@ export class MembersService {
           $or: [
             { studentId: { $regex: search, $options: 'i' } },
             { email: { $regex: search, $options: 'i' } },
-            { personalEmail: { $regex: search, $options: 'i' } },
+            { name: { $regex: search, $options: 'i' } },
             { 'name.th': { $regex: search, $options: 'i' } },
             { 'name.en': { $regex: search, $options: 'i' } },
             { company: { $regex: search, $options: 'i' } },
@@ -528,16 +572,18 @@ export class MembersService {
           ]
         }
       ]
-      const matchingCourses = await this.courses
-        .find({
-          $or: [
-            { courseCode: { $regex: search, $options: 'i' } },
-            { 'name.th': { $regex: search, $options: 'i' } },
-            { 'name.en': { $regex: search, $options: 'i' } }
-          ]
-        })
-        .select('_id courseCode')
-        .exec()
+      const matchingCourses = await bindSession(
+        this.courses
+          .find({
+            $or: [
+              { courseCode: { $regex: search, $options: 'i' } },
+              { 'name.th': { $regex: search, $options: 'i' } },
+              { 'name.en': { $regex: search, $options: 'i' } }
+            ]
+          })
+          .select('_id courseCode'),
+        session
+      ).exec()
       const courseReferences = matchingCourses.flatMap((course) => [
         course._id.toString(),
         course.courseCode
@@ -547,21 +593,23 @@ export class MembersService {
       }
 
       if (input.cycleId && directoryCycleTermId) {
-        const matchingEvaluators = await this.evaluators
-          .find({
-            $or: [
-              { email: { $regex: search, $options: 'i' } },
-              { 'name.th': { $regex: search, $options: 'i' } },
-              { 'name.en': { $regex: search, $options: 'i' } },
-              { 'position.th': { $regex: search, $options: 'i' } },
-              { 'position.en': { $regex: search, $options: 'i' } }
-            ]
-          })
-          .select('_id')
-          .exec()
+        const matchingEvaluators = await bindSession(
+          this.evaluators
+            .find({
+              $or: [
+                { email: { $regex: search, $options: 'i' } },
+                { 'name.th': { $regex: search, $options: 'i' } },
+                { 'name.en': { $regex: search, $options: 'i' } },
+                { 'position.th': { $regex: search, $options: 'i' } },
+                { 'position.en': { $regex: search, $options: 'i' } }
+              ]
+            })
+            .select('_id'),
+          session
+        ).exec()
         if (matchingEvaluators.length > 0) {
-          const matchingEvaluatorStudentReferences = await this.assignments
-            .distinct('studentId', {
+          const matchingEvaluatorStudentReferences = await bindSession(
+            this.assignments.distinct('studentId', {
               $and: [
                 { cycleId: input.cycleId },
                 assignmentScope ?? { _id: null },
@@ -573,31 +621,34 @@ export class MembersService {
                   }
                 }
               ]
-            })
-            .exec()
+            }),
+            session
+          ).exec()
           const referenceFilter = studentReferenceFilter(
             matchingEvaluatorStudentReferences
           )
           if (referenceFilter) searchBranches.push(referenceFilter)
         }
 
-        const matchingOrganizations = await this.organizations
-          .find({
-            $or: [
-              { 'name.th': { $regex: search, $options: 'i' } },
-              { 'name.en': { $regex: search, $options: 'i' } },
-              { organizationCode: { $regex: search, $options: 'i' } },
-              { 'address.street': { $regex: search, $options: 'i' } },
-              { 'address.location': { $regex: search, $options: 'i' } },
-              { 'address.fullAddress': { $regex: search, $options: 'i' } },
-              { 'address.province': { $regex: search, $options: 'i' } }
-            ]
-          })
-          .select('_id')
-          .exec()
+        const matchingOrganizations = await bindSession(
+          this.organizations
+            .find({
+              $or: [
+                { 'name.th': { $regex: search, $options: 'i' } },
+                { 'name.en': { $regex: search, $options: 'i' } },
+                { organizationCode: { $regex: search, $options: 'i' } },
+                { 'address.street': { $regex: search, $options: 'i' } },
+                { 'address.location': { $regex: search, $options: 'i' } },
+                { 'address.fullAddress': { $regex: search, $options: 'i' } },
+                { 'address.province': { $regex: search, $options: 'i' } }
+              ]
+            })
+            .select('_id'),
+          session
+        ).exec()
         if (matchingOrganizations.length > 0) {
-          const matchingPlacementStudentReferences = await this.placements
-            .distinct('studentId', {
+          const matchingPlacementStudentReferences = await bindSession(
+            this.placements.distinct('studentId', {
               $and: [
                 { academicTermId: directoryCycleTermId },
                 ...(directoryCycleSchoolId
@@ -615,8 +666,9 @@ export class MembersService {
                   }
                 }
               ]
-            })
-            .exec()
+            }),
+            session
+          ).exec()
           const referenceFilter = studentReferenceFilter(
             matchingPlacementStudentReferences
           )
@@ -627,10 +679,16 @@ export class MembersService {
     }
     if (requestedFilters.length > 0)
       filter = { $and: [filter, ...requestedFilters] }
-    const result = await paginate(this.students, filter, input, {
-      studentId: 1,
-      _id: 1
-    })
+    const result = await paginate(
+      this.students,
+      filter,
+      input,
+      {
+        studentId: 1,
+        _id: 1
+      },
+      session
+    )
     const studentReferences = result.items.flatMap((item) =>
       [item.id, item.studentId].filter(
         (reference): reference is string => typeof reference === 'string'
@@ -672,7 +730,7 @@ export class MembersService {
       scopeFilter<EvaluationAssignmentRecord>(actor)
     const ownStudentReferences =
       actor.roles.includes('student') && actor.scope.studentId
-        ? await this.studentReferences(actor.scope.studentId)
+        ? await this.studentReferences(actor.scope.studentId, session)
         : undefined
     const pageAssignmentScope =
       assignmentScope ??
@@ -694,65 +752,102 @@ export class MembersService {
       placementScopes.length === 1
         ? placementScopes[0]!
         : { $or: placementScopes }
-    const [
-      pageAssignments,
-      pagePlacements,
-      pageSchools,
-      pagePrograms,
-      pageCourses
-    ] = await Promise.all([
-      this.assignments
-        .find({
-          $and: [
-            pageAssignmentScope,
-            { studentId: { $in: studentReferences } },
-            ...(input.cycleId ? [{ cycleId: input.cycleId }] : [])
-          ]
-        })
-        .select(
-          'cycleId placementId studentId evaluatorId schoolId programId status deadlineAt'
-        )
-        .exec(),
-      this.placements
-        .find({
-          $and: [
-            { studentId: { $in: studentReferences } },
-            ...(directoryCycleTermId
-              ? [{ academicTermId: directoryCycleTermId }]
-              : []),
-            pagePlacementScope
-          ]
-        })
-        .select(
-          'studentId organizationId academicTermId schoolId programId positionTitle startsAt endsAt status'
-        )
-        .exec(),
+    const loadPageAssignments = (): Promise<
+      HydratedDocument<EvaluationAssignmentRecord>[]
+    > =>
+      bindSession(
+        this.assignments
+          .find({
+            $and: [
+              pageAssignmentScope,
+              { studentId: { $in: studentReferences } },
+              ...(input.cycleId ? [{ cycleId: input.cycleId }] : [])
+            ]
+          })
+          .select(
+            'cycleId placementId studentId evaluatorId schoolId programId status deadlineAt'
+          ),
+        session
+      ).exec()
+    const loadPagePlacements = (): Promise<
+      HydratedDocument<PlacementRecord>[]
+    > =>
+      bindSession(
+        this.placements
+          .find({
+            $and: [
+              { studentId: { $in: studentReferences } },
+              ...(directoryCycleTermId
+                ? [{ academicTermId: directoryCycleTermId }]
+                : []),
+              pagePlacementScope
+            ]
+          })
+          .select(
+            'studentId organizationId academicTermId schoolId programId positionTitle startsAt endsAt status'
+          ),
+        session
+      ).exec()
+    const loadPageSchools = (): Promise<HydratedDocument<SchoolRecord>[]> =>
       schoolObjectIds.length > 0
-        ? this.schools
-            .find({ _id: { $in: schoolObjectIds } })
-            .select('_id schoolCode name')
-            .exec()
-        : Promise.resolve([] as HydratedDocument<SchoolRecord>[]),
+        ? bindSession(
+            this.schools
+              .find({ _id: { $in: schoolObjectIds } })
+              .select('_id schoolCode name'),
+            session
+          ).exec()
+        : Promise.resolve([] as HydratedDocument<SchoolRecord>[])
+    const loadPagePrograms = (): Promise<HydratedDocument<ProgramRecord>[]> =>
       programObjectIds.length > 0
-        ? this.programs
-            .find({ _id: { $in: programObjectIds } })
-            .select('_id schoolId programCode name')
-            .exec()
-        : Promise.resolve([] as HydratedDocument<ProgramRecord>[]),
+        ? bindSession(
+            this.programs
+              .find({ _id: { $in: programObjectIds } })
+              .select('_id schoolId programCode name'),
+            session
+          ).exec()
+        : Promise.resolve([] as HydratedDocument<ProgramRecord>[])
+    const loadPageCourses = (): Promise<HydratedDocument<CourseRecord>[]> =>
       courseReferences.length > 0
-        ? this.courses
-            .find({
-              $or: [
-                ...(courseObjectIds.length > 0
-                  ? [{ _id: { $in: courseObjectIds } }]
-                  : []),
-                { courseCode: { $in: courseReferences } }
-              ]
-            })
-            .select('_id courseCode name')
-            .exec()
+        ? bindSession(
+            this.courses
+              .find({
+                $or: [
+                  ...(courseObjectIds.length > 0
+                    ? [{ _id: { $in: courseObjectIds } }]
+                    : []),
+                  { courseCode: { $in: courseReferences } }
+                ]
+              })
+              .select('_id courseCode name'),
+            session
+          ).exec()
         : Promise.resolve([] as HydratedDocument<CourseRecord>[])
-    ])
+    let pageAssignments: Awaited<ReturnType<typeof loadPageAssignments>>
+    let pagePlacements: Awaited<ReturnType<typeof loadPagePlacements>>
+    let pageSchools: Awaited<ReturnType<typeof loadPageSchools>>
+    let pagePrograms: Awaited<ReturnType<typeof loadPagePrograms>>
+    let pageCourses: Awaited<ReturnType<typeof loadPageCourses>>
+    if (session) {
+      pageAssignments = await loadPageAssignments()
+      pagePlacements = await loadPagePlacements()
+      pageSchools = await loadPageSchools()
+      pagePrograms = await loadPagePrograms()
+      pageCourses = await loadPageCourses()
+    } else {
+      ;[
+        pageAssignments,
+        pagePlacements,
+        pageSchools,
+        pagePrograms,
+        pageCourses
+      ] = await Promise.all([
+        loadPageAssignments(),
+        loadPagePlacements(),
+        loadPageSchools(),
+        loadPagePrograms(),
+        loadPageCourses()
+      ])
+    }
     const submittedAssignmentIds = pageAssignments
       .filter((assignment) => assignment.status === 'submitted')
       .map((assignment) => assignment.id)
@@ -761,16 +856,22 @@ export class MembersService {
       Pick<EvaluationRecord, 'categoryScores'>
     >()
     if (submittedAssignmentIds.length > 0) {
-      const activeFinals = await this.evaluations
-        .find({
-          assignmentId: { $in: submittedAssignmentIds },
-          $or: [{ supersededAt: { $exists: false } }, { supersededAt: null }]
-        })
-        .select('assignmentId version categoryScores')
-        .sort({ version: -1 })
+      const activeFinals = await bindSession(
+        this.evaluations
+          .find({
+            assignmentId: { $in: submittedAssignmentIds },
+            $or: [{ supersededAt: { $exists: false } }, { supersededAt: null }]
+          })
+          .select('assignmentId version categoryScores')
+          .sort({ version: -1 }),
+        session
+      )
         .lean<
           Array<
-            Pick<EvaluationRecord, 'assignmentId' | 'version' | 'categoryScores'>
+            Pick<
+              EvaluationRecord,
+              'assignmentId' | 'version' | 'categoryScores'
+            >
           >
         >()
         .exec()
@@ -793,16 +894,18 @@ export class MembersService {
     ]
     const pageTerms =
       directoryTermIds.length > 0
-        ? await this.academicTerms
-            .find({
-              _id: {
-                $in: directoryTermIds.map(
-                  (termId) => new Types.ObjectId(termId)
-                )
-              }
-            })
-            .select('_id semester academicYear')
-            .exec()
+        ? await bindSession(
+            this.academicTerms
+              .find({
+                _id: {
+                  $in: directoryTermIds.map(
+                    (termId) => new Types.ObjectId(termId)
+                  )
+                }
+              })
+              .select('_id semester academicYear'),
+            session
+          ).exec()
         : []
     const directorySchoolsById = new Map(
       pageSchools.map((school) => [school._id.toString(), school])
@@ -833,26 +936,30 @@ export class MembersService {
       ...new Set(pageAssignments.map((item) => item.evaluatorId))
     ]
     if (evaluatorIds.length > 0) {
-      const pageEvaluators = await this.evaluators
-        .find({ _id: { $in: evaluatorIds } })
-        .select('_id organizationId email name position')
-        .exec()
+      const pageEvaluators = await bindSession(
+        this.evaluators
+          .find({ _id: { $in: evaluatorIds } })
+          .select('_id organizationId email name position'),
+        session
+      ).exec()
       for (const evaluator of pageEvaluators) {
         evaluatorsById.set(evaluator._id.toString(), evaluator)
       }
     }
     const organizationIds = [
       ...new Set(pagePlacements.map((placement) => placement.organizationId))
-    ]
+    ].filter((organizationId) => Types.ObjectId.isValid(organizationId))
     const organizationsById = new Map<
       string,
       HydratedDocument<OrganizationRecord>
     >()
     if (organizationIds.length > 0) {
-      const pageOrganizations = await this.organizations
-        .find({ _id: { $in: organizationIds } })
-        .select('_id organizationCode name address')
-        .exec()
+      const pageOrganizations = await bindSession(
+        this.organizations
+          .find({ _id: { $in: organizationIds } })
+          .select('_id organizationCode name address'),
+        session
+      ).exec()
       for (const organization of pageOrganizations) {
         organizationsById.set(organization._id.toString(), organization)
       }
@@ -925,24 +1032,24 @@ export class MembersService {
       })
       const assignment =
         uniqueAssignments.length === 1 ? uniqueAssignments[0] : undefined
-      if (input.cycleId) {
-        delete projected.evaluatorEmail
-        delete projected.evaluatorName
-        projected.evaluationStatus =
-          uniqueAssignments.length > 1
-            ? 'assignment_ambiguous'
-            : assignment?.status === 'submitted'
-              ? 'submitted'
-              : assignment?.status === 'email_error'
-                ? 'email_error'
-                : assignment?.status === 'inProgress'
-                  ? 'inProgress'
-                  : assignment?.status === 'expired'
-                    ? 'expired'
-                    : assignment
-                      ? 'pending'
+      projected.evaluationStatus =
+        uniqueAssignments.length > 1
+          ? 'assignment_ambiguous'
+          : assignment?.status === 'submitted'
+            ? 'submitted'
+            : assignment?.status === 'email_error'
+              ? 'email_error'
+              : assignment?.status === 'inProgress'
+                ? 'inProgress'
+                : assignment?.status === 'expired'
+                  ? 'expired'
+                  : assignment
+                    ? 'pending'
+                    : Boolean(
+                          projected.evaluatorName || projected.evaluatorEmail
+                        )
+                      ? 'evaluator_assigned'
                       : 'awaiting_evaluator'
-      }
       const evaluator = assignment
         ? evaluatorsById.get(assignment.evaluatorId)
         : undefined
@@ -1066,31 +1173,67 @@ export class MembersService {
     const response = { ...result, items }
     if (!input.includeDirectoryData) return response
 
-    const [
-      statusDistribution,
-      facetStatusDistribution,
-      schoolIds,
-      academicYears,
-      semesters
-    ] = await Promise.all([
-      this.studentDirectoryStatusDistribution(
+    let statusDistribution: Map<string, number>
+    let facetStatusDistribution: Map<string, number>
+    let schoolIds: unknown[]
+    let academicYears: unknown[]
+    let semesters: unknown[]
+    if (session) {
+      statusDistribution = await this.studentDirectoryStatusDistribution(
         filter,
         input.cycleId,
-        assignmentScope
-      ),
-      this.studentDirectoryStatusDistribution(
+        assignmentScope,
+        session
+      )
+      facetStatusDistribution = await this.studentDirectoryStatusDistribution(
         directoryFacetFilter,
         input.cycleId,
-        assignmentScope
-      ),
-      this.students.distinct('schoolId', directoryFacetFilter).exec(),
-      directoryTerm
-        ? Promise.resolve([directoryTerm.academicYear])
-        : this.students.distinct('academicYear', directoryFacetFilter).exec(),
-      directoryTerm
-        ? Promise.resolve([directoryTerm.semester])
-        : this.students.distinct('semester', directoryFacetFilter).exec()
-    ])
+        assignmentScope,
+        session
+      )
+      schoolIds = await bindSession(
+        this.students.distinct('schoolId', directoryFacetFilter),
+        session
+      ).exec()
+      academicYears = directoryTerm
+        ? [directoryTerm.academicYear]
+        : await bindSession(
+            this.students.distinct('academicYear', directoryFacetFilter),
+            session
+          ).exec()
+      semesters = directoryTerm
+        ? [directoryTerm.semester]
+        : await bindSession(
+            this.students.distinct('semester', directoryFacetFilter),
+            session
+          ).exec()
+    } else {
+      ;[
+        statusDistribution,
+        facetStatusDistribution,
+        schoolIds,
+        academicYears,
+        semesters
+      ] = await Promise.all([
+        this.studentDirectoryStatusDistribution(
+          filter,
+          input.cycleId,
+          assignmentScope
+        ),
+        this.studentDirectoryStatusDistribution(
+          directoryFacetFilter,
+          input.cycleId,
+          assignmentScope
+        ),
+        this.students.distinct('schoolId', directoryFacetFilter).exec(),
+        directoryTerm
+          ? Promise.resolve([directoryTerm.academicYear])
+          : this.students.distinct('academicYear', directoryFacetFilter).exec(),
+        directoryTerm
+          ? Promise.resolve([directoryTerm.semester])
+          : this.students.distinct('semester', directoryFacetFilter).exec()
+      ])
+    }
     const facetSchoolObjectIds = schoolIds
       .filter(
         (reference): reference is string =>
@@ -1099,10 +1242,12 @@ export class MembersService {
       .map((reference) => new Types.ObjectId(reference))
     const facetSchoolRecords =
       facetSchoolObjectIds.length > 0
-        ? await this.schools
-            .find({ _id: { $in: facetSchoolObjectIds } })
-            .select('_id schoolCode name')
-            .exec()
+        ? await bindSession(
+            this.schools
+              .find({ _id: { $in: facetSchoolObjectIds } })
+              .select('_id schoolCode name'),
+            session
+          ).exec()
         : []
     return {
       ...response,
@@ -1141,95 +1286,94 @@ export class MembersService {
   private async studentDirectoryStatusDistribution(
     filter: QueryFilter<StudentRecord>,
     cycleId: string | undefined,
-    assignmentScope: QueryFilter<EvaluationAssignmentRecord> | undefined
+    assignmentScope: QueryFilter<EvaluationAssignmentRecord> | undefined,
+    session?: ClientSession
   ): Promise<Map<string, number>> {
     const pipeline: PipelineStage[] = [{ $match: filter }]
-    if (cycleId) {
-      const authorizedAssignmentScope = assignmentScope ?? { _id: null }
-      pipeline.push(
-        {
-          $lookup: {
-            from: this.assignments.collection.name,
-            let: {
-              directoryStudentId: '$studentId',
-              directoryMongoId: { $toString: '$_id' }
-            },
-            pipeline: [
-              {
-                $match: {
-                  $and: [
-                    { cycleId },
-                    authorizedAssignmentScope,
-                    {
-                      $expr: {
-                        $in: [
-                          '$studentId',
-                          ['$$directoryStudentId', '$$directoryMongoId']
-                        ]
-                      }
-                    }
-                  ]
-                }
-              },
-              { $project: { status: 1 } }
-            ],
-            as: 'directoryAssignments'
-          }
-        },
-        {
-          $addFields: {
-            directoryStatus: {
-              $switch: {
-                branches: [
+    const authorizedAssignmentScope = assignmentScope ?? {}
+    pipeline.push(
+      {
+        $lookup: {
+          from: this.assignments.collection.name,
+          let: {
+            directoryStudentId: '$studentId',
+            directoryMongoId: { $toString: '$_id' }
+          },
+          pipeline: [
+            {
+              $match: {
+                $and: [
+                  ...(cycleId ? [{ cycleId }] : []),
+                  authorizedAssignmentScope,
                   {
-                    case: { $gt: [{ $size: '$directoryAssignments' }, 1] },
-                    then: 'assignment_ambiguous'
-                  },
-                  ...(
-                    [
-                      'submitted',
-                      'email_error',
-                      'inProgress',
-                      'expired'
-                    ] as const
-                  ).map((status) => ({
-                    case: {
-                      $eq: [
-                        { $arrayElemAt: ['$directoryAssignments.status', 0] },
-                        status
-                      ]
-                    },
-                    then: status
-                  })),
-                  {
-                    case: {
+                    $expr: {
                       $in: [
-                        { $arrayElemAt: ['$directoryAssignments.status', 0] },
-                        ['pending', 'reopened']
+                        '$studentId',
+                        ['$$directoryStudentId', '$$directoryMongoId']
                       ]
-                    },
-                    then: 'pending'
+                    }
                   }
-                ],
-                default: 'pending'
+                ]
               }
+            },
+            { $project: { status: 1 } }
+          ],
+          as: 'directoryAssignments'
+        }
+      },
+      {
+        $addFields: {
+          directoryStatus: {
+            $switch: {
+              branches: [
+                {
+                  case: { $gt: [{ $size: '$directoryAssignments' }, 1] },
+                  then: 'assignment_ambiguous'
+                },
+                ...(
+                  [
+                    'submitted',
+                    'email_error',
+                    'inProgress',
+                    'expired'
+                  ] as const
+                ).map((status) => ({
+                  case: {
+                    $eq: [
+                      { $arrayElemAt: ['$directoryAssignments.status', 0] },
+                      status
+                    ]
+                  },
+                  then: status
+                })),
+                {
+                  case: {
+                    $in: [
+                      { $arrayElemAt: ['$directoryAssignments.status', 0] },
+                      ['pending', 'reopened']
+                    ]
+                  },
+                  then: 'pending'
+                }
+              ],
+              default: 'pending'
             }
           }
         }
-      )
-    } else {
-      pipeline.push({
-        $addFields: { directoryStatus: { $literal: 'cycle_unselected' } }
-      })
-    }
+      }
+    )
     pipeline.push({ $group: { _id: '$directoryStatus', count: { $sum: 1 } } })
-    const counts = await this.students
-      .aggregate<{ _id: string; count: number }>(pipeline)
-      .exec()
+    const counts = await bindSession(
+      this.students.aggregate<{ _id: string; count: number }>(pipeline),
+      session
+    ).exec()
     return new Map(counts.map(({ _id, count }) => [_id, count]))
   }
 
-  private async studentReferences(reference: string): Promise<string[]> {
+  private async studentReferences(
+    reference: string,
+    session?: ClientSession
+  ): Promise<string[]> {
     const references = new Set([reference])
     const filter = Types.ObjectId.isValid(reference)
       ? {
@@ -1239,10 +1383,10 @@ export class MembersService {
           ]
         }
       : { studentId: reference }
-    const student = await this.students
-      .findOne(filter)
-      .select('_id studentId')
-      .exec()
+    const student = await bindSession(
+      this.students.findOne(filter).select('_id studentId'),
+      session
+    ).exec()
     if (student) {
       references.add(student.id)
       references.add(student.studentId)
@@ -1265,9 +1409,10 @@ export class MembersService {
   }
 
   private async visibleStudentFilter(
-    actor: AuthenticatedActor
+    actor: AuthenticatedActor,
+    session?: ClientSession
   ): Promise<QueryFilter<StudentRecord>> {
-    if (this.isTenantDataReader(actor)) return {}
+    if (this.isTenantDataReader(actor)) return { status: { $ne: 'archived' } }
 
     const scopes: QueryFilter<StudentRecord>[] = []
     if (
@@ -1280,7 +1425,7 @@ export class MembersService {
     if (actor.roles.includes('student') && actor.scope.studentId) {
       scopes.push(
         this.studentDocumentsFilter(
-          await this.studentReferences(actor.scope.studentId)
+          await this.studentReferences(actor.scope.studentId, session)
         )
       )
     }
@@ -1289,20 +1434,23 @@ export class MembersService {
       actor.scope.assignmentId &&
       Types.ObjectId.isValid(actor.scope.assignmentId)
     ) {
-      const assignment = await this.assignments
-        .findById(actor.scope.assignmentId)
-        .select('studentId')
-        .exec()
+      const assignment = await bindSession(
+        this.assignments.findById(actor.scope.assignmentId).select('studentId'),
+        session
+      ).exec()
       if (assignment) {
         scopes.push(
           this.studentDocumentsFilter(
-            await this.studentReferences(assignment.studentId)
+            await this.studentReferences(assignment.studentId, session)
           )
         )
       }
     }
     if (scopes.length === 0) return { _id: null }
-    return scopes.length === 1 ? scopes[0]! : { $or: scopes }
+    const baseScope = scopes.length === 1 ? scopes[0]! : { $or: scopes }
+    return {
+      $and: [baseScope, { status: { $ne: 'archived' } }]
+    }
   }
 
   public async getStudent(
@@ -1562,15 +1710,15 @@ export class MembersService {
   private async organizationAuditScopes(
     organizationId: string,
     actor: AuthenticatedActor,
-    session: ClientSession
+    session?: ClientSession
   ): Promise<AuditResourceScope[]> {
     if (this.isTenantStaff(actor)) return [{ tenant: true }]
-    const placements = await this.placements
+    const placementsQuery = this.placements
       .find({ organizationId })
       .select('schoolId programId')
-      .session(session)
       .lean()
-      .exec()
+    if (session) placementsQuery.session(session)
+    const placements = await placementsQuery.exec()
     const scopes = new Map<string, AuditResourceScope>()
     for (const placement of placements) {
       const key = `${placement.schoolId}:${placement.programId}`
@@ -1796,7 +1944,7 @@ export class MembersService {
       normalizedInput.academicYear = term.academicYear
     }
     try {
-      return await this.students.db.transaction(async (session) => {
+      return await runWithTransaction(this.students.db, async (session) => {
         Object.assign(
           normalizedInput,
           await lockActiveAcademicScope(
@@ -1807,7 +1955,7 @@ export class MembersService {
           )
         )
         const [student] = await this.students.create([normalizedInput], {
-          session
+          ...(session ? { session } : {})
         })
         if (!student) {
           throw new ConflictException({ code: 'STUDENT_CREATE_FAILED' })
@@ -1925,10 +2073,10 @@ export class MembersService {
         input.status === 'archived' && existing.status !== 'archived'
       const requiresWorkLock = isArchiving || schoolOrProgramChanged
       const student = requiresWorkLock
-        ? await this.students.db.transaction(async (session) => {
+        ? await runWithTransaction(this.students.db, async (session) => {
             const current = await this.students
               .findOne(filter)
-              .session(session)
+              .session(session ?? null)
               .exec()
             if (!current) {
               throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
@@ -1978,7 +2126,7 @@ export class MembersService {
                 {
                   returnDocument: 'after',
                   runValidators: true,
-                  session
+                  ...(session ? { session } : {})
                 }
               )
               .exec()
@@ -2030,7 +2178,7 @@ export class MembersService {
             }
             return updated
           })
-        : await this.students.db.transaction(async (session) => {
+        : await runWithTransaction(this.students.db, async (session) => {
             const student = await this.students
               .findOneAndUpdate(
                 {
@@ -2052,7 +2200,11 @@ export class MembersService {
                     ? { $unset: { archivedAt: 1 } }
                     : {})
                 },
-                { returnDocument: 'after', runValidators: true, session }
+                {
+                  returnDocument: 'after',
+                  runValidators: true,
+                  ...(session ? { session } : {})
+                }
               )
               .exec()
             if (!student) {
@@ -2094,11 +2246,11 @@ export class MembersService {
     id: string,
     requestId = 'unknown'
   ): Promise<void> {
-    if (!Types.ObjectId.isValid(id)) {
-      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
-    }
+    const idFilter = Types.ObjectId.isValid(id)
+      ? { $or: [{ _id: new Types.ObjectId(id) }, { studentId: id }] }
+      : { studentId: id }
     const filter = {
-      $and: [{ _id: new Types.ObjectId(id) }, scopeFilter<StudentRecord>(actor)]
+      $and: [idFilter, scopeFilter<StudentRecord>(actor)]
     }
     const current = await this.students.findOne(filter).exec()
     if (!current) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
@@ -2107,10 +2259,10 @@ export class MembersService {
     if (await this.hasOpenStudentWork(current)) {
       throw new ConflictException({ code: 'STUDENT_HAS_OPEN_PLACEMENT' })
     }
-    await this.students.db.transaction(async (session) => {
+    await runWithTransaction(this.students.db, async (session) => {
       const existing = await this.students
         .findOne(filter)
-        .session(session)
+        .session(session ?? null)
         .exec()
       if (!existing) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
       assertActorScope(actor, existing)
@@ -2125,7 +2277,7 @@ export class MembersService {
           $set: { status: 'archived', archivedAt },
           $inc: { __v: 1 }
         },
-        { session }
+        { ...(session ? { session } : {}) }
       )
       if (result.matchedCount === 0) {
         throw new ConflictException({ code: 'STUDENT_STATUS_CHANGED' })
@@ -2172,7 +2324,15 @@ export class MembersService {
   ): Promise<unknown> {
     const clauses: QueryFilter<OrganizationRecord>[] = []
     const visibleIds = await this.visibleOrganizationIds(actor)
-    if (visibleIds !== undefined) clauses.push({ _id: { $in: visibleIds } })
+    if (visibleIds !== undefined) {
+      clauses.push({
+        _id: {
+          $in: visibleIds.filter((organizationId) =>
+            Types.ObjectId.isValid(organizationId)
+          )
+        }
+      })
+    }
     if (input.organizationIds?.length) {
       clauses.push({
         _id: {
@@ -2215,10 +2375,10 @@ export class MembersService {
         ? { contactEmail: normalizedEmail(input.contactEmail) }
         : {})
     }
-    return this.organizations.db.transaction(async (session) => {
+    return runWithTransaction(this.organizations.db, async (session) => {
       const [organization] = await this.organizations.create(
         [normalizedInput],
-        { session }
+        { ...(session ? { session } : {}) }
       )
       if (!organization) {
         throw new ConflictException({ code: 'ORGANIZATION_CREATE_FAILED' })
@@ -2317,13 +2477,13 @@ export class MembersService {
       throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
     }
     try {
-      return await this.evaluators.db.transaction(async (session) => {
+      return await runWithTransaction(this.evaluators.db, async (session) => {
         const organization = await this.organizations
           .findOne({
             _id: new Types.ObjectId(input.organizationId),
             status: 'active'
           })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!organization) {
           throw new UnprocessableEntityException({
@@ -2339,7 +2499,7 @@ export class MembersService {
               email: normalizedEmail(input.email)
             }
           ],
-          { session }
+          { ...(session ? { session } : {}) }
         )
         if (!evaluator) {
           throw new ConflictException({ code: 'EVALUATOR_CREATE_FAILED' })
@@ -2507,7 +2667,7 @@ export class MembersService {
       })
     }
     try {
-      return await this.students.db.transaction(async (session) => {
+      return await runWithTransaction(this.students.db, async (session) => {
         const student = await this.students
           .findOne({
             $and: [
@@ -2516,7 +2676,7 @@ export class MembersService {
               scopeFilter<StudentRecord>(actor)
             ]
           })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!student) {
           throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
@@ -2534,7 +2694,7 @@ export class MembersService {
 
         const organization = await this.organizations
           .findOne({ _id: organizationId, status: 'active' })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!organization) {
           throw new UnprocessableEntityException({
@@ -2575,7 +2735,7 @@ export class MembersService {
             status: { $ne: 'archived' }
           },
           { $inc: { __v: 1 } },
-          { session }
+          { ...(session ? { session } : {}) }
         )
         if (termLock.matchedCount !== 1) {
           throw new ConflictException({ code: 'ACADEMIC_TERM_CHANGED' })
@@ -2586,7 +2746,7 @@ export class MembersService {
             academicTermId: term.id
           })
           .select({ _id: 1 })
-        duplicateQuery.session(session)
+        if (session) duplicateQuery.session(session)
         if (await duplicateQuery) {
           throw new ConflictException({ code: 'PLACEMENT_ALREADY_EXISTS' })
         }
@@ -2594,7 +2754,7 @@ export class MembersService {
         const lock = await this.students.updateOne(
           { _id: student._id, status: 'active' },
           { $inc: { __v: 1 } },
-          { session }
+          { ...(session ? { session } : {}) }
         )
         if (lock.matchedCount === 0) {
           throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
@@ -2611,7 +2771,7 @@ export class MembersService {
               programId: student.programId
             }
           ],
-          { session }
+          { ...(session ? { session } : {}) }
         )
         if (!placement) {
           throw new ConflictException({ code: 'PLACEMENT_CREATE_FAILED' })

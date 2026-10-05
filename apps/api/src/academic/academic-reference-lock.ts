@@ -12,7 +12,7 @@ export async function lockActiveAcademicScope(
   schools: Model<SchoolRecord>,
   programs: Model<ProgramRecord>,
   scope: AcademicReferenceScope,
-  session: ClientSession
+  session?: ClientSession
 ): Promise<AcademicReferenceScope> {
   if (scope.schoolId === undefined && scope.programId === undefined) return {}
 
@@ -32,7 +32,7 @@ export async function lockActiveAcademicScope(
         _id: new Types.ObjectId(scope.programId),
         status: 'active'
       })
-      .session(session)
+      .session(session ?? null)
       .exec()
     if (!program) {
       throw new UnprocessableEntityException({
@@ -63,7 +63,7 @@ export async function lockActiveAcademicScope(
       _id: new Types.ObjectId(requestedSchoolId),
       status: 'active'
     })
-    .session(session)
+    .session(session ?? null)
     .exec()
   if (!school) {
     throw new UnprocessableEntityException({
@@ -72,10 +72,15 @@ export async function lockActiveAcademicScope(
     })
   }
 
+  const schoolVersionFilter =
+    school.__v === undefined || school.__v === 0
+      ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+      : { __v: school.__v }
+
   const schoolLock = await schools.updateOne(
-    { _id: school._id, __v: school.__v, status: 'active' },
+    { _id: school._id, ...schoolVersionFilter, status: 'active' },
     { $inc: { __v: 1 } },
-    { session }
+    session ? { session } : {}
   )
   if (schoolLock.matchedCount !== 1) {
     throw new ConflictException({ code: 'SCHOOL_CHANGED' })
@@ -89,7 +94,7 @@ export async function lockActiveAcademicScope(
       schoolId: school.id,
       status: 'active'
     })
-    .session(session)
+    .session(session ?? null)
     .exec()
   if (!program) {
     throw new UnprocessableEntityException({
@@ -97,15 +102,21 @@ export async function lockActiveAcademicScope(
       field: 'programId'
     })
   }
+
+  const programVersionFilter =
+    program.__v === undefined || program.__v === 0
+      ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+      : { __v: program.__v }
+
   const programLock = await programs.updateOne(
     {
       _id: program._id,
       schoolId: school.id,
-      __v: program.__v,
+      ...programVersionFilter,
       status: 'active'
     },
     { $inc: { __v: 1 } },
-    { session }
+    session ? { session } : {}
   )
   if (programLock.matchedCount !== 1) {
     throw new ConflictException({ code: 'PROGRAM_CHANGED' })

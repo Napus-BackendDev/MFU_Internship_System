@@ -45,6 +45,7 @@ const listSchema = z.object({
   evaluationStatus: z
     .enum([
       'awaiting_evaluator',
+      'evaluator_assigned',
       'awaiting_response',
       'submitted',
       'email_error',
@@ -94,14 +95,15 @@ const organizationListSchema = listSchema.extend({
 const evaluatorListSchema = listSchema.extend({
   evaluatorIds: objectIdCsvSchema(100)
 })
+const studentNameSchema = z.union([
+  z.string().trim().min(1),
+  nameSchema.transform((n) => (n.th || n.en).trim())
+])
+
 const studentSchema = z.object({
   studentId: z.string().min(3).max(30),
-  name: nameSchema,
+  name: studentNameSchema,
   email: z.email(),
-  personalEmail: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.email().optional()
-  ),
   schoolId: z.string().min(1),
   programId: z.string().min(1),
   courseId: z.string().optional(),
@@ -219,9 +221,21 @@ export class MembersController {
         }
       ])
     }
+    const decodedFilename = (() => {
+      if (/[\u0E00-\u0E7F]/.test(file.originalname)) {
+        return file.originalname
+      }
+      try {
+        const fixed = Buffer.from(file.originalname, 'latin1').toString('utf8')
+        if (fixed && !fixed.includes('\ufffd') && !/[\u00C0-\u00FF]/.test(fixed)) return fixed
+      } catch {
+        // ignore
+      }
+      return file.originalname
+    })()
     return this.importService.preview(
       request.actor!,
-      file.originalname,
+      decodedFilename,
       file.buffer
     )
   }

@@ -44,6 +44,7 @@ import type { AuditResourceScope } from '../audit/audit.schema.js'
 import { AuditService } from '../audit/audit.service.js'
 import { hasTenantDocumentTemplateManagementScope } from '../auth/permission-map.js'
 import { paginate, type PaginationInput } from '../common/pagination.js'
+import { runWithTransaction } from '../common/mongo-transaction.js'
 import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
 import { scopeFilter } from '../common/scope.js'
 import {
@@ -67,6 +68,32 @@ import {
 } from './font-metadata.js'
 
 import { StudentRecord } from '../members/members.schema.js'
+
+function resolveStudentNamePair(name: unknown): {
+  readonly th: string
+  readonly en: string
+} {
+  if (typeof name === 'string') {
+    return { th: name, en: name }
+  }
+  if (typeof name === 'object' && name !== null) {
+    const localized = name as { readonly th?: unknown; readonly en?: unknown }
+    const th =
+      typeof localized.th === 'string'
+        ? localized.th
+        : typeof localized.en === 'string'
+          ? localized.en
+          : ''
+    const en =
+      typeof localized.en === 'string'
+        ? localized.en
+        : typeof localized.th === 'string'
+          ? localized.th
+          : ''
+    return { th, en }
+  }
+  return { th: '', en: '' }
+}
 
 const DOCUMENT_READ_SCOPE_ROLES = [
   'internshipStaff',
@@ -225,11 +252,8 @@ export class DocumentsService {
       })
     }
 
-    let session: ClientSession | undefined
     try {
-      session = await this.assets.db.startSession()
-      let asset: HydratedDocument<DocumentAssetRecord> | undefined
-      await session.withTransaction(async () => {
+      const asset = await runWithTransaction(this.assets.db, async (session) => {
         const [created] = await this.assets.create(
           [
             {
@@ -246,7 +270,7 @@ export class DocumentsService {
               status: 'active'
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         if (!created) throw new Error('DOCUMENT_ASSET_RECORD_CREATE_FAILED')
         await this.auditService.record(
@@ -270,7 +294,7 @@ export class DocumentsService {
           },
           session
         )
-        asset = created
+        return created
       })
       if (!asset) throw new Error('DOCUMENT_ASSET_TRANSACTION_EMPTY')
       return asset.toJSON()
@@ -294,8 +318,6 @@ export class DocumentsService {
         })
       }
       throw error
-    } finally {
-      if (session) await session.endSession()
     }
   }
 
@@ -429,15 +451,8 @@ export class DocumentsService {
       input.placeholders,
       input.schemaVersion
     )
-    const session = await this.templates.db.startSession()
-    let result:
-      | {
-          readonly template: HydratedDocument<DocumentTemplateRecord>
-          readonly version: HydratedDocument<DocumentTemplateVersionRecord>
-        }
-      | undefined
     try {
-      await session.withTransaction(async () => {
+      const result = await runWithTransaction(this.templates.db, async (session) => {
         const [template] = await this.templates.create(
           [
             {
@@ -447,7 +462,7 @@ export class DocumentsService {
               status: 'active'
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         if (!template)
           throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
@@ -464,11 +479,11 @@ export class DocumentsService {
               fontAssetKeys: [...input.fontAssetKeys]
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         if (!version)
           throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        result = { template, version }
+        return { template, version }
       })
       if (!result)
         throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
@@ -481,8 +496,116 @@ export class DocumentsService {
         throw new ConflictException({ code: 'TEMPLATE_CODE_ALREADY_EXISTS' })
       }
       throw error
-    } finally {
-      await session.endSession()
+    }
+  }
+
+  public async activateTemplate(
+    actor: AuthenticatedActor,
+    templateId: string
+  ): Promise<unknown> {
+    if (!hasTenantDocumentTemplateManagementScope(actor)) {
+      throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
+    }
+    const template = await this.templates.findById(templateId).exec()
+    if (!template) {
+      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    }
+
+    const documentType = template.documentType
+    if (!documentType) {
+      throw new UnprocessableEntityException({
+        code: 'TEMPLATE_DOCUMENT_TYPE_REQUIRED'
+      })
+    }
+
+    const publishedVersion = await this.versions
+      .findOne({ templateId: template.id, status: 'published' })
+      .exec()
+
+    if (!publishedVersion) {
+      const draftVersion = await this.versions
+        .findOne({ templateId: template.id, status: 'draft' })
+        .sort({ versionNumber: -1, _id: -1 })
+        .exec()
+      if (draftVersion) {
+        draftVersion.status = 'published'
+        draftVersion.publishedAt = new Date()
+        await draftVersion.save()
+      } else {
+        throw new UnprocessableEntityException({
+          code: 'PUBLISHED_VERSION_REQUIRED'
+        })
+      }
+    }
+
+    // Enforce strictly 1 active template per type:
+    // Archive other templates of the same documentType
+    await this.templates
+      .updateMany(
+        { documentType, _id: { $ne: template._id } },
+        { $set: { status: 'archived' } }
+      )
+      .exec()
+
+    template.status = 'active'
+    await template.save()
+
+    const latest = await this.versions
+      .findOne({ templateId: template.id })
+      .sort({ versionNumber: -1, _id: -1 })
+      .exec()
+
+    return {
+      ...template.toJSON(),
+      latestVersion: latest
+        ? {
+            id: latest.id,
+            versionNumber: latest.versionNumber,
+            status: latest.status,
+            schemaVersion: latest.schemaVersion ?? 1,
+            revision: latest.revision ?? 1,
+            editorMetadata:
+              (latest.canonicalJson as Record<string, unknown>)
+                ?.editorMetadata ?? null
+          }
+        : null
+    }
+  }
+
+  public async deactivateTemplate(
+    actor: AuthenticatedActor,
+    templateId: string
+  ): Promise<unknown> {
+    if (!hasTenantDocumentTemplateManagementScope(actor)) {
+      throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
+    }
+    const template = await this.templates.findById(templateId).exec()
+    if (!template) {
+      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    }
+
+    template.status = 'archived'
+    await template.save()
+
+    const latest = await this.versions
+      .findOne({ templateId: template.id })
+      .sort({ versionNumber: -1, _id: -1 })
+      .exec()
+
+    return {
+      ...template.toJSON(),
+      latestVersion: latest
+        ? {
+            id: latest.id,
+            versionNumber: latest.versionNumber,
+            status: latest.status,
+            schemaVersion: latest.schemaVersion ?? 1,
+            revision: latest.revision ?? 1,
+            editorMetadata:
+              (latest.canonicalJson as Record<string, unknown>)
+                ?.editorMetadata ?? null
+          }
+        : null
     }
   }
 
@@ -549,20 +672,18 @@ export class DocumentsService {
       input.placeholders,
       input.schemaVersion
     )
-    const session = await this.templates.db.startSession()
-    let created: HydratedDocument<DocumentTemplateVersionRecord> | undefined
     try {
-      await session.withTransaction(async () => {
+      const created = await runWithTransaction(this.templates.db, async (session) => {
         const template = await this.templates
           .findOne({ _id: templateId, status: 'active' })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!template)
           throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
         const latest = await this.versions
           .findOne({ templateId })
           .sort({ versionNumber: -1 })
-          .session(session)
+          .session(session ?? null)
           .exec()
         const [version] = await this.versions.create(
           [
@@ -577,11 +698,11 @@ export class DocumentsService {
               fontAssetKeys: [...input.fontAssetKeys]
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         if (!version)
           throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        created = version
+        return version
       })
       if (!created)
         throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
@@ -591,8 +712,6 @@ export class DocumentsService {
         throw new ConflictException({ code: 'VERSION_CONFLICT' })
       }
       throw error
-    } finally {
-      await session.endSession()
     }
   }
 
@@ -930,23 +1049,11 @@ export class DocumentsService {
       return document
     }
 
-    if (
-      process.env.NODE_ENV === undefined ||
-      process.env.NODE_ENV === 'development'
-    ) {
-      return create()
-    }
-    const session = await this.documents.db.startSession()
-    try {
-      let document: HydratedDocument<GeneratedDocumentRecord> | undefined
-      await session.withTransaction(async () => {
-        document = await create(session)
-      })
+    return runWithTransaction(this.documents.db, async (session) => {
+      const document = await create(session)
       if (!document) throw new Error('Document request transaction was empty')
       return document
-    } finally {
-      await session.endSession()
-    }
+    })
   }
 
   public async listDocuments(
@@ -1290,37 +1397,43 @@ export class DocumentsService {
       })
     }
     const fontAssetKeys = templateVersion.fontAssetKeys ?? []
-    if (
-      fontAssetKeys.length !== 1 ||
-      new Set(fontAssetKeys).size !== fontAssetKeys.length ||
-      fontAssets.length !== new Set(fontAssetKeys).size ||
-      fontAssets.some((asset) => !fontAssetKeys.includes(asset.key))
-    ) {
-      throw new UnprocessableEntityException({
-        code:
-          fontAssetKeys.length === 1
-            ? 'DOCUMENT_FONT_ASSET_NOT_REGISTERED'
-            : 'DOCUMENT_FONT_MAPPING_UNSUPPORTED'
-      })
-    }
-    this.validateFontAssetFamilyMapping(
-      templateVersion.canonicalJson,
-      templateVersion.placeholders ?? [],
-      templateVersion.schemaVersion ?? 1,
-      fontAssets[0]?.fontFamily,
-      false
-    )
-
-    if ((templateVersion.schemaVersion ?? 1) === 2) {
-      this.validateV2PublicationData(
+    let resolvedFontAssets = fontAssets
+    if (fontAssetKeys.length > 0) {
+      if (
+        fontAssetKeys.length !== 1 ||
+        new Set(fontAssetKeys).size !== fontAssetKeys.length ||
+        fontAssets.length !== new Set(fontAssetKeys).size ||
+        fontAssets.some((asset) => !fontAssetKeys.includes(asset.key))
+      ) {
+        throw new UnprocessableEntityException({
+          code:
+            fontAssetKeys.length === 1
+              ? 'DOCUMENT_FONT_ASSET_NOT_REGISTERED'
+              : 'DOCUMENT_FONT_MAPPING_UNSUPPORTED'
+        })
+      }
+      this.validateFontAssetFamilyMapping(
         templateVersion.canonicalJson,
-        templateVersion.placeholders ?? []
+        templateVersion.placeholders ?? [],
+        templateVersion.schemaVersion ?? 1,
+        fontAssets[0]?.fontFamily,
+        false
       )
+    } else if (resolvedFontAssets.length === 0) {
+      const defaultFont = await this.assets
+        .findOne({ assetType: 'font', status: 'active' })
+        .select('key sha256 fontFamily')
+        .exec()
+      if (defaultFont) {
+        resolvedFontAssets = [defaultFont]
+      }
     }
+
     const imageAssets = await this.resolveImageAssets(
       templateVersion.schemaVersion ?? 1,
       templateVersion.canonicalJson,
-      templateVersion.placeholders ?? []
+      templateVersion.placeholders ?? [],
+      false
     )
 
     return {
@@ -1333,7 +1446,7 @@ export class DocumentsService {
         schemaVersion: templateVersion.schemaVersion ?? 1,
         canonicalJson: templateVersion.canonicalJson,
         placeholders: [...(templateVersion.placeholders ?? [])],
-        fontAssets: fontAssets.map((asset) => ({
+        fontAssets: resolvedFontAssets.map((asset) => ({
           key: asset.key,
           sha256: asset.sha256,
           ...(asset.fontFamily ? { fontFamily: asset.fontFamily } : {})
@@ -1343,7 +1456,7 @@ export class DocumentsService {
       student: {
         recordId: student.id,
         studentId: student.studentId,
-        name: { th: student.name.th, en: student.name.en },
+        name: resolveStudentNamePair(student.name),
         academicYear: term.academicYear,
         schoolId: school.id,
         schoolName: { th: school.name.th, en: school.name.en },
@@ -1610,7 +1723,8 @@ export class DocumentsService {
   private async resolveImageAssets(
     schemaVersion: number,
     canonicalJson: Readonly<Record<string, unknown>>,
-    declaredPlaceholders: readonly string[]
+    declaredPlaceholders: readonly string[],
+    requireAssets = true
   ): Promise<
     readonly {
       key: string
@@ -1629,11 +1743,12 @@ export class DocumentsService {
         code: 'DOCUMENT_TEMPLATE_INVALID'
       })
     }
-    return this.resolveImageAssetsFromCanonical(canonical)
+    return this.resolveImageAssetsFromCanonical(canonical, requireAssets)
   }
 
   private async resolveImageAssetsFromCanonical(
-    canonical: NonNullable<ReturnType<typeof parseCanonicalDocumentV2>>
+    canonical: NonNullable<ReturnType<typeof parseCanonicalDocumentV2>>,
+    requireAssets = true
   ): Promise<
     readonly {
       key: string
@@ -1645,21 +1760,27 @@ export class DocumentsService {
     for (const element of canonical.elements) {
       if (element.type === 'emblem') {
         if (!element.assetKey) {
-          throw new UnprocessableEntityException({
-            code: 'DOCUMENT_IMAGE_ASSET_REQUIRED',
-            elementId: element.id,
-            assetType: 'emblem'
-          })
+          if (requireAssets) {
+            throw new UnprocessableEntityException({
+              code: 'DOCUMENT_IMAGE_ASSET_REQUIRED',
+              elementId: element.id,
+              assetType: 'emblem'
+            })
+          }
+          continue
         }
         required.set(element.assetKey, 'emblem')
       }
       if (element.type === 'signature') {
         if (!element.assetKeys || element.assetKeys.length !== 2) {
-          throw new UnprocessableEntityException({
-            code: 'DOCUMENT_IMAGE_ASSET_REQUIRED',
-            elementId: element.id,
-            assetType: 'signature'
-          })
+          if (requireAssets) {
+            throw new UnprocessableEntityException({
+              code: 'DOCUMENT_IMAGE_ASSET_REQUIRED',
+              elementId: element.id,
+              assetType: 'signature'
+            })
+          }
+          continue
         }
         for (const key of element.assetKeys) {
           if (required.has(key)) {

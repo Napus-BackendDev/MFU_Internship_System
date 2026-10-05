@@ -5,7 +5,6 @@ export interface StudentDirectoryExportSource {
   readonly nameTh: string
   readonly nameEn: string
   readonly email: string
-  readonly personalEmail: string
   readonly schoolTh: string
   readonly schoolEn: string
   readonly programTh: string
@@ -14,6 +13,7 @@ export interface StudentDirectoryExportSource {
   readonly academicYear: number | string
   readonly academicYearEn: number | string
   readonly semester: string
+  readonly semesterEn: string
   readonly company: string
   readonly companyAddress: string
   readonly province: string
@@ -44,7 +44,10 @@ function formatScore(
   }
 
   const scale =
-    typeof score.scaleMin === 'number' && typeof score.scaleMax === 'number'
+    typeof score.scaleMin === 'number' &&
+    Number.isFinite(score.scaleMin) &&
+    typeof score.scaleMax === 'number' &&
+    Number.isFinite(score.scaleMax)
       ? ` / ${score.scaleMin}–${score.scaleMax}`
       : ''
   const answeredCount =
@@ -68,12 +71,11 @@ export function buildStudentDirectoryExportRows(
       'ชื่อ-นามสกุล (ไทย)': row.nameTh,
       'ชื่อ-นามสกุล (อังกฤษ)': row.nameEn,
       อีเมลนักศึกษา: row.email,
-      'อีเมลส่วนตัว (Personal Email)': row.personalEmail,
       สำนักวิชา: row.schoolTh,
       'สาขาวิชา / หลักสูตร': row.programTh,
       'รายวิชา (Course)': row.courseDisplay,
       ปีการศึกษา: row.academicYear,
-      ภาคการศึกษา: `ภาคการศึกษาที่ ${row.semester}`,
+      ภาคการศึกษา: row.semester,
       สถานประกอบการ: row.company,
       ที่ตั้งบริษัท: row.companyAddress,
       จังหวัด: row.province,
@@ -93,13 +95,11 @@ export function buildStudentDirectoryExportRows(
     'Full Name (English)': row.nameEn,
     'Full Name (Thai)': row.nameTh,
     'Student Email': row.email,
-    'Personal Email': row.personalEmail,
     School: row.schoolEn,
     'Program / Major': row.programEn,
     Course: row.courseDisplay,
     'Academic Year': row.academicYearEn,
-    Semester:
-      row.semester === '3' ? 'Summer Session' : `Semester ${row.semester}`,
+    Semester: row.semesterEn,
     'Company / Placement': row.company,
     'Company Location': row.companyAddress,
     Province: row.province,

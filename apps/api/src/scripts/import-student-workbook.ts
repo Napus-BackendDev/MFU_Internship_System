@@ -4,7 +4,11 @@ import { basename, resolve } from 'node:path'
 
 import { loadEnvironment } from '@internship/config'
 import { MongoClient, ObjectId, type Db } from 'mongodb'
-import * as XLSX from 'xlsx'
+
+import {
+  parseStudentWorkbook,
+  type StudentImportSourceRow
+} from '../members/student-import.parser.js'
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development'
 try {
@@ -20,7 +24,6 @@ if (environment.NODE_ENV !== 'development') {
   )
 }
 
-const sourceSheets = ['Data2', 'Eng', 'BA'] as const
 const requestedFile = argumentValue('--file')
 if (!requestedFile) {
   throw new Error(
@@ -33,15 +36,14 @@ const shouldCommit = hasFlag('--commit')
 const allowPartial = hasFlag('--allow-partial')
 const sourceBuffer = readFileSync(filePath)
 const checksum = createHash('sha256').update(sourceBuffer).digest('hex')
-const workbook = XLSX.read(sourceBuffer, { cellDates: true })
-const parsed = parseWorkbook(workbook)
+const parsed = parseStudentWorkbook(sourceBuffer)
 
 const client = new MongoClient(environment.MONGODB_URI)
 await client.connect()
 
 try {
   const database = client.db()
-  const resolution = await resolveRows(database, parsed.rows, parsed.issues)
+  const resolution = await resolveRows(database, parsed.rows)
   const summary = createSummary(filePath, checksum, parsed, resolution)
 
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`)
@@ -70,22 +72,6 @@ try {
   await client.close()
 }
 
-interface SourceRow {
-  readonly sheet: string
-  readonly rowNumber: number
-  readonly studentId: string
-  readonly nameTh: string
-  readonly nameEn: string
-  readonly email: string
-  readonly programName: string
-  readonly schoolName: string
-  readonly courseName: string
-  readonly company: string
-  readonly semester: string
-  readonly academicYear: number
-  readonly questionFields: readonly string[]
-}
-
 interface ImportIssue {
   readonly sheet: string
   readonly rowNumber: number
@@ -95,7 +81,7 @@ interface ImportIssue {
 }
 
 interface ResolvedRow {
-  readonly source: SourceRow
+  readonly source: StudentImportSourceRow
   readonly document: Record<string, unknown>
   readonly action: 'create' | 'update'
   readonly warnings: readonly string[]
@@ -126,138 +112,23 @@ function hasFlag(name: string): boolean {
   return process.argv.includes(name)
 }
 
-function parseWorkbook(workbook: XLSX.WorkBook): {
-  rows: SourceRow[]
-  issues: ImportIssue[]
-  questionFields: string[]
-} {
-  const rows: SourceRow[] = []
-  const issues: ImportIssue[] = []
-  const questionFields = new Set<string>()
-
-  for (const sheet of sourceSheets) {
-    const worksheet = workbook.Sheets[sheet]
-    if (!worksheet) {
-      issues.push({
-        sheet,
-        rowNumber: 1,
-        code: 'SHEET_MISSING',
-        field: 'sheet',
-        message: `Required sheet ${sheet} was not found.`
-      })
-      continue
-    }
-
-    const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(
-      worksheet,
-      {
-        defval: null,
-        raw: true
-      }
-    )
-
-    records.forEach((record, index) => {
-      const rowNumber = index + 2
-      if (toText(record.ID) === '') return
-
-      const source = {
-        sheet,
-        rowNumber,
-        studentId: normalizeStudentId(record.ID),
-        nameTh: toText(record['Name-Surname (Thai)']),
-        nameEn: toText(record['Name-Surname']),
-        email: toText(record.Email).toLowerCase(),
-        programName: toText(record.Programe),
-        schoolName: toText(record.School),
-        courseName: toText(record.Course),
-        company: toText(record['Organization name']),
-        semester: toText(record.Semester),
-        academicYear: toNumber(record.Year),
-        questionFields: Object.keys(record).filter((key) =>
-          /^(Hard|HS|HM|HA|HSD|SS|SM|SA|SSD)/i.test(key)
-        )
-      } satisfies SourceRow
-
-      source.questionFields.forEach((field) => questionFields.add(field))
-      validateSourceRow(source, issues)
-      rows.push(source)
-    })
-  }
-
-  const seen = new Map<string, SourceRow>()
-  for (const row of rows) {
-    const previous = seen.get(row.studentId)
-    if (previous) {
-      issues.push({
-        sheet: row.sheet,
-        rowNumber: row.rowNumber,
-        code: 'DUPLICATE_SOURCE_ID',
-        field: 'ID',
-        message: `Student ID duplicates ${previous.sheet}:${previous.rowNumber}.`
-      })
-    } else {
-      seen.set(row.studentId, row)
-    }
-  }
-
-  return { rows, issues, questionFields: [...questionFields].sort() }
-}
-
-function validateSourceRow(row: SourceRow, issues: ImportIssue[]): void {
-  const required: readonly [keyof SourceRow, string][] = [
-    ['studentId', 'ID'],
-    ['nameTh', 'Name-Surname (Thai)'],
-    ['nameEn', 'Name-Surname'],
-    ['email', 'Email'],
-    ['programName', 'Programe'],
-    ['schoolName', 'School'],
-    ['company', 'Organization name'],
-    ['semester', 'Semester']
-  ]
-
-  for (const [key, field] of required) {
-    if (row[key] === '') {
-      issues.push({
-        sheet: row.sheet,
-        rowNumber: row.rowNumber,
-        code: 'REQUIRED_VALUE_MISSING',
-        field,
-        message: `${field} is required.`
-      })
-    }
-  }
-
-  if (!/^\d{7,20}$/.test(row.studentId)) {
-    issues.push({
-      sheet: row.sheet,
-      rowNumber: row.rowNumber,
-      code: 'INVALID_STUDENT_ID',
-      field: 'ID',
-      message: 'Student ID must contain only 7-20 digits.'
-    })
-  }
-
-  if (!/^\S+@\S+\.\S+$/.test(row.email)) {
-    issues.push({
-      sheet: row.sheet,
-      rowNumber: row.rowNumber,
-      code: 'INVALID_EMAIL',
-      field: 'Email',
-      message: 'Email format is invalid.'
-    })
-  }
-}
-
 async function resolveRows(
   database: Db,
-  sourceRows: readonly SourceRow[],
-  sourceIssues: readonly ImportIssue[]
+  sourceRows: readonly StudentImportSourceRow[]
 ): Promise<{
   rows: ResolvedRow[]
   issues: ImportIssue[]
   warnings: ImportIssue[]
 }> {
-  const issues = [...sourceIssues]
+  const issues: ImportIssue[] = sourceRows.flatMap((row) =>
+    row.issues.map((issue) => ({
+      sheet: row.sheet,
+      rowNumber: row.rowNumber,
+      code: issue.code,
+      field: issue.field,
+      message: issue.message
+    }))
+  )
   const warnings: ImportIssue[] = []
   const [schools, programs, courses, terms, existingStudents] =
     await Promise.all([
@@ -284,43 +155,97 @@ async function resolveRows(
     const rowKey = `${source.sheet}:${source.rowNumber}`
     if (invalidRowKeys.has(rowKey)) continue
 
-    const school = findMaster(schools, source.schoolName)
+    let school: Record<string, unknown> | undefined
+    let program: Record<string, unknown> | undefined
+
+    if (source.schoolReference) {
+      school = findMaster(schools, source.schoolReference, [
+        'schoolCode',
+        'name'
+      ])
+    }
+
+    if (school) {
+      const currentSchool = school
+      if (source.programReference) {
+        program = programs.find(
+          (candidate) =>
+            String(candidate.schoolId) === String(currentSchool._id) &&
+            matchesMaster(candidate, source.programReference, [
+              'programCode',
+              'name'
+            ])
+        )
+      }
+    } else if (source.programReference) {
+      const programMatches = programs.filter((candidate) =>
+        matchesMaster(candidate, source.programReference, [
+          'programCode',
+          'name'
+        ])
+      )
+      if (programMatches.length === 1 && programMatches[0]) {
+        const matchedProgram = programMatches[0]
+        program = matchedProgram
+        school = schools.find(
+          (candidate) => String(candidate._id) === String(matchedProgram.schoolId)
+        )
+      }
+    }
+
     if (!school) {
       issues.push(
-        masterIssue(source, 'SCHOOL_NOT_FOUND', 'School', source.schoolName)
+        masterIssue(
+          source,
+          'SCHOOL_NOT_FOUND',
+          'School',
+          source.schoolReference || source.programReference
+        )
       )
       continue
     }
 
-    const program = programs.find(
-      (candidate) =>
-        String(candidate.schoolId) === String(school._id) &&
-        matchesMaster(candidate, source.programName)
-    )
     if (!program) {
       issues.push(
-        masterIssue(source, 'PROGRAM_NOT_FOUND', 'Programe', source.programName)
+        masterIssue(
+          source,
+          'PROGRAM_NOT_FOUND',
+          'Programe',
+          source.programReference
+        )
       )
       continue
     }
+
+    const name =
+      source.nameTh && source.nameEn
+        ? { th: source.nameTh, en: source.nameEn }
+        : source.name || source.nameTh || source.nameEn
 
     const document: Record<string, unknown> = {
       studentId: source.studentId,
-      name: { th: source.nameTh, en: source.nameEn },
+      name,
       email: source.email,
       schoolId: String(school._id),
       programId: String(program._id),
       semester: formatStoredSemester(source.semester),
       company: source.company,
-      course: source.courseName
+      course: source.courseReference
     }
 
-    const course = findMaster(courses, source.courseName)
+    const course = source.courseReference
+      ? findMaster(courses, source.courseReference, ['courseCode', 'name'])
+      : undefined
     if (course) {
       document.courseId = String(course._id)
-    } else {
+    } else if (source.courseReference) {
       warnings.push(
-        masterIssue(source, 'COURSE_NOT_FOUND', 'Course', source.courseName)
+        masterIssue(
+          source,
+          'COURSE_NOT_FOUND',
+          'Course',
+          source.courseReference
+        )
       )
     }
 
@@ -332,13 +257,13 @@ async function resolveRows(
     )
     if (term) {
       document.academicTermId = String(term._id)
-    } else {
+    } else if (source.academicYear || source.semester) {
       warnings.push(
         masterIssue(
           source,
           'TERM_NOT_FOUND',
           'Academic term',
-          `${source.academicYear}/${source.semester}`
+          `${source.academicYear ?? '-'}/${source.semester ?? '-'}`
         )
       )
     }
@@ -362,55 +287,66 @@ async function resolveRows(
 
 function findMaster(
   records: readonly Record<string, unknown>[],
-  value: string
+  value: string,
+  fields: readonly string[] = [
+    'schoolCode',
+    'programCode',
+    'courseCode',
+    'code',
+    'name'
+  ]
 ): Record<string, unknown> | undefined {
-  return records.find((record) => matchesMaster(record, value))
+  return records.find((record) => matchesMaster(record, value, fields))
 }
 
 function matchesMaster(
   record: Record<string, unknown>,
-  value: string
-): boolean {
-  const name = record.name
-  const names =
-    name && typeof name === 'object'
-      ? Object.values(name as Record<string, unknown>)
-      : []
-  return [
-    record.schoolCode,
-    record.programCode,
-    record.courseCode,
-    record.code,
-    ...names
+  value: string,
+  fields: readonly string[] = [
+    'schoolCode',
+    'programCode',
+    'courseCode',
+    'code',
+    'name'
   ]
+): boolean {
+  const needle = normalizeLabel(value)
+  const candidates = fields.flatMap((field) => {
+    const candidate = record[field]
+    if (candidate && typeof candidate === 'object') {
+      return Object.values(candidate as Record<string, unknown>)
+    }
+    return [candidate]
+  })
+  return candidates
     .filter((candidate) => candidate !== undefined && candidate !== null)
-    .some(
-      (candidate) => normalizeLabel(toText(candidate)) === normalizeLabel(value)
-    )
+    .some((candidate) => normalizeLabel(toText(candidate)) === needle)
 }
 
 function normalizeLabel(value: string): string {
   return value
     .trim()
     .toLowerCase()
-    .replace(/^school of\s+/, '')
+    .replace(/^school of\s+/i, '')
+    .replace(/^สำนักวิชา\s*/, '')
+    .replace(/^หลักสูตร\s*/, '')
+    .replace(/^สาขาวิชา\s*/, '')
+    .replace(/^สาขา\s*/, '')
+    .replace(/&/g, 'and')
     .replace(/\s+/g, ' ')
 }
 
 function normalizeSemester(value: unknown): string {
   const normalized = normalizeLabel(toText(value))
-  if (
-    normalized === 'first' ||
-    normalized === 'ภาคการศึกษาต้น' ||
-    normalized === '1'
-  )
-    return '1'
-  if (
-    normalized === 'second' ||
-    normalized === 'ภาคการศึกษาปลาย' ||
-    normalized === '2'
-  )
+  if (['1', 'first', 'ต้น', 'ภาคการศึกษาต้น'].includes(normalized)) return '1'
+  if (['2', 'second', 'ปลาย', 'ภาคการศึกษาปลาย'].includes(normalized))
     return '2'
+  if (
+    ['3', 'third', 'summer', 'ภาคการศึกษาฤดูร้อน'].includes(normalized) ||
+    normalized.includes('ฤดูร้อน')
+  ) {
+    return '3'
+  }
   return normalized
 }
 
@@ -420,10 +356,6 @@ function formatStoredSemester(value: unknown): string {
   if (norm === '2') return 'ภาคการศึกษาปลาย'
   if (norm === '3') return 'ภาคการศึกษาฤดูร้อน'
   return toText(value) || 'ภาคการศึกษาต้น'
-}
-
-function normalizeStudentId(value: unknown): string {
-  return toText(value).replace(/\.0$/, '')
 }
 
 function toText(value: unknown): string {
@@ -439,13 +371,8 @@ function toText(value: unknown): string {
   return ''
 }
 
-function toNumber(value: unknown): number {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : 0
-}
-
 function masterIssue(
-  row: SourceRow,
+  row: StudentImportSourceRow,
   code: string,
   field: string,
   value: string
@@ -463,9 +390,8 @@ function createSummary(
   filePath: string,
   checksum: string,
   parsed: {
-    rows: SourceRow[]
-    issues: ImportIssue[]
-    questionFields: string[]
+    rows: readonly StudentImportSourceRow[]
+    questionFields: readonly string[]
   },
   resolution: {
     rows: ResolvedRow[]

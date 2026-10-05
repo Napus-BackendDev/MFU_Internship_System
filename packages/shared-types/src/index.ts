@@ -97,8 +97,43 @@ export const DEFAULT_REPORT_EXPORT_FIELDS = [
   'deadlineAt'
 ] as const satisfies readonly ReportExportField[]
 
-export const REPORT_EXPORT_FORMATS = ['csv'] as const
+export const REPORT_EXPORT_TYPES = ['assignments', 'studentDirectory'] as const
+export type ReportExportType = (typeof REPORT_EXPORT_TYPES)[number]
+
+export const REPORT_EXPORT_FORMATS = ['csv', 'xlsx'] as const
 export type ReportExportFormat = (typeof REPORT_EXPORT_FORMATS)[number]
+
+export type StudentDirectoryExportLocale = 'th' | 'en'
+
+export interface StudentDirectoryExportValues {
+  readonly studentId: string
+  readonly nameTh: string
+  readonly nameEn: string
+  readonly email: string
+  readonly schoolTh: string
+  readonly schoolEn: string
+  readonly programTh: string
+  readonly programEn: string
+  readonly courseDisplay: string
+  readonly academicYear: string | number
+  readonly academicYearEn: string | number
+  readonly semester: string
+  readonly semesterEn: string
+  readonly company: string
+  readonly companyAddress: string
+  readonly province: string
+  readonly advisorTh: string
+  readonly advisorEn: string
+  readonly evaluatorTh: string
+  readonly evaluatorEn: string
+  readonly evaluatorPositionTh: string
+  readonly evaluatorPositionEn: string
+  readonly evaluatorEmail: string
+  readonly statusTh: string
+  readonly statusEn: string
+  readonly hardSkillScore: string
+  readonly softSkillScore: string
+}
 
 export interface AccessScope {
   readonly tenant: boolean

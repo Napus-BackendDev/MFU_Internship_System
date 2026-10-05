@@ -25,6 +25,15 @@ function isDuplicateKeyError(exception: unknown): boolean {
   )
 }
 
+function isCastError(exception: unknown): boolean {
+  return (
+    typeof exception === 'object' &&
+    exception !== null &&
+    'name' in exception &&
+    exception.name === 'CastError'
+  )
+}
+
 function uploadLimitCode(exception: unknown): string | undefined {
   if (
     typeof exception === 'object' &&
@@ -97,6 +106,12 @@ export class ApiExceptionFilter implements ExceptionFilter {
       status = HttpStatus.CONFLICT
       code = 'DUPLICATE_RESOURCE'
       message = 'A record with the same unique identity already exists.'
+    } else if (isCastError(exception)) {
+      status = HttpStatus.NOT_FOUND
+      code = 'RESOURCE_NOT_FOUND'
+      message = 'The requested resource was not found.'
+    } else {
+      console.error('Unhandled API exception:', exception)
     }
 
     const body: ApiErrorBody = {

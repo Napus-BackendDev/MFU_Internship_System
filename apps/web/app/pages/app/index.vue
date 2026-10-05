@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type {
-  EnrichedStudentRow,
-  EvaluationCycleItem
+  EnrichedStudentRow
 } from '~/components/AdminStudentDirectory.vue'
 import {
   buildStudentEvaluationResult,
@@ -36,9 +35,8 @@ interface Overview {
 interface StudentItem {
   readonly id: string
   readonly studentId: string
-  readonly name: { readonly th: string; readonly en: string }
+  readonly name: string | { readonly th: string; readonly en: string }
   readonly email: string
-  readonly personalEmail?: string
   readonly schoolId: string
   readonly programId: string
   readonly academicTermId?: string
@@ -48,6 +46,10 @@ interface StudentItem {
   readonly academicYear?: number
   readonly admissionYear?: number
   readonly status: string
+  readonly directoryRelations?: {
+    readonly school?: SchoolItem
+    readonly program?: ProgramItem
+  }
 }
 
 interface SchoolItem {
@@ -267,8 +269,6 @@ async function loadStudentData(): Promise<void> {
 
     const [
       studentsRes,
-      schoolsRes,
-      programsRes,
       placementsRes,
       orgsRes,
       evaluatorsRes,
@@ -276,13 +276,11 @@ async function loadStudentData(): Promise<void> {
       docsRes
     ] = await Promise.all([
       api<{ items: StudentItem[] }>('/students', {
-        query: { studentId: currentStudentId, pageSize: 50 }
-      }),
-      api<{ items: SchoolItem[] }>('/academic/schools', {
-        query: { pageSize: 100 }
-      }),
-      api<{ items: ProgramItem[] }>('/academic/programs', {
-        query: { pageSize: 100 }
+        query: {
+          studentId: currentStudentId,
+          pageSize: 50,
+          includeDirectoryData: true
+        }
       }),
       loadAllPages(
         (page, pageSize) =>
@@ -319,12 +317,10 @@ async function loadStudentData(): Promise<void> {
     if (!studentProfile.value) throw new Error('STUDENT_NOT_FOUND')
 
     studentSchool.value =
-      schoolsRes.items.find((s) => s.id === studentProfile.value?.schoolId) ??
-      null
+      studentProfile.value.directoryRelations?.school ?? null
 
     studentProgram.value =
-      programsRes.items.find((p) => p.id === studentProfile.value?.programId) ??
-      null
+      studentProfile.value.directoryRelations?.program ?? null
 
     const matchingAssignments = assignmentsRes.items.filter(
       (assignment) =>
@@ -469,34 +465,10 @@ async function loadStudentData(): Promise<void> {
 }
 
 // Admin Data for Student Directory Table
-const adminCycles = ref<EvaluationCycleItem[]>([])
-const adminCycleLoadError = ref('')
-const adminDataLoading = ref(false)
 const adminDirectoryRefreshVersion = ref(0)
 
-async function loadAdminDirectoryData(): Promise<void> {
-  if (isStudent.value) return
-  adminDataLoading.value = true
-  adminCycleLoadError.value = ''
-  try {
-    const cyclesRes = await loadItemsOrEmpty(
-      () =>
-        loadAllPages((page, pageSize) =>
-          api<PaginatedItems<EvaluationCycleItem>>('/evaluation-cycles', {
-            query: { page, pageSize }
-          })
-        ),
-      () => {
-        adminCycleLoadError.value = 'cycle_load_failed'
-      }
-    )
-    adminCycles.value = cyclesRes.items
-  } catch (err) {
-    adminCycleLoadError.value = 'cycle_load_failed'
-    console.error('Failed to load admin directory data:', err)
-  } finally {
-    adminDataLoading.value = false
-  }
+function loadAdminDirectoryData(): void {
+  adminDirectoryRefreshVersion.value += 1
 }
 
 function refreshAllAdmin(): void {
@@ -816,8 +788,14 @@ const activeDocContext = computed<TargetStudentDocContext>(() => {
   const endsAt = formatThaiDate(placement?.endsAt, '-')
   return {
     studentId: sId || '-',
-    nameTh: profile?.name?.th ?? '-',
-    nameEn: profile?.name?.en ?? '-',
+    nameTh:
+      typeof profile?.name === 'string'
+        ? profile.name
+        : profile?.name?.th ?? profile?.name?.en ?? '-',
+    nameEn:
+      typeof profile?.name === 'string'
+        ? profile.name
+        : profile?.name?.en ?? profile?.name?.th ?? '-',
     email: profile?.email ?? '-',
     schoolTh: school?.name?.th ?? '-',
     schoolEn: school?.name?.en ?? '-',
@@ -949,7 +927,7 @@ function _downloadDocumentAsDoc(type: 'certification' | 'referral'): void {
           มหาวิทยาลัยแม่ฟ้าหลวง ใคร่ขอส่งตัวนักศึกษาต่อไปนี้ เข้าฝึกปฏิบัติงานวิชาชีพ ณ สถานประกอบการของท่าน:
         </p>
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; margin: 20px 40px;">
-          <p style="margin: 4px 0;"><strong>ชื่อ-สกุล:</strong> ${doc.nameTh} (${doc.nameEn})</p>
+          <p style="margin: 4px 0;"><strong>ชื่อ-สกุล:</strong> ${doc.nameTh || doc.nameEn}</p>
           <p style="margin: 4px 0;"><strong>รหัสนักศึกษา:</strong> ${doc.studentId}</p>
           <p style="margin: 4px 0;"><strong>สำนักวิชา / หลักสูตร:</strong> ${doc.schoolTh} (${doc.programTh})</p>
           <p style="margin: 4px 0;"><strong>ช่วงเวลาฝึกปฏิบัติงาน:</strong> ${doc.startsAtText} ถึง ${doc.endsAtText} (รวมทั้งสิ้น ${doc.totalHours} ชั่วโมง)</p>
@@ -1412,10 +1390,15 @@ const _adminCards = computed(() => [
                 </span>
               </div>
               <h1 class="text-2xl sm:text-3xl font-bold text-highlighted">
-                {{ studentProfile?.name.th ?? '-' }}
+                {{
+                  typeof studentProfile?.name === 'string'
+                    ? studentProfile?.name
+                    : studentProfile?.name?.th ??
+                      studentProfile?.name?.en ??
+                      '-'
+                }}
               </h1>
               <p class="text-sm text-muted">
-                {{ studentProfile?.name.en ?? '-' }} ·
                 {{ studentProfile?.email ?? '-' }}
               </p>
             </div>
@@ -1780,7 +1763,7 @@ const _adminCards = computed(() => [
             color="neutral"
             icon="i-lucide-refresh-cw"
             label="รีเฟรช"
-            :loading="overviewPending || adminDataLoading"
+            :loading="overviewPending"
             variant="outline"
             @click="refreshAllAdmin"
           />
@@ -1790,8 +1773,6 @@ const _adminCards = computed(() => [
       <!-- ทะเบียนนักศึกษาฝึกงานและสถานะการประเมิน พร้อมตัวกรองปี/ภาคเรียน และส่งออก Excel 2 ภาษา -->
       <section aria-label="ทะเบียนนักศึกษาและผลประเมิน">
         <AdminStudentDirectory
-          :cycles="adminCycles"
-          :cycle-load-error="adminCycleLoadError"
           :refresh-version="adminDirectoryRefreshVersion"
           @refresh="loadAdminDirectoryData"
           @open-document="handleAdminOpenDocument"
@@ -2347,9 +2328,7 @@ const _adminCards = computed(() => [
               class="p-4 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1.5 ml-6"
             >
               <p>
-                <strong>ชื่อ-สกุล:</strong> {{ activeDocContext.nameTh }} ({{
-                  activeDocContext.nameEn
-                }})
+                <strong>ชื่อ-สกุล:</strong> {{ activeDocContext.nameTh || activeDocContext.nameEn }}
               </p>
               <p>
                 <strong>รหัสนักศึกษา:</strong> {{ activeDocContext.studentId }}

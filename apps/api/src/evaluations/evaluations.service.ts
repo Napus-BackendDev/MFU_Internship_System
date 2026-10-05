@@ -30,6 +30,7 @@ import {
 import { lockActiveAcademicScope } from '../academic/academic-reference-lock.js'
 import { actorHasPermission } from '../auth/permission-map.js'
 import { paginate, type PaginationInput } from '../common/pagination.js'
+import { runWithTransaction } from '../common/mongo-transaction.js'
 import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
 import { boundedSearch } from '../common/search.js'
 import { assertActorScope, scopeFilter } from '../common/scope.js'
@@ -812,10 +813,14 @@ export class EvaluationsService {
             code: 'ACTIVE_ACADEMIC_TERM_REQUIRED'
           })
         }
+        const termVersionFilter =
+          term.__v === undefined || term.__v === 0
+            ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+            : { __v: term.__v }
         const termLock = await this.academicTerms.updateOne(
           {
             _id: term._id,
-            __v: term.__v,
+            ...termVersionFilter,
             status: { $ne: 'archived' }
           },
           { $inc: { __v: 1 } },
@@ -1182,10 +1187,14 @@ export class EvaluationsService {
       if (!term) {
         throw new ConflictException({ code: 'ACTIVE_ACADEMIC_TERM_REQUIRED' })
       }
+      const termVersionFilter =
+        term.__v === undefined || term.__v === 0
+          ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+          : { __v: term.__v }
       const termLock = await this.academicTerms.updateOne(
         {
           _id: term._id,
-          __v: term.__v,
+          ...termVersionFilter,
           status: { $ne: 'archived' }
         },
         { $inc: { __v: 1 } },
@@ -1195,11 +1204,15 @@ export class EvaluationsService {
         throw new ConflictException({ code: 'ACADEMIC_TERM_CHANGED' })
       }
 
+      const cycleVersionFilter =
+        cycle.__v === undefined || cycle.__v === 0
+          ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+          : { __v: cycle.__v }
       activated = await this.cycles
         .findOneAndUpdate(
           {
             $and: [
-              { _id: cycle.id, status: 'draft', __v: cycle.__v ?? 0 },
+              { _id: cycle.id, status: 'draft', ...cycleVersionFilter },
               cycleScope
             ]
           },
@@ -1260,6 +1273,10 @@ export class EvaluationsService {
         return
       }
 
+      const cycleVersionFilter =
+        cycle.__v === undefined || cycle.__v === 0
+          ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+          : { __v: cycle.__v }
       const update = await this.cycles
         .findOneAndUpdate(
           {
@@ -1267,7 +1284,7 @@ export class EvaluationsService {
               {
                 _id: cycle._id,
                 status: cycle.status,
-                __v: cycle.__v ?? 0
+                ...cycleVersionFilter
               },
               cycleScope
             ]
@@ -1714,10 +1731,14 @@ export class EvaluationsService {
           throw new ConflictException({ code: 'ASSIGNMENT_ALREADY_EXISTS' })
         }
 
+        const cycleVersionFilter =
+          cycle.__v === undefined || cycle.__v === 0
+            ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+            : { __v: cycle.__v }
         const cycleLock = await this.cycles.updateOne(
           {
             _id: cycle._id,
-            __v: cycle.__v ?? 0,
+            ...cycleVersionFilter,
             status: 'active',
             opensAt: { $lte: now },
             closesAt: { $gt: now }
@@ -1825,61 +1846,55 @@ export class EvaluationsService {
     input: { answers: Readonly<Record<string, unknown>>; revision: number }
   ): Promise<unknown> {
     await this.findAssignment(actor, assignmentId, true)
-    let savedDraft: HydratedDocument<EvaluationDraftRecord> | undefined
     try {
-      const session = await this.connection.startSession()
-      try {
-        await session.withTransaction(async () => {
-          const scope = await this.assignmentScope(actor, true)
-          const now = new Date()
-          const assignmentQuery = assignmentIdWithinScope(assignmentId, scope)
-          const assignment = await this.assignments
-            .findOne({
-              ...assignmentQuery,
-              status: { $in: ['pending', 'inProgress'] },
-              deadlineAt: { $gt: now }
-            })
-            .session(session)
-            .exec()
-          if (!assignment) {
-            throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
-          }
-          await this.assertCycleWritable(assignment.cycleId, now, session)
-          validateDraftAnswers(assignment, input.answers)
-          const draft = await this.drafts
-            .findOneAndUpdate(
-              { assignmentId, revision: input.revision },
-              {
-                $set: { answers: input.answers, updatedBy: actor.id },
-                $setOnInsert: { assignmentId },
-                $inc: { revision: 1 }
-              },
-              {
-                returnDocument: 'after',
-                runValidators: true,
-                upsert: true,
-                session
-              }
-            )
-            .exec()
-          if (!draft) throw new ConflictException({ code: 'VERSION_CONFLICT' })
-          const updated = await this.assignments.updateOne(
+      const savedDraft = await runWithTransaction(this.connection, async (session) => {
+        const scope = await this.assignmentScope(actor, true)
+        const now = new Date()
+        const assignmentQuery = assignmentIdWithinScope(assignmentId, scope)
+        const assignment = await this.assignments
+          .findOne({
+            ...assignmentQuery,
+            status: { $in: ['pending', 'inProgress'] },
+            deadlineAt: { $gt: now }
+          })
+          .session(session ?? null)
+          .exec()
+        if (!assignment) {
+          throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
+        }
+        await this.assertCycleWritable(assignment.cycleId, now, session)
+        validateDraftAnswers(assignment, input.answers)
+        const draft = await this.drafts
+          .findOneAndUpdate(
+            { assignmentId, revision: input.revision },
             {
-              ...assignmentQuery,
-              status: { $in: ['pending', 'inProgress'] },
-              deadlineAt: { $gt: now }
+              $set: { answers: input.answers, updatedBy: actor.id },
+              $setOnInsert: { assignmentId },
+              $inc: { revision: 1 }
             },
-            { $set: { status: 'inProgress' } },
-            { session }
+            {
+              returnDocument: 'after',
+              runValidators: true,
+              upsert: true,
+              session: session ?? undefined
+            }
           )
-          if (updated.matchedCount !== 1) {
-            throw new ConflictException({ code: 'VERSION_CONFLICT' })
-          }
-          savedDraft = draft
-        })
-      } finally {
-        await session.endSession()
-      }
+          .exec()
+        if (!draft) throw new ConflictException({ code: 'VERSION_CONFLICT' })
+        const updated = await this.assignments.updateOne(
+          {
+            ...assignmentQuery,
+            status: { $in: ['pending', 'inProgress'] },
+            deadlineAt: { $gt: now }
+          },
+          { $set: { status: 'inProgress' } },
+          session ? { session } : {}
+        )
+        if (updated.matchedCount !== 1) {
+          throw new ConflictException({ code: 'VERSION_CONFLICT' })
+        }
+        return draft
+      })
       if (!savedDraft)
         throw new ConflictException({ code: 'DRAFT_SAVE_FAILED' })
       return savedDraft.toJSON()
@@ -1919,9 +1934,8 @@ export class EvaluationsService {
     }
 
     let submitted: HydratedDocument<EvaluationRecord> | undefined
-    const session = await this.connection.startSession()
     try {
-      await session.withTransaction(async () => {
+      submitted = await runWithTransaction(this.connection, async (session) => {
         const scope = await this.assignmentScope(actor, true)
         const now = new Date()
         const assignmentQuery = assignmentIdWithinScope(assignmentId, scope)
@@ -1931,7 +1945,7 @@ export class EvaluationsService {
             status: { $in: ['pending', 'inProgress'] },
             deadlineAt: { $gt: now }
           })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!assignment) {
           throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
@@ -1959,7 +1973,7 @@ export class EvaluationsService {
               requestHash: payloadHash
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         const submittedDoc = created[0]
         if (!submittedDoc) {
@@ -1972,7 +1986,7 @@ export class EvaluationsService {
             deadlineAt: { $gt: now }
           },
           { $set: { status: 'submitted' } },
-          { session }
+          session ? { session } : {}
         )
         if (result.modifiedCount !== 1) {
           throw new ConflictException({ code: 'VERSION_CONFLICT' })
@@ -1988,7 +2002,7 @@ export class EvaluationsService {
             })
           }
         }
-        await this.drafts.deleteOne({ assignmentId }, { session })
+        await this.drafts.deleteOne({ assignmentId }, session ? { session } : {})
         await this.auditService.record(
           {
             requestId,
@@ -2013,7 +2027,7 @@ export class EvaluationsService {
           },
           session
         )
-        submitted = submittedDoc
+        return submittedDoc
       })
     } catch (error: unknown) {
       let retry: HydratedDocument<EvaluationRecord> | null
@@ -2034,8 +2048,6 @@ export class EvaluationsService {
         throw new ConflictException({ code: 'EVALUATION_ALREADY_SUBMITTED' })
       }
       throw error
-    } finally {
-      await session.endSession()
     }
     if (!submitted) throw new ConflictException({ code: 'SUBMIT_FAILED' })
     return submitted.toJSON()
@@ -2053,6 +2065,9 @@ export class EvaluationsService {
     id: string,
     mutation = false
   ): Promise<HydratedDocument<EvaluationAssignmentRecord>> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    }
     const scope = await this.assignmentScope(actor, mutation)
     const assignment = await this.assignments
       .findOne(assignmentIdWithinScope(id, scope))
@@ -2064,7 +2079,7 @@ export class EvaluationsService {
   private async assertCycleWritable(
     cycleId: string,
     at: Date,
-    session: ClientSession
+    session?: ClientSession
   ): Promise<void> {
     const cycle = await this.cycles
       .findOne({
@@ -2073,19 +2088,23 @@ export class EvaluationsService {
         opensAt: { $lte: at },
         closesAt: { $gt: at }
       })
-      .session(session)
+      .session(session ?? null)
       .exec()
     if (!cycle) throw new ConflictException({ code: 'CYCLE_CLOSED' })
+    const cycleVersionFilter =
+      cycle.__v === undefined || cycle.__v === 0
+        ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+        : { __v: cycle.__v }
     const cycleLock = await this.cycles.updateOne(
       {
         _id: cycle._id,
-        __v: cycle.__v ?? 0,
+        ...cycleVersionFilter,
         status: 'active',
         opensAt: { $lte: at },
         closesAt: { $gt: at }
       },
       { $inc: { __v: 1 } },
-      { session }
+      session ? { session } : {}
     )
     if (cycleLock.matchedCount !== 1) {
       throw new ConflictException({ code: 'CYCLE_CLOSED' })

@@ -1,5 +1,8 @@
 import type { AppEnvironment } from '@internship/config'
-import type { ReportExportField } from '@internship/shared-types'
+import type {
+  ReportExportField,
+  StudentDirectoryExportValues
+} from '@internship/shared-types'
 import {
   DeleteObjectCommand,
   PutObjectCommand,
@@ -12,6 +15,7 @@ import type { Logger } from 'pino'
 
 import type { WorkerModels } from './models.js'
 import { renderReportExportCsv } from './report-export.csv.js'
+import { renderStudentDirectoryExportXlsx } from './student-directory-export.xlsx.js'
 
 export interface ReportExportJob {
   readonly exportId: string
@@ -21,7 +25,7 @@ const EXPORT_LEASE_MS = 5 * 60 * 1000
 const EXPORT_RECOVERY_BATCH_SIZE = 100
 
 interface ExportSnapshotRow {
-  readonly values: Readonly<Record<string, string>>
+  readonly values: Readonly<Record<string, string | number>>
 }
 
 export class ReportExportProcessor {
@@ -74,9 +78,6 @@ export class ReportExportProcessor {
     leaseHeartbeat.unref?.()
 
     try {
-      if (reportExport.format !== 'csv') {
-        throw new Error('UNSUPPORTED_EXPORT_FORMAT')
-      }
       const rows = await this.models.ReportExportSnapshot.find({
         exportId: job.data.exportId
       })
@@ -88,17 +89,44 @@ export class ReportExportProcessor {
         throw new Error('EXPORT_SNAPSHOT_INCOMPLETE')
       }
 
-      const fields = reportExport.fields as ReportExportField[]
-      const bytes = Buffer.from(renderReportExportCsv(fields, rows), 'utf8')
+      let bytes: Buffer
+      let extension: 'csv' | 'xlsx'
+      let contentType: string
+      if (reportExport.reportType === 'studentDirectory') {
+        if (reportExport.format !== 'xlsx' || !reportExport.locale) {
+          throw new Error('INVALID_STUDENT_DIRECTORY_EXPORT_FORMAT')
+        }
+        bytes = renderStudentDirectoryExportXlsx(
+          reportExport.locale,
+          rows.map((row) => ({
+            values: row.values as unknown as StudentDirectoryExportValues
+          }))
+        )
+        extension = 'xlsx'
+        contentType =
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      } else {
+        if (reportExport.format !== 'csv') {
+          throw new Error('UNSUPPORTED_EXPORT_FORMAT')
+        }
+        const fields = reportExport.fields as ReportExportField[]
+        bytes = Buffer.from(renderReportExportCsv(fields, rows), 'utf8')
+        extension = 'csv'
+        contentType = 'text/csv; charset=utf-8'
+      }
       const sha256 = createHash('sha256').update(bytes).digest('hex')
-      const objectKey = `report-exports/${job.data.exportId}/${sha256}.csv`
+      const objectKey = `report-exports/${job.data.exportId}/${sha256}.${extension}`
+      const filename =
+        reportExport.reportType === 'studentDirectory'
+          ? `MFU_Internship_Report_${reportExport.locale === 'th' ? 'TH' : 'EN'}_${reportExport.snapshotAt.toISOString().slice(0, 10).replaceAll('-', '')}.xlsx`
+          : `report-${job.data.exportId}.csv`
       await this.s3.send(
         new PutObjectCommand({
           Bucket: this.environment.S3_BUCKET,
           Key: objectKey,
           Body: bytes,
-          ContentType: 'text/csv; charset=utf-8',
-          ContentDisposition: `attachment; filename="report-${job.data.exportId}.csv"`,
+          ContentType: contentType,
+          ContentDisposition: `attachment; filename="${filename}"`,
           Metadata: { sha256 }
         })
       )
@@ -215,7 +243,7 @@ export class ReportExportProcessor {
             await existingJob.remove()
           }
           await this.exportQueue?.add(
-            'generate-csv',
+            'generate-report',
             { exportId: record._id.toString() },
             {
               attempts: 3,

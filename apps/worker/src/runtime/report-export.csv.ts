@@ -21,14 +21,18 @@ function escapeCsvCell(value: string): string {
 
 export function renderReportExportCsv(
   fields: readonly ReportExportField[],
-  rows: readonly { readonly values: Readonly<Record<string, string>> }[]
+  rows: readonly {
+    readonly values: Readonly<Record<string, string | number>>
+  }[]
 ): string {
   const lines = [
     fields.map((field) => escapeCsvCell(FIELD_LABELS[field])).join(',')
   ]
   for (const row of rows) {
     lines.push(
-      fields.map((field) => escapeCsvCell(row.values[field] ?? '')).join(',')
+      fields
+        .map((field) => escapeCsvCell(String(row.values[field] ?? '')))
+        .join(',')
     )
   }
   return `\uFEFF${lines.join('\r\n')}\r\n`

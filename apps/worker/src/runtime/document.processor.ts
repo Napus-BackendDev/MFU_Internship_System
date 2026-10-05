@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import fs from 'node:fs'
 
 import type { AppEnvironment } from '@internship/config'
 import {
@@ -116,62 +117,83 @@ export class DocumentProcessor {
         snapshot.template.schemaVersion,
         snapshot.template.placeholders
       )
-      if (snapshot.template.fontAssets.length !== 1) {
+      let fontBytes: Uint8Array
+      if (snapshot.template.fontAssets.length === 1) {
+        const fontAsset = snapshot.template.fontAssets[0]
+        if (!fontAsset) throw new Error('FONT_ASSET_REQUIRED')
+        const fontResponse = await this.s3.send(
+          new GetObjectCommand({
+            Bucket: this.environment.S3_BUCKET,
+            Key: fontAsset.key
+          })
+        )
+        if (!fontResponse.Body) throw new Error('FONT_ASSET_NOT_FOUND')
+        fontBytes = await fontResponse.Body.transformToByteArray()
+        if (
+          createHash('sha256').update(fontBytes).digest('hex') !==
+          fontAsset.sha256
+        ) {
+          throw new Error('FONT_ASSET_CHECKSUM_MISMATCH')
+        }
+      } else if (snapshot.template.fontAssets.length === 0) {
+        try {
+          const fontResponse = await this.s3.send(
+            new GetObjectCommand({
+              Bucket: this.environment.S3_BUCKET,
+              Key: 'approved-fonts/tahoma.ttf'
+            })
+          )
+          if (fontResponse.Body) {
+            fontBytes = await fontResponse.Body.transformToByteArray()
+          } else {
+            throw new Error('FONT_NOT_IN_S3')
+          }
+        } catch {
+          const localFallback = new URL('../../../assets/tahoma.ttf', import.meta.url)
+          fontBytes = await fs.promises.readFile(localFallback)
+        }
+      } else {
         throw new Error('DOCUMENT_FONT_MAPPING_UNSUPPORTED')
-      }
-      const fontAsset = snapshot.template.fontAssets[0]
-      if (!fontAsset) throw new Error('FONT_ASSET_REQUIRED')
-      const fontResponse = await this.s3.send(
-        new GetObjectCommand({
-          Bucket: this.environment.S3_BUCKET,
-          Key: fontAsset.key
-        })
-      )
-      if (!fontResponse.Body) throw new Error('FONT_ASSET_NOT_FOUND')
-      const fontBytes = await fontResponse.Body.transformToByteArray()
-      if (
-        createHash('sha256').update(fontBytes).digest('hex') !==
-        fontAsset.sha256
-      ) {
-        throw new Error('FONT_ASSET_CHECKSUM_MISMATCH')
       }
 
       const imageBytes = new Map<string, Uint8Array>()
       if (snapshot.template.schemaVersion === 2) {
         const requiredImageAssets = collectImageAssetRequirements(canonical)
         const registeredImageAssets = snapshot.template.imageAssets ?? []
-        if (
-          requiredImageAssets.size !== registeredImageAssets.length ||
-          new Set(registeredImageAssets.map((asset) => asset.key)).size !==
-            registeredImageAssets.length
-        ) {
-          throw new Error('DOCUMENT_IMAGE_ASSET_SOURCE_INVALID')
-        }
-        for (const asset of registeredImageAssets) {
-          if (requiredImageAssets.get(asset.key) !== asset.assetType) {
+        if (requiredImageAssets.size > 0) {
+          if (
+            requiredImageAssets.size !== registeredImageAssets.length ||
+            new Set(registeredImageAssets.map((asset) => asset.key)).size !==
+              registeredImageAssets.length
+          ) {
             throw new Error('DOCUMENT_IMAGE_ASSET_SOURCE_INVALID')
           }
-        }
-        const images = await Promise.all(
-          registeredImageAssets.map(async (asset) => {
-            const response = await this.s3.send(
-              new GetObjectCommand({
-                Bucket: this.environment.S3_BUCKET,
-                Key: asset.key
-              })
-            )
-            if (!response.Body)
-              throw new Error('DOCUMENT_IMAGE_ASSET_NOT_FOUND')
-            const bytes = await response.Body.transformToByteArray()
-            if (
-              createHash('sha256').update(bytes).digest('hex') !== asset.sha256
-            ) {
-              throw new Error('DOCUMENT_IMAGE_ASSET_CHECKSUM_MISMATCH')
+          for (const asset of registeredImageAssets) {
+            if (requiredImageAssets.get(asset.key) !== asset.assetType) {
+              throw new Error('DOCUMENT_IMAGE_ASSET_SOURCE_INVALID')
             }
-            return [asset.key, bytes] as const
-          })
-        )
-        for (const [key, bytes] of images) imageBytes.set(key, bytes)
+          }
+          const images = await Promise.all(
+            registeredImageAssets.map(async (asset) => {
+              const response = await this.s3.send(
+                new GetObjectCommand({
+                  Bucket: this.environment.S3_BUCKET,
+                  Key: asset.key
+                })
+              )
+              if (!response.Body)
+                throw new Error('DOCUMENT_IMAGE_ASSET_NOT_FOUND')
+              const bytes = await response.Body.transformToByteArray()
+              if (
+                createHash('sha256').update(bytes).digest('hex') !== asset.sha256
+              ) {
+                throw new Error('DOCUMENT_IMAGE_ASSET_CHECKSUM_MISMATCH')
+              }
+              return [asset.key, bytes] as const
+            })
+          )
+          for (const [key, bytes] of images) imageBytes.set(key, bytes)
+        }
       } else if ((snapshot.template.imageAssets?.length ?? 0) > 0) {
         throw new Error('DOCUMENT_IMAGE_ASSET_SOURCE_INVALID')
       }

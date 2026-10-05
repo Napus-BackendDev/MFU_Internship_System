@@ -2261,6 +2261,60 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '409':
           $ref: '#/components/responses/Conflict'
+  /document-templates/{templateId}/activate:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ObjectId'
+    post:
+      tags: [Documents]
+      operationId: activateDocumentTemplate
+      summary: Activate a document template as the primary active template for its document type
+      description: Activates this document template and archives any other active template of the same document type, enforcing strictly one active template per type.
+      x-permissions: [documentTemplates.manage]
+      responses:
+        '200':
+          description: Template activated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentTemplate'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /document-templates/{templateId}/deactivate:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ObjectId'
+    post:
+      tags: [Documents]
+      operationId: deactivateDocumentTemplate
+      summary: Deactivate a document template
+      description: Archives this document template.
+      x-permissions: [documentTemplates.manage]
+      responses:
+        '200':
+          description: Template deactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentTemplate'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /document-templates/{templateId}/versions:
     parameters:
       - name: templateId
@@ -2553,7 +2607,7 @@ paths:
     post:
       tags: [Reports]
       operationId: createReportExport
-      summary: Request a scoped asynchronous CSV export
+      summary: Request a scoped asynchronous report export
       x-permissions: [exports.create]
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -3509,6 +3563,8 @@ components:
         deadlineAt:
           type: string
           format: date-time
+        categoryScores:
+          $ref: '#/components/schemas/EvaluationCategoryScores'
         evaluator:
           $ref: '#/components/schemas/StudentDirectoryEvaluator'
     StudentDirectoryEvaluator:
@@ -4501,6 +4557,26 @@ components:
           type: [string, 'null']
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        assignment:
+          type: object
+          properties:
+            id:
+              type: string
+            studentId:
+              type: string
+            studentName:
+              type: string
+            evaluatorName:
+              type: string
+            evaluatorEmail:
+              type: string
+            company:
+              type: string
+            status:
+              type: string
+            deadlineAt:
+              type: [string, 'null']
+              format: date-time
     DeliveryList:
       type: object
       required: [items, meta]
@@ -4952,9 +5028,21 @@ components:
           additionalProperties:
             type: number
     ReportExportRequest:
+      oneOf:
+        - $ref: '#/components/schemas/AssignmentReportExportRequest'
+        - $ref: '#/components/schemas/StudentDirectoryReportExportRequest'
+      discriminator:
+        propertyName: reportType
+        mapping:
+          assignments: '#/components/schemas/AssignmentReportExportRequest'
+          studentDirectory: '#/components/schemas/StudentDirectoryReportExportRequest'
+    AssignmentReportExportRequest:
       type: object
       additionalProperties: false
       properties:
+        reportType:
+          type: string
+          enum: [assignments]
         filters:
           type: object
           additionalProperties: false
@@ -4986,6 +5074,50 @@ components:
           type: string
           enum: [csv]
           default: csv
+    StudentDirectoryReportExportRequest:
+      type: object
+      additionalProperties: false
+      required: [reportType, locale, format]
+      properties:
+        reportType:
+          type: string
+          enum: [studentDirectory]
+        filters:
+          type: object
+          additionalProperties: false
+          properties:
+            search:
+              type: string
+              maxLength: 100
+            schoolId:
+              $ref: '#/components/schemas/ObjectId'
+            cycleId:
+              $ref: '#/components/schemas/ObjectId'
+            academicYear:
+              type: integer
+              minimum: 2000
+              maximum: 3000
+            semester:
+              type: string
+              minLength: 1
+              maxLength: 40
+            evaluationStatus:
+              type: string
+              enum:
+                - awaiting_evaluator
+                - awaiting_response
+                - submitted
+                - email_error
+                - pending
+                - inProgress
+                - expired
+                - assignment_ambiguous
+        locale:
+          type: string
+          enum: [th, en]
+        format:
+          type: string
+          enum: [xlsx]
     ReportExport:
       type: object
       required: [id, reportType, filters, fields, format, status, rowCount, snapshotAt, expiresAt]
@@ -4994,7 +5126,10 @@ components:
           $ref: '#/components/schemas/ObjectId'
         reportType:
           type: string
-          enum: [assignments]
+          enum: [assignments, studentDirectory]
+        locale:
+          type: string
+          enum: [th, en]
         filters:
           type: object
           additionalProperties: true
@@ -5014,7 +5149,7 @@ components:
               - deadlineAt
         format:
           type: string
-          enum: [csv]
+          enum: [csv, xlsx]
         status:
           type: string
           enum: [queued, processing, ready, failed, expired]

@@ -173,7 +173,13 @@ const reportExportSchema = new Schema(
     requestHash: { type: String, required: true },
     filters: { type: Schema.Types.Mixed, required: true },
     fields: { type: [String], required: true },
-    format: { type: String, enum: ['csv'], required: true },
+    reportType: {
+      type: String,
+      enum: ['assignments', 'studentDirectory'],
+      default: 'assignments'
+    },
+    locale: { type: String, enum: ['th', 'en'] },
+    format: { type: String, enum: ['csv', 'xlsx'], required: true },
     status: {
       type: String,
       enum: ['queued', 'processing', 'ready', 'failed', 'expired'],

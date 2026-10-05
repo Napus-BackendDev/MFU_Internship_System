@@ -1,6 +1,17 @@
 <script setup lang="ts">
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
+interface AssignmentDetails {
+  readonly id?: string
+  readonly studentId?: string
+  readonly studentName?: string
+  readonly evaluatorName?: string
+  readonly evaluatorEmail?: string
+  readonly company?: string
+  readonly status?: string
+  readonly deadlineAt?: string | null
+}
+
 interface Delivery {
   readonly id: string
   readonly recipientMasked: string
@@ -8,6 +19,7 @@ interface Delivery {
   readonly status: 'queued' | 'sending' | 'sent' | 'failed' | 'uncertain'
   readonly attempts: number
   readonly lastErrorCode?: string
+  readonly assignment?: AssignmentDetails
 }
 interface DeliveryPage {
   readonly items: readonly Delivery[]
@@ -19,6 +31,14 @@ const searchQuery = ref('')
 const statusFilter = ref<
   'all' | 'sent' | 'queued' | 'sending' | 'failed' | 'uncertain'
 >('all')
+const deliveryStatusOptions = [
+  { value: 'all', label: 'ทุกสถานะ' },
+  { value: 'sent', label: 'ส่งสำเร็จ (Sent)' },
+  { value: 'queued', label: 'รอส่ง / อยู่ในคิว (Queued)' },
+  { value: 'sending', label: 'กำลังส่ง (Sending)' },
+  { value: 'failed', label: 'ส่งล้มเหลว (Failed)' },
+  { value: 'uncertain', label: 'ผลส่งไม่แน่ชัด (Uncertain)' }
+]
 const page = ref(1)
 const pageSize = ref(5)
 
@@ -42,7 +62,11 @@ const filteredItems = computed(() => {
   return items.filter(
     (item) =>
       item.recipientMasked.toLowerCase().includes(q) ||
-      item.assignmentId.toLowerCase().includes(q)
+      item.assignmentId.toLowerCase().includes(q) ||
+      item.assignment?.studentName?.toLowerCase().includes(q) ||
+      item.assignment?.studentId?.toLowerCase().includes(q) ||
+      item.assignment?.evaluatorName?.toLowerCase().includes(q) ||
+      item.assignment?.company?.toLowerCase().includes(q)
   )
 })
 
@@ -127,11 +151,11 @@ async function retry(id: string): Promise<void> {
       <div class="flex flex-col gap-3 md:flex-row md:items-center">
         <!-- Live Search Input with Clear Button -->
         <div class="relative flex-1">
-          <UInput
+            <UInput
             v-model="searchQuery"
             class="w-full"
             icon="i-lucide-search"
-            placeholder="ค้นหาอีเมลที่ปกปิด หรือ Assignment ID..."
+            placeholder="ค้นหาชื่อนักศึกษา, รหัส, ผู้ประเมิน, บริษัท, อีเมล..."
             size="md"
           >
             <template #trailing>
@@ -155,18 +179,12 @@ async function retry(id: string): Promise<void> {
             class="text-xs font-semibold text-muted whitespace-nowrap"
             >สถานะส่งเมล:</label
           >
-          <select
-            id="delivery-status-filter"
+          <SearchableSelect
             v-model="statusFilter"
-            class="rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary font-medium"
-          >
-            <option value="all">ทุกสถานะ</option>
-            <option value="sent">ส่งสำเร็จ (Sent)</option>
-            <option value="queued">รอส่ง / อยู่ในคิว (Queued)</option>
-            <option value="sending">กำลังส่ง (Sending)</option>
-            <option value="failed">ส่งล้มเหลว (Failed)</option>
-            <option value="uncertain">ผลส่งไม่แน่ชัด (Uncertain)</option>
-          </select>
+            :options="deliveryStatusOptions"
+            search-placeholder="ค้นหาสถานะส่งเมล…"
+            aria-label="สถานะส่งเมล"
+          />
         </div>
       </div>
 
@@ -205,7 +223,7 @@ async function retry(id: string): Promise<void> {
           <thead>
             <tr>
               <th>ผู้รับ</th>
-              <th>Assignment</th>
+              <th>ข้อมูลแบบประเมิน (Assignment)</th>
               <th>สถานะ</th>
               <th>Attempts</th>
               <th>Error / Action</th>
@@ -214,7 +232,60 @@ async function retry(id: string): Promise<void> {
           <tbody>
             <tr v-for="item in filteredItems" :key="item.id">
               <td>{{ item.recipientMasked }}</td>
-              <td class="font-mono text-xs">{{ item.assignmentId }}</td>
+              <td class="py-2.5">
+                <div v-if="item.assignment" class="space-y-1">
+                  <!-- ข้อมูลนักศึกษา -->
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span
+                      v-if="item.assignment.studentId"
+                      class="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-mono font-bold bg-primary/10 text-primary border border-primary/20"
+                    >
+                      {{ item.assignment.studentId }}
+                    </span>
+                    <span class="font-semibold text-highlighted text-xs">
+                      {{ item.assignment.studentName || 'ไม่ระบุชื่อ' }}
+                    </span>
+                  </div>
+
+                  <!-- สถานประกอบการ & ผู้ประเมิน -->
+                  <div
+                    v-if="item.assignment.company || item.assignment.evaluatorName"
+                    class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted"
+                  >
+                    <span
+                      v-if="item.assignment.company"
+                      class="inline-flex items-center gap-1"
+                      title="สถานประกอบการ"
+                    >
+                      <UIcon
+                        name="i-lucide-building-2"
+                        class="size-3 text-muted shrink-0"
+                      />
+                      <span>{{ item.assignment.company }}</span>
+                    </span>
+                    <span
+                      v-if="item.assignment.evaluatorName"
+                      class="inline-flex items-center gap-1"
+                      title="ผู้ประเมิน"
+                    >
+                      <UIcon
+                        name="i-lucide-user-check"
+                        class="size-3 text-muted shrink-0"
+                      />
+                      <span>{{ item.assignment.evaluatorName }}</span>
+                    </span>
+                  </div>
+
+                  <!-- รหัส Assignment ID ทางเทคนิค -->
+                  <div class="text-[10px] text-muted/60 font-mono">
+                    ID: {{ item.assignmentId }}
+                  </div>
+                </div>
+
+                <div v-else class="font-mono text-xs text-muted">
+                  {{ item.assignmentId }}
+                </div>
+              </td>
               <td>
                 <UBadge
                   :color="

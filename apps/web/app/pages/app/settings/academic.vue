@@ -172,6 +172,20 @@ const schoolMap = computed(() => {
   return map
 })
 
+// Program lookup map
+const programMap = computed(() => {
+  const map = new Map<string, Program>()
+  for (const p of programsData.value?.items ?? []) {
+    map.set(p.id, p)
+  }
+  return map
+})
+
+function getSingleProgram(course: Course): Program | undefined {
+  const id = course.programIds[0]
+  return id ? programMap.value.get(id) : undefined
+}
+
 // Filtered Schools
 const filteredSchools = computed(() => {
   let list = schoolsData.value?.items ?? []
@@ -1137,22 +1151,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
               </template>
             </UInput>
           </div>
-
-          <div class="flex items-center gap-2">
-            <label
-              for="school-status-filter"
-              class="text-xs font-semibold text-muted whitespace-nowrap"
-              >สถานะ:</label
-            >
-            <select
-              id="school-status-filter"
-              v-model="schoolStatusFilter"
-              class="rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary font-medium"
-            >
-              <option value="all">ทุกสถานะ</option>
-              <option value="active">ใช้งานอยู่ (Active)</option>
-            </select>
-          </div>
         </div>
 
         <div
@@ -1208,14 +1206,13 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                 <th>ชื่อภาษาไทย</th>
                 <th>ชื่อภาษาอังกฤษ</th>
                 <th class="w-32">หลักสูตรในสังกัด</th>
-                <th class="w-28 text-center">สถานะ</th>
                 <th v-if="canManage" class="w-24 text-right">การจัดการ</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="filteredSchools.length === 0">
                 <td
-                  :colspan="canManage ? 6 : 5"
+                  :colspan="canManage ? 5 : 4"
                   class="py-12 text-center text-muted"
                 >
                   <UIcon
@@ -1243,14 +1240,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                   <UBadge
                     color="neutral"
                     :label="`${programsData?.items.filter((p) => p.schoolId === school.id).length ?? 0} หลักสูตร`"
-                    size="sm"
-                    variant="subtle"
-                  />
-                </td>
-                <td class="text-center">
-                  <UBadge
-                    :color="school.status === 'active' ? 'success' : 'neutral'"
-                    :label="school.status === 'active' ? 'ใช้งาน' : 'เก็บถาวร'"
                     size="sm"
                     variant="subtle"
                   />
@@ -1344,22 +1333,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
               </template>
             </UInput>
           </div>
-
-          <div class="flex items-center gap-2">
-            <label
-              for="prog-status-filter"
-              class="text-xs font-semibold text-muted whitespace-nowrap"
-              >สถานะ:</label
-            >
-            <select
-              id="prog-status-filter"
-              v-model="programStatusFilter"
-              class="rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary font-medium"
-            >
-              <option value="all">ทุกสถานะ</option>
-              <option value="active">ใช้งานอยู่ (Active)</option>
-            </select>
-          </div>
         </div>
 
         <div
@@ -1415,14 +1388,13 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                 <th>ชื่อหลักสูตร (ภาษาไทย)</th>
                 <th>ชื่อภาษาอังกฤษ</th>
                 <th class="w-48">สำนักวิชาสังกัด</th>
-                <th class="w-28 text-center">สถานะ</th>
                 <th v-if="canManage" class="w-24 text-right">การจัดการ</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="filteredPrograms.length === 0">
                 <td
-                  :colspan="canManage ? 6 : 5"
+                  :colspan="canManage ? 5 : 4"
                   class="py-12 text-center text-muted"
                 >
                   <UIcon
@@ -1461,14 +1433,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                   <span v-else class="text-xs text-muted">
                     {{ prog.schoolId }}
                   </span>
-                </td>
-                <td class="text-center">
-                  <UBadge
-                    :color="prog.status === 'active' ? 'success' : 'neutral'"
-                    :label="prog.status === 'active' ? 'ใช้งาน' : 'เก็บถาวร'"
-                    size="sm"
-                    variant="subtle"
-                  />
                 </td>
                 <td v-if="canManage" class="text-right">
                   <div class="flex items-center justify-end">
@@ -1539,22 +1503,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
               </template>
             </UInput>
           </div>
-
-          <div class="flex items-center gap-2">
-            <label
-              for="course-status-filter"
-              class="text-xs font-semibold text-muted whitespace-nowrap"
-              >สถานะ:</label
-            >
-            <select
-              id="course-status-filter"
-              v-model="courseStatusFilter"
-              class="rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary font-medium"
-            >
-              <option value="all">ทุกสถานะ</option>
-              <option value="active">ใช้งาน (Active)</option>
-            </select>
-          </div>
         </div>
 
         <div
@@ -1592,32 +1540,76 @@ async function handleToggleTermStatus(term: AcademicTerm) {
       </div>
 
       <!-- Courses Table -->
-      <UCard :ui="{ body: 'p-0' }">
+      <UCard :ui="{ body: 'p-0 sm:p-0' }">
         <div class="overflow-x-auto">
           <table class="data-table">
             <thead>
               <tr>
-                <th>ชื่อวิชา (ภาษาไทย)</th>
-                <th>ชื่อวิชา (ภาษาอังกฤษ)</th>
-                <th class="w-28 text-center">สถานะ</th>
-                <th v-if="canManage" class="w-20 text-right">การจัดการ</th>
+                <th class="w-28">รหัสรายวิชา</th>
+                <th>ชื่อรายวิชา (ภาษาไทย)</th>
+                <th>ชื่อภาษาอังกฤษ</th>
+                <th class="w-48">สาขาวิชาที่เปิดรับ</th>
+                <th v-if="canManage" class="w-24 text-right">การจัดการ</th>
               </tr>
             </thead>
             <tbody>
+              <tr v-if="filteredCourses.length === 0">
+                <td
+                  :colspan="canManage ? 5 : 4"
+                  class="py-12 text-center text-muted"
+                >
+                  <UIcon
+                    name="i-lucide-book-open"
+                    class="mx-auto mb-2 size-8 text-muted"
+                  />
+                  <p class="font-medium">ไม่พบข้อมูลรายวิชา</p>
+                  <p class="text-xs text-muted">
+                    คลิกปุ่ม &quot;เพิ่มรายวิชา&quot;
+                    ด้านบนเพื่อเพิ่มรายวิชาใหม่
+                  </p>
+                </td>
+              </tr>
               <tr v-for="course in paginatedCourses" :key="course.id">
+                <td class="font-mono font-bold text-highlighted">
+                  {{ course.courseCode }}
+                </td>
                 <td class="font-medium text-highlighted">
                   {{ course.name.th }}
                 </td>
-                <td class="text-sm text-muted">
+                <td class="text-muted">
                   {{ course.name.en }}
                 </td>
-                <td class="text-center">
-                  <UBadge
-                    :color="course.status === 'active' ? 'success' : 'neutral'"
-                    :label="course.status === 'active' ? 'ใช้งาน' : 'เก็บถาวร'"
-                    size="sm"
-                    variant="subtle"
-                  />
+                <td>
+                  <span
+                    v-if="!course.programIds?.length || course.programIds.length >= (programsData?.items.length ?? 0)"
+                    class="inline-flex items-center gap-1.5 text-sm text-highlighted"
+                  >
+                    <UBadge
+                      color="neutral"
+                      :label="`ทุกหลักสูตร (${programsData?.items.length ?? 0} สาขาวิชา)`"
+                      size="sm"
+                      variant="subtle"
+                    />
+                  </span>
+                  <span
+                    v-else-if="course.programIds.length === 1 && getSingleProgram(course)"
+                    class="inline-flex items-center gap-1.5 text-sm text-highlighted"
+                  >
+                    <span class="font-mono text-xs font-semibold text-primary">
+                      [{{ getSingleProgram(course)?.programCode }}]
+                    </span>
+                    <span class="truncate">{{
+                      getSingleProgram(course)?.name.th
+                    }}</span>
+                  </span>
+                  <span v-else>
+                    <UBadge
+                      color="neutral"
+                      :label="`${course.programIds.length} สาขาวิชา`"
+                      size="sm"
+                      variant="subtle"
+                    />
+                  </span>
                 </td>
                 <td v-if="canManage" class="text-right">
                   <div class="flex items-center justify-end">
@@ -1643,23 +1635,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                       />
                     </UDropdownMenu>
                   </div>
-                </td>
-              </tr>
-
-              <tr v-if="!coursesPending && !filteredCourses.length">
-                <td
-                  class="py-12 text-center text-muted"
-                  :colspan="canManage ? 4 : 3"
-                >
-                  <UIcon
-                    name="i-lucide-book-open"
-                    class="mx-auto mb-2 size-8 text-muted"
-                  />
-                  <p class="font-medium">ไม่พบข้อมูลรายวิชา</p>
-                  <p class="text-xs text-muted">
-                    คลิกปุ่ม &quot;เพิ่มรายวิชา&quot;
-                    ด้านบนเพื่อเพิ่มรายวิชาใหม่
-                  </p>
                 </td>
               </tr>
             </tbody>
@@ -2124,18 +2099,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             </p>
           </div>
 
-          <div>
-            <label class="block text-sm font-medium text-highlighted"
-              >สถานะ</label
-            >
-            <select
-              v-model="schoolForm.status"
-              class="mt-1.5 h-11 w-full rounded-lg border border-default bg-default px-3.5 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/10"
-            >
-              <option value="active">เปิดใช้งาน (Active)</option>
-            </select>
-          </div>
-
           <div class="flex justify-end gap-2 border-t border-default pt-4">
             <UButton
               color="neutral"
@@ -2255,18 +2218,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             </p>
           </div>
 
-          <div>
-            <label class="block text-sm font-medium text-highlighted"
-              >สถานะ</label
-            >
-            <select
-              v-model="programForm.status"
-              class="mt-1.5 h-11 w-full rounded-lg border border-default bg-default px-3.5 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/10"
-            >
-              <option value="active">เปิดใช้งาน (Active)</option>
-            </select>
-          </div>
-
           <div class="flex justify-end gap-2 border-t border-default pt-4">
             <UButton
               color="neutral"
@@ -2339,18 +2290,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             <p v-if="courseFormErrors.nameEn" class="mt-1 text-xs text-error">
               {{ courseFormErrors.nameEn }}
             </p>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-highlighted">
-              สถานะ
-            </label>
-            <select
-              v-model="courseForm.status"
-              class="mt-1.5 h-11 w-full rounded-lg border border-default bg-default px-3.5 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/10"
-            >
-              <option value="active">เปิดใช้งาน (Active)</option>
-            </select>
           </div>
 
           <div class="flex justify-end gap-2 border-t border-default pt-4">

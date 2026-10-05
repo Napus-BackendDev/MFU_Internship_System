@@ -62,7 +62,10 @@ import { SmtpSettingsModule } from './system-settings/smtp-settings.module.js'
         autoIndex: config.get('NODE_ENV', { infer: true }) !== 'production',
         maxPoolSize: 20,
         minPoolSize: 2,
-        serverSelectionTimeoutMS: 5000
+        serverSelectionTimeoutMS: 5000,
+        ...(config.get('NODE_ENV', { infer: true }) !== 'production'
+          ? { retryWrites: false }
+          : {})
       })
     }),
     BullModule.forRootAsync({

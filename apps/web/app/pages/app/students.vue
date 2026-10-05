@@ -8,9 +8,8 @@ definePageMeta({ layout: 'app', middleware: 'auth' })
 interface Student {
   readonly id: string
   readonly studentId: string
-  readonly name: { readonly th: string; readonly en: string }
+  readonly name: string | { readonly th: string; readonly en: string }
   readonly email: string
-  readonly personalEmail?: string
   readonly schoolId: string
   readonly programId: string
   readonly courseId?: string
@@ -25,7 +24,15 @@ interface Student {
   readonly evaluatorEmail?: string
   readonly status: string
   readonly evaluationStatus?:
-    'awaiting_evaluator' | 'awaiting_response' | 'submitted' | string
+    | 'awaiting_evaluator'
+    | 'evaluator_assigned'
+    | 'awaiting_response'
+    | 'submitted'
+    | 'email_error'
+    | 'pending'
+    | 'inProgress'
+    | 'expired'
+    | string
   readonly admissionYear?: number
   readonly createdAt?: string
   readonly updatedAt?: string
@@ -166,26 +173,6 @@ const selectedEvaluationStatus = ref('all')
 const page = ref(1)
 const pageSize = ref(5)
 
-const {
-  data: activeCyclesData,
-  error: cyclesError,
-  pending: cyclesPending,
-  refresh: refreshCycles
-} = await useAsyncData('students-evaluation-cycles', () =>
-  api<PaginatedItems<EvaluationCycleItem>>('/evaluation-cycles', {
-    query: { page: 1, pageSize: 2, status: 'active' }
-  })
-)
-if (activeCyclesData.value?.meta.total === 1) {
-  selectedCycleItem.value = activeCyclesData.value.items[0] ?? null
-  selectedCycleId.value = selectedCycleItem.value?.id ?? 'all'
-}
-
-function setSelectedCycleItem(item: unknown): void {
-  selectedCycleItem.value =
-    item && typeof item === 'object' ? (item as EvaluationCycleItem) : null
-}
-
 // Fetch students list with school, program, evaluationStatus, and search filters
 const { data, error, pending, refresh } = await useAsyncData(
   'students',
@@ -199,10 +186,7 @@ const { data, error, pending, refresh } = await useAsyncData(
           selectedSchool.value !== 'all' ? selectedSchool.value : undefined,
         programId:
           selectedProgram.value !== 'all' ? selectedProgram.value : undefined,
-        cycleId:
-          selectedCycleId.value !== 'all' ? selectedCycleId.value : undefined,
         evaluationStatus:
-          selectedCycleId.value !== 'all' &&
           selectedEvaluationStatus.value !== 'all'
             ? selectedEvaluationStatus.value
             : undefined
@@ -215,7 +199,6 @@ const { data, error, pending, refresh } = await useAsyncData(
       pageSize,
       selectedSchool,
       selectedProgram,
-      selectedCycleId,
       selectedEvaluationStatus
     ]
   }
@@ -231,13 +214,9 @@ watch(
     search,
     pageSize,
     selectedProgram,
-    selectedCycleId,
     selectedEvaluationStatus
   ],
   () => {
-    if (selectedCycleId.value === 'all') {
-      selectedEvaluationStatus.value = 'all'
-    }
     page.value = 1
   }
 )
@@ -246,7 +225,6 @@ function resetFilters(): void {
   search.value = ''
   selectedSchool.value = 'all'
   selectedProgram.value = 'all'
-  selectedCycleId.value = 'all'
   selectedEvaluationStatus.value = 'all'
   page.value = 1
 }
@@ -312,6 +290,37 @@ function isProvinceInMaster(name: string) {
     (p) => p.nameTh === name || p.nameEn === name
   )
 }
+
+const provinceSelectOptions = computed(() => {
+  const opts: Array<{ value: string; label: string; group?: string }> = [
+    { value: '', label: '-- ไม่ระบุ / เลือกจังหวัด --' }
+  ]
+  for (const reg of provinceRegions.value) {
+    for (const prov of getProvincesByRegion(reg)) {
+      opts.push({
+        value: prov.nameTh,
+        label: `${prov.nameTh} (${prov.nameEn})`,
+        group: reg
+      })
+    }
+  }
+  for (const prov of getProvincesWithoutRegion()) {
+    opts.push({
+      value: prov.nameTh,
+      label: `${prov.nameTh} (${prov.nameEn})`
+    })
+  }
+  return opts
+})
+
+const evaluationStatusFilterOptions = [
+  { value: 'all', label: 'ทุกสถานะ (All Statuses)' },
+  { value: 'awaiting_evaluator', label: '⚪ รอระบุผู้ประเมิน' },
+  { value: 'evaluator_assigned', label: '🔵 ระบุผู้ประเมินแล้ว' },
+  { value: 'awaiting_response', label: '🟡 ส่งคำขอประเมินแล้ว' },
+  { value: 'submitted', label: '🟢 ส่งผลประเมินแล้ว' },
+  { value: 'email_error', label: '🔴 ส่งอีเมลผิดพลาด (Email Error)' }
+]
 
 interface PlacementItem {
   readonly id: string
@@ -643,6 +652,12 @@ function formatSemesterText(rawSemester?: string): string {
   return `ภาคการศึกษา ${trimmed}`
 }
 
+function getStudentName(student?: Student | null): string {
+  if (!student) return '-'
+  if (typeof student.name === 'string') return student.name || '-'
+  return student.name?.th || student.name?.en || '-'
+}
+
 function getCompanyDisplay(student: Student): string {
   if (selectedCycleId.value === 'all' && student.company) return student.company
   const placement = getStudentPlacement(student)
@@ -711,22 +726,14 @@ function formatDateTime(isoStr?: string): string {
   }
 }
 
-// Helper: 3 Student Evaluation Statuses (แบบ 3)
+// Helper: Student Evaluation Statuses
 // 1. รอระบุผู้ประเมิน (awaiting_evaluator)
-// 2. ส่งคำขอประเมินแล้ว (awaiting_response)
-// 3. ส่งผลประเมินแล้ว (submitted)
+// 2. ระบุผู้ประเมินแล้ว (evaluator_assigned)
+// 3. ส่งคำขอประเมินแล้ว (awaiting_response / pending / inProgress / reopened)
+// 4. ส่งผลประเมินแล้ว (submitted)
+// 5. ส่งอีเมลผิดพลาด (email_error)
 function getStudentEvaluationStatus(student: Student) {
   const status = student.evaluationStatus
-
-  if (!status) {
-    return {
-      code: 'cycle_unselected',
-      label: 'เลือกรอบประเมิน',
-      color: 'neutral' as const,
-      icon: 'i-lucide-calendar-clock',
-      description: 'เลือกปีการประเมินเพื่อดูสถานะล่าสุดของนักศึกษา'
-    }
-  }
 
   if (status === 'submitted') {
     return {
@@ -747,13 +754,48 @@ function getStudentEvaluationStatus(student: Student) {
         'ส่งอีเมลแบบประเมินไม่สำเร็จ เนื่องจากที่อยู่อีเมลไม่ถูกต้องหรือการส่งล้มเหลว'
     }
   }
-  if (status === 'awaiting_response') {
+  if (status === 'expired') {
+    return {
+      code: 'expired',
+      label: 'หมดอายุ',
+      color: 'error' as const,
+      icon: 'i-lucide-clock-alert',
+      description: 'คำขอประเมินหมดอายุแล้ว'
+    }
+  }
+  if (status === 'assignment_ambiguous') {
+    return {
+      code: 'assignment_ambiguous',
+      label: 'พบ assignment ซ้ำ',
+      color: 'warning' as const,
+      icon: 'i-lucide-alert-circle',
+      description: 'พบรายการมอบหมายการประเมินซ้ำซ้อนในระบบ'
+    }
+  }
+  if (
+    status === 'awaiting_response' ||
+    status === 'pending' ||
+    status === 'inProgress' ||
+    status === 'reopened'
+  ) {
     return {
       code: 'awaiting_response',
       label: 'ส่งคำขอประเมินแล้ว',
       color: 'warning' as const,
       icon: 'i-lucide-mail-check',
       description: 'ส่งอีเมลขอประเมินแล้ว กำลังรอผู้ประเมินบันทึกผล'
+    }
+  }
+  if (
+    status === 'evaluator_assigned' ||
+    Boolean(student.evaluatorName?.trim() || student.evaluatorEmail?.trim())
+  ) {
+    return {
+      code: 'evaluator_assigned',
+      label: 'ระบุผู้ประเมินแล้ว',
+      color: 'info' as const,
+      icon: 'i-lucide-user-check',
+      description: 'ระบุข้อมูลผู้ประเมินแล้ว รอส่งแบบประเมิน'
     }
   }
   return {
@@ -772,10 +814,8 @@ const editingStudentId = ref<string>('')
 
 const editForm = ref({
   studentId: '',
-  nameTh: '',
-  nameEn: '',
+  name: '',
   email: '',
-  personalEmail: '',
   schoolId: '',
   programId: '',
   courseId: '',
@@ -801,10 +841,8 @@ function openEditStudentModal(student: Student) {
   editingStudentId.value = student.id
   editForm.value = {
     studentId: student.studentId,
-    nameTh: student.name.th,
-    nameEn: student.name.en,
+    name: getStudentName(student),
     email: student.email,
-    personalEmail: student.personalEmail || '',
     schoolId: student.schoolId,
     programId: student.programId,
     courseId: student.courseId || '',
@@ -821,6 +859,38 @@ function openEditStudentModal(student: Student) {
   isEditModalOpen.value = true
 }
 
+const editProvinceSelectOptions = computed(() => {
+  const base = [...provinceSelectOptions.value]
+  if (editForm.value.province && !isProvinceInMaster(editForm.value.province)) {
+    base.splice(1, 0, {
+      value: editForm.value.province,
+      label: `${editForm.value.province} (เดิม)`
+    })
+  }
+  return base
+})
+
+const editSemesterSelectOptions = computed(() => {
+  const opts = [
+    { value: '', label: '-- เลือกภาคการศึกษา --' },
+    { value: 'ภาคการศึกษาต้น', label: 'ภาคการศึกษาที่ 1 (ภาคการศึกษาต้น)' },
+    { value: 'ภาคการศึกษาปลาย', label: 'ภาคการศึกษาที่ 2 (ภาคการศึกษาปลาย)' },
+    { value: 'ภาคการศึกษาฤดูร้อน', label: 'ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)' }
+  ]
+  if (
+    editForm.value.semester &&
+    !['ภาคการศึกษาต้น', 'ภาคการศึกษาปลาย', 'ภาคการศึกษาฤดูร้อน'].includes(
+      editForm.value.semester
+    )
+  ) {
+    opts.splice(1, 0, {
+      value: editForm.value.semester,
+      label: formatSemesterText(editForm.value.semester)
+    })
+  }
+  return opts
+})
+
 async function handleEditSubmit() {
   if (!editingStudentId.value) return
   isEditSubmitting.value = true
@@ -828,14 +898,8 @@ async function handleEditSubmit() {
     await api(`/students/${editingStudentId.value}`, {
       method: 'PATCH',
       body: {
-        name: {
-          th: editForm.value.nameTh.trim(),
-          en: editForm.value.nameEn.trim()
-        },
+        name: editForm.value.name.trim(),
         email: editForm.value.email.trim().toLowerCase(),
-        personalEmail: editForm.value.personalEmail.trim()
-          ? editForm.value.personalEmail.trim().toLowerCase()
-          : undefined,
         schoolId: editForm.value.schoolId,
         programId: editForm.value.programId,
         courseId: editForm.value.courseId || undefined,
@@ -853,7 +917,7 @@ async function handleEditSubmit() {
 
     toast.add({
       title: 'อัปเดตข้อมูลนักศึกษาสำเร็จ',
-      description: `อัปเดตข้อมูล ${editForm.value.nameTh} (${editForm.value.studentId}) เรียบร้อยแล้ว`,
+      description: `อัปเดตข้อมูล ${editForm.value.name} (${editForm.value.studentId}) เรียบร้อยแล้ว`,
       color: 'success'
     })
 
@@ -888,10 +952,8 @@ const isManualSubmitting = ref(false)
 
 interface ManualStudentForm {
   studentId: string
-  nameTh: string
-  nameEn: string
+  name: string
   email: string
-  personalEmail: string
   schoolId: string
   programId: string
   courseId: string
@@ -904,10 +966,8 @@ interface ManualStudentForm {
 
 const manualForm = ref<ManualStudentForm>({
   studentId: '',
-  nameTh: '',
-  nameEn: '',
+  name: '',
   email: '',
-  personalEmail: '',
   schoolId: '',
   programId: '',
   courseId: '',
@@ -929,10 +989,8 @@ function setManualSchool(value: string): void {
 function openManualAddModal() {
   manualForm.value = {
     studentId: '',
-    nameTh: '',
-    nameEn: '',
+    name: '',
     email: '',
-    personalEmail: '',
     schoolId: '',
     programId: '',
     courseId: '',
@@ -948,8 +1006,7 @@ function openManualAddModal() {
 async function handleManualAddSubmit() {
   if (
     !manualForm.value.studentId.trim() ||
-    !manualForm.value.nameTh.trim() ||
-    !manualForm.value.nameEn.trim() ||
+    !manualForm.value.name.trim() ||
     !manualForm.value.email.trim() ||
     !manualForm.value.schoolId ||
     !manualForm.value.programId
@@ -969,14 +1026,8 @@ async function handleManualAddSubmit() {
       method: 'POST',
       body: {
         studentId: manualForm.value.studentId.trim(),
-        name: {
-          th: manualForm.value.nameTh.trim(),
-          en: manualForm.value.nameEn.trim()
-        },
+        name: manualForm.value.name.trim(),
         email: manualForm.value.email.trim().toLowerCase(),
-        personalEmail: manualForm.value.personalEmail.trim()
-          ? manualForm.value.personalEmail.trim().toLowerCase()
-          : undefined,
         schoolId: manualForm.value.schoolId,
         programId: manualForm.value.programId,
         courseId: manualForm.value.courseId || undefined,
@@ -992,7 +1043,7 @@ async function handleManualAddSubmit() {
 
     toast.add({
       title: 'เพิ่มข้อมูลนักศึกษาสำเร็จ',
-      description: `เพิ่มนักศึกษา ${manualForm.value.nameTh} (${manualForm.value.studentId}) เข้าสู่ระบบแล้ว`,
+      description: `เพิ่มนักศึกษา ${manualForm.value.name} (${manualForm.value.studentId}) เข้าสู่ระบบแล้ว`,
       color: 'success'
     })
 
@@ -1024,7 +1075,7 @@ const studentImportBatchId = ref<string | null>(null)
 const importQuestionFields = ref<string[]>([])
 const importCommitKeys = ref<Record<string, string>>({})
 const excelPreviewPage = ref(1)
-const excelPreviewPageSize = 5
+const excelPreviewPageSize = ref<number>(5)
 const selectedImportCount = computed(
   () =>
     parsedRows.value.filter(
@@ -1035,21 +1086,43 @@ const selectedImportCount = computed(
     ).length
 )
 const paginatedParsedRows = computed(() => {
-  const start = (excelPreviewPage.value - 1) * excelPreviewPageSize
-  return parsedRows.value.slice(start, start + excelPreviewPageSize)
+  const start = (excelPreviewPage.value - 1) * excelPreviewPageSize.value
+  return parsedRows.value.slice(start, start + excelPreviewPageSize.value)
 })
 
-function openExcelImportModal() {
-  if (studentImportBatchId.value) {
-    isExcelModalOpen.value = true
-    return
+function cleanFileNameDisplay(name: string): string {
+  if (!name) return ''
+  if (/[\u00C0-\u00FFðò¸£¥âàµ\ufffd]/.test(name)) {
+    try {
+      const fixed = decodeURIComponent(escape(name))
+      if (fixed && !/[\u00C0-\u00FFðò¸£¥âàµ\ufffd]/.test(fixed)) return fixed
+    } catch {
+      // ignore
+    }
+    return ''
   }
+  return name
+}
+
+function clearExcelImportState() {
   parsedRows.value = []
   selectedFileName.value = ''
   studentImportBatchId.value = null
   importQuestionFields.value = []
   importCommitKeys.value = {}
   excelPreviewPage.value = 1
+  excelPreviewPageSize.value = 5
+  if (import.meta.client) {
+    sessionStorage.removeItem('student-import-batch-id')
+  }
+}
+
+function openExcelImportModal() {
+  if (studentImportBatchId.value) {
+    isExcelModalOpen.value = true
+    return
+  }
+  clearExcelImportState()
   isExcelModalOpen.value = true
 }
 
@@ -1058,10 +1131,8 @@ function downloadStudentExcelTemplate() {
   const ws = XLSX.utils.aoa_to_sheet([
     [
       'รหัสนักศึกษา (studentId)',
-      'ชื่อ-นามสกุลไทย (nameTh)',
-      'ชื่อ-นามสกุลอังกฤษ (nameEn)',
+      'ชื่อ-นามสกุล (name)',
       'อีเมลนักศึกษา (email)',
-      'อีเมลส่วนตัว (personalEmail)',
       'รหัสสำนักวิชา (schoolCode)',
       'รหัสหลักสูตร (programCode)',
       'รหัสวิชา (courseCode)',
@@ -1074,10 +1145,8 @@ function downloadStudentExcelTemplate() {
   // Set column widths
   ws['!cols'] = [
     { wch: 22 }, // studentId
-    { wch: 26 }, // nameTh
-    { wch: 26 }, // nameEn
+    { wch: 28 }, // name
     { wch: 32 }, // email
-    { wch: 30 }, // personalEmail
     { wch: 18 }, // schoolCode
     { wch: 18 }, // programCode
     { wch: 18 }, // courseCode
@@ -1126,7 +1195,7 @@ async function resumeStudentImport() {
     )
     applyStudentImportBatch(batch)
     if (batch.status === 'preview') {
-      selectedFileName.value = batch.sourceName
+      selectedFileName.value = cleanFileNameDisplay(batch.sourceName)
       isExcelModalOpen.value = true
     }
   } catch {
@@ -1140,6 +1209,7 @@ onMounted(() => {
 
 function importFieldLabel(field: string): string {
   const labels: Readonly<Record<string, string>> = {
+    name: 'ชื่อ-นามสกุล',
     'name.th': 'ชื่อไทย',
     'name.en': 'ชื่ออังกฤษ',
     email: 'อีเมล',
@@ -1367,18 +1437,34 @@ async function handleBulkDelete() {
     return
   isBulkUpdating.value = true
   try {
-    await Promise.all(
+    const results = await Promise.allSettled(
       selectedStudentIds.value.map((id) =>
         api(`/students/${id}`, {
           method: 'DELETE'
         })
       )
     )
-    toast.add({
-      title: 'ลบข้อมูลสำเร็จ',
-      description: `ลบข้อมูลนักศึกษาที่เลือกเรียบร้อยแล้ว`,
-      color: 'success'
-    })
+    const rejected = results.filter((r) => r.status === 'rejected')
+    if (rejected.length === 0) {
+      toast.add({
+        title: 'ลบข้อมูลสำเร็จ',
+        description: `ลบข้อมูลนักศึกษาที่เลือกเรียบร้อยแล้ว`,
+        color: 'success'
+      })
+    } else if (rejected.length < results.length) {
+      toast.add({
+        title: 'ลบสำเร็จบางส่วน',
+        description: `ลบสำเร็จ ${results.length - rejected.length} รายการ (ไม่สำเร็จ ${rejected.length} รายการ เนื่องจากมีประวัติการฝึกงานหรือสถานะเปลี่ยน)`,
+        color: 'warning'
+      })
+    } else {
+      toast.add({
+        title: 'เกิดข้อผิดพลาด',
+        description:
+          'ไม่สามารถลบข้อมูลนักศึกษาได้ (อาจมีข้อมูลการฝึกงานหรือการประเมินอยู่)',
+        color: 'error'
+      })
+    }
     clearSelection()
     await refresh()
   } catch {
@@ -1400,10 +1486,8 @@ function handleBulkExport() {
 
   const exportData = selectedList.map((s) => ({
     รหัสนักศึกษา: s.studentId,
-    ชื่อภาษาไทย: s.name.th,
-    ชื่อภาษาอังกฤษ: s.name.en,
+    'ชื่อ-นามสกุล': getStudentName(s),
     'อีเมลนักศึกษา (Student Email)': s.email,
-    'อีเมลส่วนตัว (Personal Email)': s.personalEmail || '-',
     สำนักวิชา: getSchoolDisplay(s.schoolId, s),
     หลักสูตร: getProgramDisplay(s.programId, s),
     ปีการศึกษา: getAcademicYearDisplay(s),
@@ -1480,27 +1564,40 @@ async function copyStudentId(id: string): Promise<void> {
 async function handleDeleteStudent(student: Student) {
   if (
     !confirm(
-      `คุณต้องการลบข้อมูลนักศึกษา "${student.name.th}" (${student.studentId}) หรือไม่?`
+      `คุณต้องการลบข้อมูลนักศึกษา "${getStudentName(student)}" (${student.studentId}) หรือไม่?`
     )
   )
     return
+  const studentIdentifier = student.id || student.studentId
   try {
-    await api(`/students/${student.id}`, {
+    await api(`/students/${studentIdentifier}`, {
       method: 'DELETE'
     })
     toast.add({
       title: 'ลบข้อมูลสำเร็จ',
-      description: `ลบข้อมูลนักศึกษา ${student.name.th} เรียบร้อยแล้ว`,
+      description: `ลบข้อมูลนักศึกษา ${getStudentName(student)} เรียบร้อยแล้ว`,
       color: 'success'
     })
     selectedStudentIds.value = selectedStudentIds.value.filter(
-      (id) => id !== student.id
+      (id) => id !== student.id && id !== studentIdentifier
     )
     await refresh()
-  } catch {
+  } catch (error: any) {
+    const errorCode =
+      error?.data?.code ||
+      error?.response?._data?.code ||
+      error?.data?.message?.code ||
+      error?.message
+    let description = 'ไม่สามารถลบข้อมูลนักศึกษาได้'
+    if (errorCode === 'STUDENT_HAS_OPEN_PLACEMENT') {
+      description =
+        'ไม่สามารถลบได้ เนื่องจากนักศึกษามีข้อมูลการฝึกงานหรือการประเมินที่กำลังดำเนินการอยู่'
+    } else if (errorCode === 'STUDENT_STATUS_CHANGED') {
+      description = 'สถานะนักศึกษาเปลี่ยนแปลงไปแล้ว กรุณารีเฟรชหน้าจอ'
+    }
     toast.add({
       title: 'ดำเนินการไม่สำเร็จ',
-      description: 'ไม่สามารถลบข้อมูลนักศึกษาได้',
+      description,
       color: 'error'
     })
   }
@@ -1526,7 +1623,7 @@ const sendEmailForm = ref({
 
 const sendEmailSuccessData = ref<{
   success: boolean
-  status: 'queued' | 'processing' | 'completed' | 'partial'
+  status: 'queued' | 'processing' | 'completed' | 'partial' | 'sent'
   assignmentId: string
   invitationId: string
   campaignId: string
@@ -1535,6 +1632,7 @@ const sendEmailSuccessData = ref<{
   recipientEmail: string
   studentName: string
   deadlineAt: string
+  pin?: string
 } | null>(null)
 
 // Modal Mode: 'single' | 'bulk'
@@ -1569,6 +1667,7 @@ interface BulkSendResultItem {
   success: boolean
   invitationUrl?: string
   error?: string
+  pin?: string
 }
 
 const bulkSendSuccessData = ref<{
@@ -1614,7 +1713,7 @@ function renderPlaceholders(str: string): string {
   if (!str) return ''
   const student = sendModalStudent.value
   const studentName =
-    student?.name.th || student?.name.en || '[ไม่ระบุชื่อนักศึกษา]'
+    (student ? getStudentName(student) : '') || '[ไม่ระบุชื่อนักศึกษา]'
   const studentId = student?.studentId || '[ไม่ระบุรหัสนักศึกษา]'
   const companyName = student?.company || '[ไม่ระบุสถานประกอบการ]'
   const evaluatorName =
@@ -1806,7 +1905,7 @@ async function handleSendEvaluationEmailSubmit() {
   try {
     const result = await api<{
       success: boolean
-      status: 'queued' | 'processing' | 'completed' | 'partial'
+      status: 'queued' | 'processing' | 'completed' | 'partial' | 'sent'
       assignmentId: string
       invitationId: string
       campaignId: string
@@ -1815,6 +1914,7 @@ async function handleSendEvaluationEmailSubmit() {
       recipientEmail: string
       studentName: string
       deadlineAt: string
+      pin?: string
     }>('/campaigns/send-student-invitation', {
       method: 'POST',
       headers: { 'idempotency-key': sendInvitationIdempotencyKey.value },
@@ -1829,7 +1929,11 @@ async function handleSendEvaluationEmailSubmit() {
     })
 
     const safeInvitationPath = toSafeInvitationPath(result.invitationUrl)
-    result.invitationUrl = safeInvitationPath ?? ''
+    const fullInvitationUrl = safeInvitationPath
+      ? (import.meta.client ? `${window.location.origin}${safeInvitationPath}` : safeInvitationPath)
+      : (result.invitationUrl || '')
+
+    result.invitationUrl = fullInvitationUrl
 
     // Ensure loading animation is visible for at least 800ms before showing success state
     const elapsed = Date.now() - startTime
@@ -1838,10 +1942,13 @@ async function handleSendEvaluationEmailSubmit() {
     }
 
     sendEmailSuccessData.value = result
+    const isSent = result.status === 'sent' || result.status === 'completed'
     toast.add({
-      title: 'คิวส่งคำเชิญแล้ว',
-      description: `คิวส่งงานไปยัง ${result.recipientEmail} แล้ว ติดตามผลได้จากสถานะ Delivery`,
-      color: 'info'
+      title: isSent ? 'ส่งคำเชิญเรียบร้อยแล้ว' : 'คิวส่งคำเชิญแล้ว',
+      description: isSent
+        ? `จัดส่งงานไปยัง ${result.recipientEmail} แล้ว`
+        : `คิวส่งงานไปยัง ${result.recipientEmail} แล้ว ติดตามผลได้จากสถานะ Delivery`,
+      color: isSent ? 'success' : 'info'
     })
     if (!safeInvitationPath) {
       toast.add({
@@ -1899,7 +2006,7 @@ async function handleBulkSendEvaluationEmailSubmit() {
     if (!st) continue
     const ev = bulkStudentEvaluators.value[st.id] ?? { email: '', name: '' }
     bulkSendProgress.value.current = i + 1
-    bulkSendProgress.value.currentStudentName = `${st.name.th} (${st.studentId})`
+    bulkSendProgress.value.currentStudentName = `${getStudentName(st)} (${st.studentId})`
 
     try {
       const idempotencyKey = crypto.randomUUID()
@@ -1911,6 +2018,7 @@ async function handleBulkSendEvaluationEmailSubmit() {
         recipientEmail: string
         studentName: string
         deadlineAt: string
+        pin?: string
       }>('/campaigns/send-student-invitation', {
         method: 'POST',
         headers: { 'idempotency-key': idempotencyKey },
@@ -1925,17 +2033,22 @@ async function handleBulkSendEvaluationEmailSubmit() {
       })
 
       const finalUrl = toSafeInvitationPath(res.invitationUrl) ?? ''
+      const fullUrl =
+        finalUrl && import.meta.client
+          ? `${window.location.origin}${finalUrl}`
+          : finalUrl
 
       bulkSendProgress.value.successCount++
       itemsResults.push({
         studentId: st.id,
         studentCode: st.studentId,
-        studentName: st.name.th,
+        studentName: getStudentName(st),
         email: ev.email.trim(),
         evaluatorName: ev.name.trim(),
         company: st.company || '-',
         success: true,
-        invitationUrl: finalUrl
+        invitationUrl: fullUrl,
+        pin: res.pin
       })
     } catch (err: unknown) {
       bulkSendProgress.value.failedCount++
@@ -1943,7 +2056,7 @@ async function handleBulkSendEvaluationEmailSubmit() {
       itemsResults.push({
         studentId: st.id,
         studentCode: st.studentId,
-        studentName: st.name.th,
+        studentName: getStudentName(st),
         email: ev.email.trim(),
         evaluatorName: ev.name.trim(),
         company: st.company || '-',
@@ -2000,6 +2113,16 @@ function copyInvitationLink(url?: string) {
       color: 'success'
     })
   }
+}
+
+function copyPin(pin?: string) {
+  if (!pin || !import.meta.client) return
+  void navigator.clipboard.writeText(pin)
+  toast.add({
+    title: 'คัดลอก PIN สำเร็จ',
+    description: 'คัดลอกรหัส PIN 16 หลักไปยังคลิปบอร์ดแล้ว',
+    color: 'success'
+  })
 }
 
 function finishAndCloseSendModal() {
@@ -2059,7 +2182,7 @@ function handleModalBackdropClick() {
     <div
       class="rounded-xl border border-default bg-default p-4 shadow-sm space-y-3"
     >
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <!-- 1. ตัวกรองสำนักวิชา -->
         <div class="space-y-1">
           <label
@@ -2099,29 +2222,7 @@ function handleModalBackdropClick() {
           />
         </div>
 
-        <!-- 3. เลือกรอบเพื่อแสดงสถานะจาก Assignment ของรอบนั้น -->
-        <div class="space-y-1">
-          <label
-            class="text-xs font-semibold text-muted flex items-center gap-1.5"
-          >
-            <UIcon
-              name="i-lucide-calendar-days"
-              class="size-3.5 text-primary"
-            />
-            รอบการประเมิน (Evaluation Cycle)
-          </label>
-          <PaginatedLookupSelect
-            v-model="selectedCycleId"
-            api-path="/evaluation-cycles"
-            id-query-param="cycleIds"
-            label="รอบการประเมิน"
-            empty-label="เลือกรอบประเมิน"
-            empty-value="all"
-            @selected="setSelectedCycleItem"
-          />
-        </div>
-
-        <!-- 4. ตัวกรองสถานะการประเมิน (แบบ 3) -->
+        <!-- 3. ตัวกรองสถานะการประเมิน (แบบ 3) -->
         <div class="space-y-1">
           <label
             class="text-xs font-semibold text-muted flex items-center gap-1.5"
@@ -2129,19 +2230,12 @@ function handleModalBackdropClick() {
             <UIcon name="i-lucide-activity" class="size-3.5 text-primary" />
             สถานะการประเมิน (Evaluation Status)
           </label>
-          <select
+          <SearchableSelect
             v-model="selectedEvaluationStatus"
-            :disabled="selectedCycleId === 'all'"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
-          >
-            <option value="all">ทุกสถานะ (All Statuses)</option>
-            <option value="awaiting_evaluator">⚪ รอระบุผู้ประเมิน</option>
-            <option value="awaiting_response">🟡 ส่งคำขอประเมินแล้ว</option>
-            <option value="submitted">🟢 ส่งผลประเมินแล้ว</option>
-            <option value="email_error">
-              🔴 ส่งอีเมลผิดพลาด (Email Error)
-            </option>
-          </select>
+            :options="evaluationStatusFilterOptions"
+            search-placeholder="ค้นหาสถานะ…"
+            aria-label="สถานะการประเมิน"
+          />
         </div>
 
         <!-- 5. ช่องค้นหาด่วน -->
@@ -2190,7 +2284,6 @@ function handleModalBackdropClick() {
           v-if="
             selectedSchool !== 'all' ||
             selectedProgram !== 'all' ||
-            selectedCycleId !== 'all' ||
             selectedEvaluationStatus !== 'all' ||
             search
           "
@@ -2224,29 +2317,6 @@ function handleModalBackdropClick() {
         :loading="referenceDataPending"
         :disabled="referenceDataPending"
         @click="retryReferenceData"
-      />
-    </div>
-
-    <div
-      v-if="cyclesError"
-      class="flex flex-col gap-2 sm:flex-row sm:items-center"
-      role="alert"
-    >
-      <UAlert
-        class="flex-1"
-        color="warning"
-        icon="i-lucide-calendar-x"
-        title="โหลดรอบการประเมินไม่สำเร็จ"
-        description="สถานะจะไม่แสดงจนกว่าจะโหลดรอบการประเมินได้"
-        variant="soft"
-      />
-      <UButton
-        color="neutral"
-        icon="i-lucide-refresh-cw"
-        label="ลองโหลดรอบใหม่"
-        :loading="cyclesPending"
-        :disabled="cyclesPending"
-        @click="() => refreshCycles()"
       />
     </div>
 
@@ -2392,10 +2462,7 @@ function handleModalBackdropClick() {
                     </button>
                   </div>
                   <p class="font-semibold text-highlighted text-xs">
-                    {{ student.name.th }}
-                  </p>
-                  <p class="text-[11px] text-muted truncate">
-                    {{ student.name.en }}
+                    {{ getStudentName(student) }}
                   </p>
                   <p class="text-[10px] text-muted/80 font-mono">
                     {{ student.email }}
@@ -2416,19 +2483,12 @@ function handleModalBackdropClick() {
                       {{ getProgramDisplay(student.programId, student) }}
                     </p>
                   </div>
-                  <div class="pt-0.5">
-                    <UBadge
-                      :color="getStudentCourseTrack(student).color"
-                      size="xs"
-                      variant="subtle"
-                      class="text-[10px] font-medium inline-flex items-center gap-1"
-                    >
-                      <UIcon
-                        :name="getStudentCourseTrack(student).icon"
-                        class="size-3"
-                      />
-                      <span>{{ getStudentCourseTrack(student).display }}</span>
-                    </UBadge>
+                  <div class="pt-0.5 flex items-center gap-1 text-[11px] text-muted">
+                    <UIcon
+                      :name="getStudentCourseTrack(student).icon"
+                      class="size-3 text-muted shrink-0"
+                    />
+                    <span>{{ getStudentCourseTrack(student).display }}</span>
                   </div>
                 </div>
               </td>
@@ -2436,14 +2496,9 @@ function handleModalBackdropClick() {
               <!-- 4. ปี / ภาคเรียน -->
               <td class="py-3 px-4">
                 <div class="space-y-1">
-                  <UBadge
-                    color="primary"
-                    size="xs"
-                    variant="subtle"
-                    class="font-mono font-semibold"
-                  >
+                  <span class="font-mono text-xs font-medium text-highlighted block">
                     ปี {{ getAcademicYearDisplay(student) }}
-                  </UBadge>
+                  </span>
                   <p class="text-[11px] text-muted">
                     {{ formatSemesterText(getSemesterDisplay(student)) }}
                   </p>
@@ -2731,32 +2786,13 @@ function handleModalBackdropClick() {
                   >
                     จังหวัดที่ฝึกงาน (Province)
                   </label>
-                  <select
+                  <SearchableSelect
                     v-model="manualForm.province"
-                    class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                  >
-                    <option value="">-- ไม่ระบุ / เลือกจังหวัด --</option>
-                    <optgroup
-                      v-for="reg in provinceRegions"
-                      :key="reg"
-                      :label="reg"
-                    >
-                      <option
-                        v-for="prov in getProvincesByRegion(reg)"
-                        :key="prov.id || prov.code"
-                        :value="prov.nameTh"
-                      >
-                        {{ prov.nameTh }} ({{ prov.nameEn }})
-                      </option>
-                    </optgroup>
-                    <option
-                      v-for="prov in getProvincesWithoutRegion()"
-                      :key="prov.id || prov.code"
-                      :value="prov.nameTh"
-                    >
-                      {{ prov.nameTh }} ({{ prov.nameEn }})
-                    </option>
-                  </select>
+                    :options="provinceSelectOptions"
+                    control-class="h-11 rounded-xl text-sm"
+                    search-placeholder="ค้นหาจังหวัด…"
+                    placeholder="-- ไม่ระบุ / เลือกจังหวัด --"
+                  />
                 </div>
               </div>
 
@@ -2805,32 +2841,16 @@ function handleModalBackdropClick() {
                 />
               </div>
 
-              <!-- Thai Name -->
+              <!-- Student Name -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
                 >
-                  ชื่อ-นามสกุล (ภาษาไทย) <span class="text-rose-500">*</span>
+                  ชื่อ-นามสกุล (Full Name) <span class="text-rose-500">*</span>
                 </label>
                 <UInput
-                  v-model="manualForm.nameTh"
+                  v-model="manualForm.name"
                   placeholder="เช่น นายกิตติศักดิ์ พัฒนา"
-                  size="lg"
-                  class="w-full"
-                  required
-                />
-              </div>
-
-              <!-- English Name -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  Full Name (English) <span class="text-rose-500">*</span>
-                </label>
-                <UInput
-                  v-model="manualForm.nameEn"
-                  placeholder="เช่น Mr. Kittisak Pattana"
                   size="lg"
                   class="w-full"
                   required
@@ -2856,26 +2876,6 @@ function handleModalBackdropClick() {
                 />
                 <p class="text-[11px] text-muted mt-1">
                   อีเมลทางการมหาวิทยาลัยแม่ฟ้าหลวง (@lamduan.mfu.ac.th)
-                </p>
-              </div>
-
-              <!-- Email: เมลส่วนตัวอยู่ข้างล่าง -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  อีเมลส่วนตัว (Personal Email)
-                </label>
-                <UInput
-                  v-model="manualForm.personalEmail"
-                  type="email"
-                  placeholder="เช่น somchai.dev@gmail.com"
-                  size="lg"
-                  class="w-full font-mono"
-                  icon="i-lucide-mail"
-                />
-                <p class="text-[11px] text-muted mt-1">
-                  อีเมลส่วนตัวหรืออีเมลสำรองสำหรับติดต่อ (เช่น Gmail, Outlook)
                 </p>
               </div>
 
@@ -3022,16 +3022,42 @@ function handleModalBackdropClick() {
               class="hidden"
               @change="handleExcelFileUpload"
             />
-            <UIcon name="i-lucide-file-up" class="size-8 text-primary mb-1.5" />
-            <p class="text-xs font-bold text-highlighted">
-              {{
-                selectedFileName ||
-                'คลิกเพื่อเลือกไฟล์ Excel หรือลากไฟล์มาวางที่นี่'
-              }}
-            </p>
-            <p class="text-[11px] text-muted mt-0.5">
-              รองรับไฟล์ .xlsx และ .csv (ไม่เกิน 5 MB)
-            </p>
+            <template v-if="isExcelImporting">
+              <UIcon
+                name="i-lucide-loader-2"
+                class="size-8 text-primary mb-1.5 animate-spin"
+              />
+              <p class="text-xs font-bold text-primary">
+                กำลังตรวจสอบไฟล์ Excel...
+              </p>
+              <p class="text-[11px] text-muted mt-0.5">
+                ระบบกำลังอ่านและตรวจสอบข้อมูลนักศึกษา
+              </p>
+            </template>
+            <template v-else-if="parsedRows.length > 0">
+              <UIcon
+                name="i-lucide-file-check"
+                class="size-8 text-emerald-500 mb-1.5"
+              />
+              <p class="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                พร้อมนำเข้าข้อมูล ({{ parsedRows.length }} รายการ)
+              </p>
+              <p class="text-[11px] text-muted mt-0.5">
+                คลิกเพื่อเลือกไฟล์ใหม่ หรือลากไฟล์มาวางเพื่อเปลี่ยนไฟล์
+              </p>
+            </template>
+            <template v-else>
+              <UIcon
+                name="i-lucide-file-up"
+                class="size-8 text-primary mb-1.5"
+              />
+              <p class="text-xs font-bold text-highlighted">
+                คลิกเพื่อเลือกไฟล์ Excel หรือลากไฟล์มาวางที่นี่
+              </p>
+              <p class="text-[11px] text-muted mt-0.5">
+                รองรับไฟล์ .xlsx และ .csv (ไม่เกิน 5 MB)
+              </p>
+            </template>
           </div>
         </div>
 
@@ -3046,211 +3072,223 @@ function handleModalBackdropClick() {
 
         <!-- Preview Table -->
         <div v-if="parsedRows.length > 0" class="space-y-2">
-          <div class="flex items-center justify-between">
+          <div class="flex flex-wrap items-center justify-between gap-2">
             <span class="text-xs font-bold text-highlighted">
               รายการตรวจสอบจากไฟล์ ({{ parsedRows.length }} รายการ):
             </span>
-            <span class="text-xs font-semibold text-primary">
-              เลือกนำเข้า {{ selectedImportCount }} รายการ ·
-              ต้องยืนยันแถวอัปเดตแยกต่างหาก
-            </span>
+            <div class="flex items-center gap-3">
+              <span class="text-xs font-semibold text-primary">
+                เลือกนำเข้า {{ selectedImportCount }} รายการ ·
+                ต้องยืนยันแถวอัปเดตแยกต่างหาก
+              </span>
+              <button
+                type="button"
+                class="text-xs text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1 cursor-pointer font-medium"
+                :disabled="isExcelImporting"
+                @click="clearExcelImportState"
+              >
+                <UIcon name="i-lucide-rotate-ccw" class="size-3" />
+                ล้าง / เลือกไฟล์ใหม่
+              </button>
+            </div>
           </div>
 
           <div
             class="overflow-x-auto max-h-64 border border-default rounded-xl"
           >
             <table class="w-full text-left text-xs border-collapse">
-              <thead class="bg-muted/40 sticky top-0 border-b border-default">
+              <thead class="bg-default sticky top-0 z-10 border-b border-default font-semibold text-highlighted shadow-xs">
                 <tr>
-                  <th class="p-2 w-10 text-center">เลือก</th>
-                  <th class="p-2 w-10 text-center">#</th>
-                  <th class="p-2">รหัส</th>
-                  <th class="p-2">ชื่อ-นามสกุล</th>
-                  <th class="p-2">อีเมล</th>
-                  <th class="p-2">สำนักวิชา/หลักสูตร</th>
-                  <th class="p-2">เทอม / วิชา</th>
-                  <th class="p-2">สถานประกอบการ / จังหวัด</th>
-                  <th class="p-2 text-center w-24">สถานะ</th>
+                  <th class="p-2.5 w-10 text-center bg-default">เลือก</th>
+                  <th class="p-2.5 w-10 text-center bg-default">#</th>
+                  <th class="p-2.5 min-w-[100px] bg-default">รหัส</th>
+                  <th class="p-2.5 min-w-[150px] bg-default">ชื่อ-นามสกุล</th>
+                  <th class="p-2.5 min-w-[150px] bg-default">อีเมล</th>
+                  <th class="p-2.5 min-w-[160px] bg-default">สำนักวิชา/หลักสูตร</th>
+                  <th class="p-2.5 min-w-[120px] bg-default">เทอม / วิชา</th>
+                  <th class="p-2.5 min-w-[160px] bg-default">สถานประกอบการ / จังหวัด</th>
+                  <th class="p-2.5 text-center w-24 bg-default">สถานะ</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-default">
-                <tr
+                <template
                   v-for="(row, idx) in paginatedParsedRows"
                   :key="row.id"
-                  class="hover:bg-muted/10"
-                  :class="
-                    row.action === 'invalid'
-                      ? 'bg-rose-50/40 dark:bg-rose-950/20'
-                      : row.action === 'update'
-                        ? 'bg-amber-50/40 dark:bg-amber-950/10'
-                        : ''
-                  "
                 >
-                  <td class="p-2 text-center">
-                    <input
-                      v-model="row.selected"
-                      type="checkbox"
-                      :disabled="
-                        row.status !== 'pending' ||
-                        (row.action !== 'create' && row.action !== 'update')
-                      "
-                      :aria-label="`ยืนยันนำเข้า ${row.student?.studentId ?? 'แถว'}`"
-                    />
-                  </td>
-                  <td class="p-2 text-center font-mono text-muted">
-                    {{
-                      (excelPreviewPage - 1) * excelPreviewPageSize + idx + 1
-                    }}
-                  </td>
-                  <td class="p-2 font-mono font-bold text-highlighted">
-                    {{ row.student?.studentId || '-' }}
-                  </td>
-                  <td class="p-2">
-                    <span class="block text-highlighted">{{
-                      row.student?.name.th || '-'
-                    }}</span>
-                    <span class="text-[10px] text-muted">{{
-                      row.student?.name.en || ''
-                    }}</span>
-                  </td>
-                  <td class="p-2 font-mono text-muted">
-                    {{ row.student?.email || '-' }}
-                  </td>
-                  <td class="p-2">
-                    <span class="font-semibold text-highlighted">{{
-                      row.student?.programReference ||
-                      getProgramDisplay(
-                        row.student?.programId || '',
-                        data?.items.find(
-                          (student) =>
-                            student.studentId === row.student?.studentId
-                        )
-                      )
-                    }}</span>
-                    <span class="text-muted text-[10px] ml-1"
-                      >({{
-                        row.student?.schoolReference ||
-                        getSchoolDisplay(
-                          row.student?.schoolId || '',
+                  <tr
+                    class="hover:bg-muted/10"
+                    :class="
+                      row.action === 'invalid'
+                        ? 'bg-rose-50/40 dark:bg-rose-950/20'
+                        : row.action === 'update'
+                          ? 'bg-amber-50/40 dark:bg-amber-950/10'
+                          : ''
+                    "
+                  >
+                    <td class="p-2 text-center">
+                      <input
+                        v-model="row.selected"
+                        type="checkbox"
+                        :disabled="
+                          row.status !== 'pending' ||
+                          (row.action !== 'create' && row.action !== 'update')
+                        "
+                        :aria-label="`ยืนยันนำเข้า ${row.student?.studentId ?? 'แถว'}`"
+                      />
+                    </td>
+                    <td class="p-2 text-center font-mono text-muted">
+                      {{
+                        (excelPreviewPage - 1) * excelPreviewPageSize + idx + 1
+                      }}
+                    </td>
+                    <td class="p-2 font-mono font-bold text-highlighted">
+                      {{ row.student?.studentId || '-' }}
+                    </td>
+                    <td class="p-2">
+                      <span class="block text-highlighted">{{
+                        typeof row.student?.name === 'string'
+                          ? row.student.name
+                          : row.student?.name?.th || row.student?.name?.en || '-'
+                      }}</span>
+                    </td>
+                    <td class="p-2 font-mono text-muted">
+                      {{ row.student?.email || '-' }}
+                    </td>
+                    <td class="p-2">
+                      <span class="font-semibold text-highlighted">{{
+                        row.student?.programReference ||
+                        getProgramDisplay(
+                          row.student?.programId || '',
                           data?.items.find(
                             (student) =>
                               student.studentId === row.student?.studentId
                           )
                         )
-                      }})</span
-                    >
-                  </td>
-                  <td class="p-2">
-                    <span
-                      class="font-mono text-xs font-semibold text-highlighted block"
-                    >
-                      {{ row.student?.semester || '-' }}
-                    </span>
-                    <span
-                      v-if="row.student?.course"
-                      class="text-[10px] text-muted block"
-                    >
-                      {{ row.student.course }}
-                    </span>
-                  </td>
-                  <td class="p-2 text-xs truncate max-w-[160px]">
-                    <span class="block text-highlighted font-medium truncate">
-                      {{ row.student?.company || '-' }}
-                    </span>
-                    <span
-                      v-if="row.student?.province"
-                      class="text-[10px] text-muted block"
-                    >
-                      📍 {{ row.student.province }}
-                    </span>
-                  </td>
-                  <td class="p-2 text-center">
-                    <UBadge
-                      v-if="row.status === 'committed'"
-                      color="success"
-                      :label="
-                        row.outcome === 'created' ? 'เพิ่มแล้ว' : 'อัปเดตแล้ว'
-                      "
-                      size="xs"
-                      variant="subtle"
-                    />
-                    <UBadge
-                      v-else-if="row.action === 'invalid'"
-                      color="error"
-                      label="ข้อมูลไม่ครบ"
-                      size="xs"
-                      variant="subtle"
-                    />
-                    <UBadge
-                      v-else-if="row.action === 'update'"
-                      color="warning"
-                      label="มีส่วนต่าง"
-                      size="xs"
-                      variant="subtle"
-                    />
-                    <UBadge
-                      v-else-if="row.action === 'unchanged'"
-                      color="neutral"
-                      label="ไม่เปลี่ยน"
-                      size="xs"
-                      variant="subtle"
-                    />
-                    <UBadge
-                      v-else
-                      color="primary"
-                      label="เพิ่มใหม่"
-                      size="xs"
-                      variant="subtle"
-                    />
-                  </td>
-                </tr>
-                <tr
-                  v-for="row in paginatedParsedRows.filter(
-                    (item) =>
-                      item.issues.length ||
-                      item.warnings.length ||
-                      item.changes.length
-                  )"
-                  :key="`${row.id}:details`"
-                  class="border-b border-default bg-muted/10"
-                >
-                  <td colspan="9" class="px-4 pb-3 pt-1 text-[11px] text-muted">
-                    <p
-                      v-for="issue in row.issues"
-                      :key="issue.code"
-                      class="text-error"
-                    >
-                      {{ issue.message }}
-                    </p>
-                    <p
-                      v-for="warning in row.warnings"
-                      :key="warning.code"
-                      class="text-warning"
-                    >
-                      {{ warning.message }}
-                    </p>
-                    <p
-                      v-for="change in row.changes"
-                      :key="change.field"
-                      class="text-highlighted"
-                    >
-                      {{ importFieldLabel(change.field) }}:
-                      {{ importDiffValue(change.before) }} →
-                      {{ importDiffValue(change.after) }}
-                    </p>
-                    <p v-if="row.action === 'update'">
-                      ยืนยันเฉพาะแถวนี้เพื่อใช้ค่าที่แสดงด้านบนแทนข้อมูลปัจจุบัน
-                    </p>
-                  </td>
-                </tr>
+                      }}</span>
+                      <span class="text-muted text-[10px] ml-1"
+                        >({{
+                          row.student?.schoolReference ||
+                          getSchoolDisplay(
+                            row.student?.schoolId || '',
+                            data?.items.find(
+                              (student) =>
+                                student.studentId === row.student?.studentId
+                            )
+                          )
+                        }})</span
+                      >
+                    </td>
+                    <td class="p-2">
+                      <span
+                        class="font-mono text-xs font-semibold text-highlighted block"
+                      >
+                        {{ row.student?.semester || '-' }}
+                      </span>
+                      <span
+                        v-if="row.student?.course"
+                        class="text-[10px] text-muted block"
+                      >
+                        {{ row.student.course }}
+                      </span>
+                    </td>
+                    <td class="p-2 text-xs truncate max-w-[160px]">
+                      <span class="block text-highlighted font-medium truncate">
+                        {{ row.student?.company || '-' }}
+                      </span>
+                      <span
+                        v-if="row.student?.province"
+                        class="text-[10px] text-muted block"
+                      >
+                        📍 {{ row.student.province }}
+                      </span>
+                    </td>
+                    <td class="p-2 text-center">
+                      <UBadge
+                        v-if="row.status === 'committed'"
+                        color="success"
+                        :label="
+                          row.outcome === 'created' ? 'เพิ่มแล้ว' : 'อัปเดตแล้ว'
+                        "
+                        size="xs"
+                        variant="subtle"
+                      />
+                      <UBadge
+                        v-else-if="row.action === 'invalid'"
+                        color="error"
+                        label="ข้อมูลไม่ครบ"
+                        size="xs"
+                        variant="subtle"
+                      />
+                      <UBadge
+                        v-else-if="row.action === 'update'"
+                        color="warning"
+                        label="มีส่วนต่าง"
+                        size="xs"
+                        variant="subtle"
+                      />
+                      <UBadge
+                        v-else-if="row.action === 'unchanged'"
+                        color="neutral"
+                        label="ไม่เปลี่ยน"
+                        size="xs"
+                        variant="subtle"
+                      />
+                      <UBadge
+                        v-else
+                        color="primary"
+                        label="เพิ่มใหม่"
+                        size="xs"
+                        variant="subtle"
+                      />
+                    </td>
+                  </tr>
+                  <tr
+                    v-if="
+                      row.issues.length ||
+                      row.warnings.length ||
+                      row.changes.length
+                    "
+                    :key="`${row.id}:details`"
+                    class="border-b border-default bg-muted/10"
+                  >
+                    <td colspan="9" class="px-4 pb-3 pt-1 text-[11px] text-muted">
+                      <p
+                        v-for="issue in row.issues"
+                        :key="issue.code"
+                        class="text-error"
+                      >
+                        {{ issue.message }}
+                      </p>
+                      <p
+                        v-for="warning in row.warnings"
+                        :key="warning.code"
+                        class="text-warning"
+                      >
+                        {{ warning.message }}
+                      </p>
+                      <p
+                        v-for="change in row.changes"
+                        :key="change.field"
+                        class="text-highlighted"
+                      >
+                        {{ importFieldLabel(change.field) }}:
+                        {{ importDiffValue(change.before) }} →
+                        {{ importDiffValue(change.after) }}
+                      </p>
+                      <p v-if="row.action === 'update'">
+                        ยืนยันเฉพาะแถวนี้เพื่อใช้ค่าที่แสดงด้านบนแทนข้อมูลปัจจุบัน
+                      </p>
+                    </td>
+                  </tr>
+                </template>
               </tbody>
             </table>
           </div>
 
           <AppPagination
             v-model:page="excelPreviewPage"
+            v-model:page-size="excelPreviewPageSize"
             :total="parsedRows.length"
-            :page-size="excelPreviewPageSize"
             items-name="รายการ"
           />
         </div>
@@ -3325,7 +3363,7 @@ function handleModalBackdropClick() {
         <form class="space-y-6" @submit.prevent="handleEditSubmit">
           <!-- 2 Columns Grid -->
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <!-- คอลัมน์ที่ 1: ข้อมูลสถานประกอบการและหลักสูตร -->
+            <!-- คอลัมน์ที่ 1: ข้อมูลสถานประกอบการ -->
             <div
               class="rounded-2xl border border-default/70 bg-muted/15 dark:bg-muted/10 p-5 sm:p-6 space-y-4 shadow-sm"
             >
@@ -3337,8 +3375,7 @@ function handleModalBackdropClick() {
                   class="size-4.5 text-primary"
                 />
                 <span
-                  >ข้อมูลสถานประกอบการและหลักสูตร (Internship & Course
-                  Info)</span
+                  >ข้อมูลสถานประกอบการ (Internship & Workplace Info)</span
                 >
               </div>
 
@@ -3410,144 +3447,20 @@ function handleModalBackdropClick() {
                 />
               </div>
 
-              <!-- 3. จังหวัดที่ฝึกงาน -->
+              <!-- 5. จังหวัดที่ฝึกงาน -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
                 >
                   จังหวัดที่ฝึกงาน (Province)
                 </label>
-                <select
+                <SearchableSelect
                   v-model="editForm.province"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                >
-                  <option value="">-- ไม่ระบุ / เลือกจังหวัด --</option>
-                  <option
-                    v-if="
-                      editForm.province &&
-                      !isProvinceInMaster(editForm.province)
-                    "
-                    :value="editForm.province"
-                  >
-                    {{ editForm.province }} (เดิม)
-                  </option>
-                  <optgroup
-                    v-for="reg in provinceRegions"
-                    :key="reg"
-                    :label="reg"
-                  >
-                    <option
-                      v-for="prov in getProvincesByRegion(reg)"
-                      :key="prov.id || prov.code"
-                      :value="prov.nameTh"
-                    >
-                      {{ prov.nameTh }} ({{ prov.nameEn }})
-                    </option>
-                  </optgroup>
-                  <option
-                    v-for="prov in getProvincesWithoutRegion()"
-                    :key="prov.id || prov.code"
-                    :value="prov.nameTh"
-                  >
-                    {{ prov.nameTh }} ({{ prov.nameEn }})
-                  </option>
-                </select>
-              </div>
-
-              <!-- 4. สำนักวิชา -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  สำนักวิชา (School) <span class="text-rose-500">*</span>
-                </label>
-                <PaginatedLookupSelect
-                  :model-value="editForm.schoolId"
-                  api-path="/academic/schools"
-                  id-query-param="schoolIds"
-                  label="สำนักวิชา"
-                  required
-                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
-                  @update:model-value="setEditSchool"
+                  :options="editProvinceSelectOptions"
+                  control-class="h-11 rounded-xl text-sm"
+                  search-placeholder="ค้นหาจังหวัด…"
+                  placeholder="-- ไม่ระบุ / เลือกจังหวัด --"
                 />
-              </div>
-
-              <!-- 5. สาขาวิชา / หลักสูตร -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  สาขาวิชา / หลักสูตร (Program)
-                  <span class="text-rose-500">*</span>
-                </label>
-                <PaginatedLookupSelect
-                  v-model="editForm.programId"
-                  api-path="/academic/programs"
-                  id-query-param="programIds"
-                  label="สาขาวิชา / หลักสูตร"
-                  required
-                  :query="
-                    editForm.schoolId ? { schoolId: editForm.schoolId } : {}
-                  "
-                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-
-              <!-- 6. รายวิชาที่ฝึกงาน -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  รายวิชาที่ฝึกงาน (Course)
-                </label>
-                <PaginatedLookupSelect
-                  v-model="editForm.courseId"
-                  api-path="/academic/courses"
-                  id-query-param="courseIds"
-                  label="รายวิชาที่ฝึกงาน"
-                  empty-label="-- ไม่ระบุรายวิชา --"
-                  :query="
-                    editForm.programId ? { programId: editForm.programId } : {}
-                  "
-                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-
-              <!-- 7. ภาคการศึกษา -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  ภาคการศึกษา (Semester)
-                </label>
-                <select
-                  v-model="editForm.semester"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                >
-                  <option value="" disabled>-- เลือกภาคการศึกษา --</option>
-                  <option
-                    v-if="
-                      editForm.semester &&
-                      ![
-                        'ภาคการศึกษาต้น',
-                        'ภาคการศึกษาปลาย',
-                        'ภาคการศึกษาฤดูร้อน'
-                      ].includes(editForm.semester)
-                    "
-                    :value="editForm.semester"
-                  >
-                    {{ formatSemesterText(editForm.semester) }}
-                  </option>
-                  <option value="ภาคการศึกษาต้น">
-                    ภาคการศึกษาที่ 1 (ภาคการศึกษาต้น)
-                  </option>
-                  <option value="ภาคการศึกษาปลาย">
-                    ภาคการศึกษาที่ 2 (ภาคการศึกษาปลาย)
-                  </option>
-                  <option value="ภาคการศึกษาฤดูร้อน">
-                    ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)
-                  </option>
-                </select>
               </div>
             </div>
 
@@ -3612,39 +3525,23 @@ function handleModalBackdropClick() {
                 </div>
               </div>
 
-              <!-- 3. ชื่อ-นามสกุล (ภาษาไทย) -->
+              <!-- 3. ชื่อ-นามสกุล (Full Name) -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
                 >
-                  ชื่อ-นามสกุล (ภาษาไทย) <span class="text-rose-500">*</span>
+                  ชื่อ-นามสกุล (Full Name) <span class="text-rose-500">*</span>
                 </label>
                 <UInput
-                  v-model="editForm.nameTh"
-                  placeholder="เช่น นายนิติพงษ์ สิทธิวงค์"
+                  v-model="editForm.name"
+                  placeholder="เช่น นายกิตติศักดิ์ พัฒนา"
                   size="lg"
                   class="w-full"
                   required
                 />
               </div>
 
-              <!-- 4. Full Name (English) -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  Full Name (English) <span class="text-rose-500">*</span>
-                </label>
-                <UInput
-                  v-model="editForm.nameEn"
-                  placeholder="เช่น Mr. Nitipong Sittiwong"
-                  size="lg"
-                  class="w-full"
-                  required
-                />
-              </div>
-
-              <!-- 5. อีเมลนักศึกษา (Student Email) -->
+              <!-- 4. อีเมลนักศึกษา (Student Email) -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -3666,24 +3563,79 @@ function handleModalBackdropClick() {
                 </p>
               </div>
 
-              <!-- 6. อีเมลส่วนตัว (Personal Email) -->
+              <!-- 5. สำนักวิชา -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
                 >
-                  อีเมลส่วนตัว (Personal Email)
+                  สำนักวิชา (School) <span class="text-rose-500">*</span>
                 </label>
-                <UInput
-                  v-model="editForm.personalEmail"
-                  type="email"
-                  placeholder="เช่น somchai.dev@gmail.com"
-                  size="lg"
-                  class="w-full font-mono"
-                  icon="i-lucide-mail"
+                <PaginatedLookupSelect
+                  :model-value="editForm.schoolId"
+                  api-path="/academic/schools"
+                  id-query-param="schoolIds"
+                  label="สำนักวิชา"
+                  required
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  @update:model-value="setEditSchool"
                 />
-                <p class="text-[11px] text-muted mt-1">
-                  อีเมลส่วนตัวหรืออีเมลสำรองสำหรับติดต่อ (เช่น Gmail, Outlook)
-                </p>
+              </div>
+
+              <!-- 6. สาขาวิชา / หลักสูตร -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  สาขาวิชา / หลักสูตร (Program)
+                  <span class="text-rose-500">*</span>
+                </label>
+                <PaginatedLookupSelect
+                  v-model="editForm.programId"
+                  api-path="/academic/programs"
+                  id-query-param="programIds"
+                  label="สาขาวิชา / หลักสูตร"
+                  required
+                  :query="
+                    editForm.schoolId ? { schoolId: editForm.schoolId } : {}
+                  "
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <!-- 7. รายวิชาที่ฝึกงาน -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  รายวิชาที่ฝึกงาน (Course)
+                </label>
+                <PaginatedLookupSelect
+                  v-model="editForm.courseId"
+                  api-path="/academic/courses"
+                  id-query-param="courseIds"
+                  label="รายวิชาที่ฝึกงาน"
+                  empty-label="-- ไม่ระบุรายวิชา --"
+                  :query="
+                    editForm.programId ? { programId: editForm.programId } : {}
+                  "
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <!-- 8. ภาคการศึกษา -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  ภาคการศึกษา (Semester)
+                </label>
+                <SearchableSelect
+                  v-model="editForm.semester"
+                  :options="editSemesterSelectOptions"
+                  control-class="h-11 rounded-xl text-sm"
+                  search-placeholder="ค้นหาภาคการศึกษา…"
+                  placeholder="-- เลือกภาคการศึกษา --"
+                />
               </div>
             </div>
           </div>
@@ -3778,7 +3730,7 @@ function handleModalBackdropClick() {
                 <template v-else>
                   ส่งลิงก์แบบประเมินให้แก่ผู้ดูแล / สถานประกอบการสำหรับนักศึกษา
                   <strong class="text-highlighted">
-                    {{ sendModalStudent?.name.th }} ({{
+                    {{ getStudentName(sendModalStudent) }} ({{
                       sendModalStudent?.studentId
                     }})
                   </strong>
@@ -3871,10 +3823,20 @@ function handleModalBackdropClick() {
           <!-- Title and Description -->
           <div class="space-y-1.5">
             <h3 class="text-xl font-bold text-highlighted">
-              เข้าคิวส่งคำเชิญแล้ว
+              {{
+                sendEmailSuccessData.status === 'sent' ||
+                sendEmailSuccessData.status === 'completed'
+                  ? 'ส่งคำเชิญเรียบร้อยแล้ว'
+                  : 'เข้าคิวส่งคำเชิญแล้ว'
+              }}
             </h3>
             <p class="text-xs text-muted max-w-md mx-auto leading-relaxed">
-              ระบบรับคำขอและเข้าคิวส่งลิงก์แบบประเมินสำหรับนักศึกษา
+              {{
+                sendEmailSuccessData.status === 'sent' ||
+                sendEmailSuccessData.status === 'completed'
+                  ? 'ระบบจัดส่งลิงก์แบบประเมินและรหัส PIN สำหรับนักศึกษา'
+                  : 'ระบบรับคำขอและเข้าคิวส่งลิงก์แบบประเมินสำหรับนักศึกษา'
+              }}
               <strong class="text-highlighted font-semibold">{{
                 sendEmailSuccessData.studentName
               }}</strong>
@@ -3882,7 +3844,7 @@ function handleModalBackdropClick() {
               <strong class="text-highlighted font-mono">{{
                 sendEmailSuccessData.recipientEmail
               }}</strong>
-              แล้ว โดยสามารถติดตามผลจริงจากรายการ Delivery
+              เรียบร้อยแล้ว
             </p>
           </div>
 
@@ -3909,6 +3871,40 @@ function handleModalBackdropClick() {
                 label="คัดลอก"
                 size="xs"
                 @click="copyInvitationLink(sendEmailSuccessData.invitationUrl)"
+              />
+            </div>
+          </div>
+
+          <!-- PIN Display Box -->
+          <div
+            v-if="sendEmailSuccessData.pin"
+            class="rounded-xl border border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-950/20 p-3.5 text-left space-y-2 max-w-md mx-auto shadow-2xs"
+          >
+            <div class="flex items-center justify-between text-xs">
+              <span
+                class="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5"
+              >
+                <UIcon
+                  name="i-lucide-key-round"
+                  class="size-3.5 text-emerald-600 dark:text-emerald-400"
+                />
+                รหัส PIN สำหรับเข้าประเมิน (16 หลัก):
+              </span>
+              <span class="text-[11px] text-muted">คลิกเพื่อคัดลอก PIN</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <input
+                readonly
+                :value="sendEmailSuccessData.pin"
+                class="flex-1 h-8 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-default px-3 text-sm font-mono font-bold text-emerald-700 dark:text-emerald-300 tracking-widest focus:outline-none select-all"
+              />
+              <UButton
+                color="primary"
+                variant="subtle"
+                icon="i-lucide-copy"
+                label="คัดลอก PIN"
+                size="xs"
+                @click="copyPin(sendEmailSuccessData.pin)"
               />
             </div>
           </div>
@@ -3996,6 +3992,7 @@ function handleModalBackdropClick() {
                     <th class="py-2.5 px-3">นักศึกษา</th>
                     <th class="py-2.5 px-3">สถานประกอบการ</th>
                     <th class="py-2.5 px-3">ผู้รับ / อีเมล</th>
+                    <th class="py-2.5 px-3">รหัส PIN</th>
                     <th class="py-2.5 px-3 text-center">สถานะ</th>
                     <th class="py-2.5 px-3 text-right">การดำเนินการ</th>
                   </tr>
@@ -4024,6 +4021,23 @@ function handleModalBackdropClick() {
                       <div class="text-[11px] font-mono text-muted">
                         {{ item.email }}
                       </div>
+                    </td>
+                    <td class="py-2.5 px-3">
+                      <div
+                        v-if="item.pin"
+                        class="flex items-center gap-1 font-mono text-[11px] font-bold text-emerald-600 dark:text-emerald-400"
+                      >
+                        <span>{{ item.pin }}</span>
+                        <UButton
+                          color="neutral"
+                          variant="ghost"
+                          size="xs"
+                          icon="i-lucide-copy"
+                          title="คัดลอก PIN"
+                          @click="copyPin(item.pin)"
+                        />
+                      </div>
+                      <span v-else class="text-muted text-[11px]">-</span>
                     </td>
                     <td class="py-2.5 px-3 text-center">
                       <UBadge
@@ -4305,9 +4319,9 @@ function handleModalBackdropClick() {
                   </label>
                   <div
                     class="h-9 rounded-lg border border-default bg-default/70 px-3 flex items-center text-xs text-highlighted font-medium truncate"
-                    :title="`${sendModalStudent?.studentId} - ${sendModalStudent?.name.th}`"
+                    :title="`${sendModalStudent?.studentId} - ${getStudentName(sendModalStudent)}`"
                   >
-                    {{ sendModalStudent?.name.th }}
+                    {{ getStudentName(sendModalStudent) }}
                   </div>
                 </div>
               </div>
@@ -4416,7 +4430,7 @@ function handleModalBackdropClick() {
                           {{ sIdx + 1 }}
                         </span>
                         <div class="font-semibold text-highlighted truncate">
-                          {{ st.name.th }}
+                          {{ getStudentName(st) }}
                           <span
                             class="font-mono font-normal text-muted text-[11px]"
                           >
@@ -4625,7 +4639,7 @@ function handleModalBackdropClick() {
                       :key="s.id"
                       :value="s.id"
                     >
-                      {{ s.name.th }}
+                      {{ getStudentName(s) }}
                     </option>
                   </select>
                 </div>
@@ -4738,7 +4752,7 @@ function handleModalBackdropClick() {
                     '[ไม่ระบุชื่อผู้ประเมิน]'
                   }},<br />
                   มหาวิทยาลัยแม่ฟ้าหลวงขอความอนุเคราะห์ให้ท่านทำแบบประเมินผลการฝึกงานของ
-                  <strong>{{ sendModalStudent?.name.th }}</strong> ({{
+                  <strong>{{ getStudentName(sendModalStudent) }}</strong> ({{
                     getProgramDisplay(
                       sendModalStudent?.programId || '',
                       sendModalStudent ?? undefined

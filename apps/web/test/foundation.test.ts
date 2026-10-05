@@ -147,6 +147,7 @@ describe('dynamic document generator', () => {
       academicYear: 2569,
       academicYearEn: 2026,
       semester: '1',
+      semesterEn: 'Semester 1',
       company: 'บริษัท ดิจิทัล โซลูชั่นส์ จำกัด',
       province: 'เชียงใหม่',
       advisorTh: 'ดร.อาจารย์ที่ปรึกษา',

@@ -2,7 +2,10 @@ import type { AppEnvironment } from '@internship/config'
 import type {
   AuthenticatedActor,
   ReportExportField,
-  ReportExportFormat
+  ReportExportFormat,
+  ReportExportType,
+  StudentDirectoryExportLocale,
+  StudentDirectoryExportValues
 } from '@internship/shared-types'
 import {
   DEFAULT_REPORT_EXPORT_FIELDS,
@@ -17,6 +20,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   UnprocessableEntityException
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
@@ -30,6 +34,7 @@ import {
 } from 'mongoose'
 
 import { actorHasPermission } from '../auth/permission-map.js'
+import { supportsMongoTransactions } from '../health.mongo-capability.js'
 import {
   AuditService,
   resourceScopesFromRoleAssignments
@@ -40,11 +45,16 @@ import type { AuditResourceScope } from '../audit/audit.schema.js'
 import { EvaluationAssignmentRecord } from '../evaluations/evaluation.schema.js'
 import { EvaluationCycleRecord } from '../evaluations/evaluation.schema.js'
 import { StudentRecord } from '../members/members.schema.js'
+import { MembersService } from '../members/members.service.js'
 import {
   ReportExportRecord,
   ReportExportSnapshotRecord
 } from './report-export.schema.js'
 import { ReportsService, type ReportFilters } from './reports.service.js'
+import {
+  toStudentDirectoryExportValues,
+  type StudentDirectoryExportSource
+} from './student-directory-export.js'
 
 const MAX_EXPORT_ROWS = 5000
 const EXPORT_TTL_MS = 24 * 60 * 60 * 1000
@@ -55,11 +65,42 @@ const SENSITIVE_FIELDS = new Set<ReportExportField>([
 ])
 
 interface CreateReportExportInput {
-  readonly filters: ReportFilters
+  readonly reportType?: ReportExportType
+  readonly filters: ReportFilters & StudentDirectoryReportFilters
   readonly fields?: readonly ReportExportField[]
+  readonly locale?: StudentDirectoryExportLocale
   readonly format: ReportExportFormat
   readonly idempotencyKey: string
   readonly requestId: string
+}
+
+interface StudentDirectoryReportFilters {
+  readonly search?: string
+  readonly schoolId?: string
+  readonly cycleId?: string
+  readonly academicYear?: number
+  readonly semester?: string
+  readonly evaluationStatus?: string
+}
+
+interface StudentDirectoryListResult {
+  readonly items: readonly StudentDirectoryExportSource[]
+  readonly meta: { readonly total: number }
+}
+
+function isStudentDirectoryListResult(
+  value: unknown
+): value is StudentDirectoryListResult {
+  if (typeof value !== 'object' || value === null) return false
+  const result = value as { readonly items?: unknown; readonly meta?: unknown }
+  if (
+    !Array.isArray(result.items) ||
+    typeof result.meta !== 'object' ||
+    result.meta === null
+  ) {
+    return false
+  }
+  return Number.isInteger((result.meta as { readonly total?: unknown }).total)
 }
 
 interface AssignmentExportSource {
@@ -101,7 +142,8 @@ export class ReportExportService {
     private readonly snapshots: Model<ReportExportSnapshotRecord>,
     private readonly reports: ReportsService,
     private readonly auditService: AuditService,
-    config: ConfigService<AppEnvironment, true>
+    config: ConfigService<AppEnvironment, true>,
+    @Optional() private readonly members?: MembersService
   ) {
     this.bucket = config.get('S3_BUCKET', { infer: true })
     this.s3 = new S3Client({
@@ -122,9 +164,26 @@ export class ReportExportService {
     if (!actorHasPermission(actor.roles, 'exports.create')) {
       throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
     }
-    const fields = input.fields?.length
-      ? [...input.fields]
-      : [...DEFAULT_REPORT_EXPORT_FIELDS]
+    const reportType = input.reportType ?? 'assignments'
+    const fields =
+      reportType === 'studentDirectory'
+        ? []
+        : input.fields?.length
+          ? [...input.fields]
+          : [...DEFAULT_REPORT_EXPORT_FIELDS]
+    if (
+      reportType === 'studentDirectory' &&
+      (input.format !== 'xlsx' || !input.locale)
+    ) {
+      throw new UnprocessableEntityException({
+        code: 'INVALID_STUDENT_DIRECTORY_EXPORT_FORMAT'
+      })
+    }
+    if (reportType === 'assignments' && input.format !== 'csv') {
+      throw new UnprocessableEntityException({
+        code: 'INVALID_ASSIGNMENT_EXPORT_FORMAT'
+      })
+    }
     if (
       fields.some((field) => !REPORT_EXPORT_FIELDS.includes(field)) ||
       new Set(fields).size !== fields.length
@@ -139,12 +198,21 @@ export class ReportExportService {
         code: 'SENSITIVE_EXPORT_PERMISSION_REQUIRED'
       })
     }
+    if (
+      reportType === 'studentDirectory' &&
+      !actorHasPermission(actor.roles, 'students.read')
+    ) {
+      throw new ForbiddenException({
+        code: 'SENSITIVE_EXPORT_PERMISSION_REQUIRED'
+      })
+    }
 
     const requestHashValue = requestHash({
-      type: 'assignments',
+      type: reportType,
       filters: input.filters,
       fields,
-      format: input.format
+      format: input.format,
+      locale: input.locale ?? null
     })
     const scopedKey = idempotencyScopeKey(
       actor.id,
@@ -157,21 +225,46 @@ export class ReportExportService {
       return this.returnExisting(actor, existingExport, requestHashValue)
     }
 
-    const session = await this.connection.startSession()
-    let racedIdempotentRequest = false
-    try {
-      await session.withTransaction(async () => {
-        const raced = await this.exports
-          .findById(exportId)
-          .session(session)
-          .exec()
-        if (raced) {
-          racedIdempotentRequest = true
-          return
-        }
+    const persistedFilters = Object.fromEntries(
+      Object.entries(input.filters).map(([key, value]) => [key, String(value)])
+    )
 
-        const snapshotAt = new Date()
-        const expiresAt = new Date(snapshotAt.getTime() + EXPORT_TTL_MS)
+    let racedIdempotentRequest = false
+    const executeExportCreation = async (
+      session?: ClientSession
+    ): Promise<void> => {
+      const raced = await (session
+        ? this.exports.findById(exportId).session(session).exec()
+        : this.exports.findById(exportId).exec())
+      if (raced) {
+        racedIdempotentRequest = true
+        return
+      }
+
+      const snapshotAt = new Date()
+      const expiresAt = new Date(snapshotAt.getTime() + EXPORT_TTL_MS)
+      let rows: Array<{
+        readonly exportId: string
+        readonly schoolId: string
+        readonly programId: string
+        readonly values: Readonly<Record<string, string | number>>
+        readonly expiresAt: Date
+      }>
+      if (reportType === 'studentDirectory') {
+        const directorySnapshotRows = await this.studentDirectorySnapshot(
+          actor,
+          input.filters,
+          input.locale!,
+          session
+        )
+        rows = directorySnapshotRows.map((row) => ({
+          exportId,
+          schoolId: row.schoolId,
+          programId: row.programId,
+          values: { ...row.values },
+          expiresAt
+        }))
+      } else {
         const assignmentFilter = await this.reports.assignmentFilter(
           actor,
           input.filters,
@@ -197,7 +290,7 @@ export class ReportExportService {
           fields,
           session
         )
-        const rows = assignments.map((assignment) => ({
+        rows = assignments.map((assignment) => ({
           exportId,
           schoolId: assignment.schoolId,
           programId: assignment.programId,
@@ -209,57 +302,105 @@ export class ReportExportService {
           ),
           expiresAt
         }))
-        if (rows.length > 0) {
+      }
+      if (rows.length > 0) {
+        if (session) {
           await this.snapshots.insertMany(rows, { session })
-        }
-
-        const resourceScopes = this.exportResourceScopes(actor)
-        const created = new this.exports({
-          _id: new Types.ObjectId(exportId),
-          requestedBy: actor.id,
-          requestId: input.requestId,
-          requestHash: requestHashValue,
-          filters: input.filters,
-          fields,
-          format: input.format,
-          status: 'queued',
-          rowCount: rows.length,
-          snapshotAt,
-          expiresAt,
-          resourceScopes
-        })
-        await created.save({ session })
-        await this.auditService.record(
-          {
-            requestId: input.requestId,
-            actorId: actor.id,
-            actorEmail: actor.email,
-            action: 'reports.export_requested',
-            route: 'POST /api/v2/reports/exports',
-            method: 'POST',
-            resourceScopes,
-            metadata: {
-              exportId,
-              fields,
-              format: input.format,
-              filters: input.filters,
-              rowCount: rows.length,
-              snapshotAt: snapshotAt.toISOString()
-            }
-          },
-          session
-        )
-      })
-    } catch (error: unknown) {
-      if (this.isDuplicateKey(error)) {
-        const racedExport = await this.exports.findById(exportId).exec()
-        if (racedExport) {
-          return this.returnExisting(actor, racedExport, requestHashValue)
+        } else {
+          await this.snapshots.insertMany(rows)
         }
       }
-      throw error
-    } finally {
-      await session.endSession()
+
+      const resourceScopes = this.exportResourceScopes(actor)
+      const created = new this.exports({
+        _id: new Types.ObjectId(exportId),
+        requestedBy: actor.id,
+        requestId: input.requestId,
+        requestHash: requestHashValue,
+        reportType,
+        ...(input.locale ? { locale: input.locale } : {}),
+        filters: persistedFilters,
+        fields,
+        format: input.format,
+        status: 'queued',
+        rowCount: rows.length,
+        snapshotAt,
+        expiresAt,
+        resourceScopes
+      })
+      if (session) {
+        await created.save({ session })
+      } else {
+        await created.save()
+      }
+      await this.auditService.record(
+        {
+          requestId: input.requestId,
+          actorId: actor.id,
+          actorEmail: actor.email,
+          action: 'reports.export_requested',
+          route: 'POST /api/v2/reports/exports',
+          method: 'POST',
+          resourceScopes,
+          metadata: {
+            exportId,
+            reportType,
+            locale: input.locale,
+            fields,
+            format: input.format,
+            filters: input.filters,
+            rowCount: rows.length,
+            snapshotAt: snapshotAt.toISOString()
+          }
+        },
+        session
+      )
+    }
+
+    let hasTransactionSupport = false
+    try {
+      if (this.connection.db) {
+        const hello = await this.connection.db.admin().command({ hello: 1 })
+        hasTransactionSupport = supportsMongoTransactions(hello)
+      }
+    } catch {
+      hasTransactionSupport = false
+    }
+
+    if (hasTransactionSupport) {
+      const session = await this.connection.startSession()
+      try {
+        await session.withTransaction(
+          () => executeExportCreation(session),
+          {
+            readConcern: { level: 'snapshot' },
+            readPreference: 'primary',
+            writeConcern: { w: 'majority' }
+          }
+        )
+      } catch (error: unknown) {
+        if (this.isDuplicateKey(error)) {
+          const racedExport = await this.exports.findById(exportId).exec()
+          if (racedExport) {
+            return this.returnExisting(actor, racedExport, requestHashValue)
+          }
+        }
+        throw error
+      } finally {
+        await session.endSession()
+      }
+    } else {
+      try {
+        await executeExportCreation()
+      } catch (error: unknown) {
+        if (this.isDuplicateKey(error)) {
+          const racedExport = await this.exports.findById(exportId).exec()
+          if (racedExport) {
+            return this.returnExisting(actor, racedExport, requestHashValue)
+          }
+        }
+        throw error
+      }
     }
 
     const reportExport = await this.exports.findById(exportId).exec()
@@ -270,7 +411,7 @@ export class ReportExportService {
     if (reportExport.status === 'queued') {
       try {
         await this.exportQueue.add(
-          'generate-csv',
+          'generate-report',
           { exportId },
           {
             attempts: 3,
@@ -387,7 +528,7 @@ export class ReportExportService {
     if (reportExport.status === 'queued') {
       try {
         await this.exportQueue.add(
-          'generate-csv',
+          'generate-report',
           { exportId: reportExport.id },
           {
             attempts: 3,
@@ -411,36 +552,34 @@ export class ReportExportService {
 
   private async assignmentSnapshot(
     assignmentFilter: Record<string, unknown>,
-    session: ClientSession
+    session?: ClientSession
   ): Promise<AssignmentExportSource[]> {
-    return this.assignments
+    const query = this.assignments
       .find(assignmentFilter)
       .select('_id cycleId studentId schoolId programId status deadlineAt')
       .sort({ _id: 1 })
       .limit(MAX_EXPORT_ROWS + 1)
-      .session(session)
-      .lean<AssignmentExportSource[]>()
-      .exec()
+    if (session) query.session(session)
+    return query.lean<AssignmentExportSource[]>().exec()
   }
 
   private async studentSnapshot(
     assignments: readonly AssignmentExportSource[],
     fields: readonly ReportExportField[],
-    session: ClientSession
+    session?: ClientSession
   ): Promise<ReadonlyMap<string, StudentExportSource>> {
     if (!fields.some((field) => SENSITIVE_FIELDS.has(field))) return new Map()
     const references = [...new Set(assignments.map((item) => item.studentId))]
     const objectIds = references
       .filter((reference) => Types.ObjectId.isValid(reference))
       .map((reference) => new Types.ObjectId(reference))
-    const students = await this.students
+    const query = this.students
       .find({
         $or: [{ studentId: { $in: references } }, { _id: { $in: objectIds } }]
       })
       .select('_id studentId name email')
-      .session(session)
-      .lean<StudentExportSource[]>()
-      .exec()
+    if (session) query.session(session)
+    const students = await query.lean<StudentExportSource[]>().exec()
     const byReference = new Map<string, StudentExportSource>()
     for (const student of students) {
       byReference.set(student.studentId, student)
@@ -459,22 +598,86 @@ export class ReportExportService {
   private async cycleTermSnapshot(
     assignments: readonly AssignmentExportSource[],
     fields: readonly ReportExportField[],
-    session: ClientSession
+    session?: ClientSession
   ): Promise<ReadonlyMap<string, string>> {
     if (!fields.includes('termId')) return new Map()
-    const cycles = await this.cycles
+    const query = this.cycles
       .find({
         _id: { $in: [...new Set(assignments.map((item) => item.cycleId))] }
       })
       .select('_id academicTermId')
-      .session(session)
-      .lean<
-        Array<{ readonly _id: Types.ObjectId; readonly academicTermId: string }>
-      >()
-      .exec()
+    if (session) query.session(session)
+    const cycles = await query.lean<
+      Array<{ readonly _id: Types.ObjectId; readonly academicTermId: string }>
+    >().exec()
     return new Map(
       cycles.map((cycle) => [cycle._id.toString(), cycle.academicTermId])
     )
+  }
+
+  private async studentDirectorySnapshot(
+    actor: AuthenticatedActor,
+    filters: StudentDirectoryReportFilters,
+    locale: StudentDirectoryExportLocale,
+    session?: ClientSession
+  ): Promise<
+    Array<{
+      readonly schoolId: string
+      readonly programId: string
+      readonly values: StudentDirectoryExportValues
+    }>
+  > {
+    if (!this.members) {
+      throw new UnprocessableEntityException({
+        code: 'STUDENT_DIRECTORY_EXPORT_UNAVAILABLE'
+      })
+    }
+    const rawResult = await this.members.listStudents(
+      actor,
+      {
+        page: 1,
+        pageSize: MAX_EXPORT_ROWS + 1,
+        includeDirectoryData: false,
+        ...(filters.search ? { search: filters.search } : {}),
+        ...(filters.schoolId ? { schoolId: filters.schoolId } : {}),
+        ...(filters.cycleId ? { cycleId: filters.cycleId } : {}),
+        ...(filters.academicYear ? { academicYear: filters.academicYear } : {}),
+        ...(filters.semester ? { semester: filters.semester } : {}),
+        ...(filters.evaluationStatus
+          ? { evaluationStatus: filters.evaluationStatus }
+          : {})
+      },
+      session
+    )
+    if (!isStudentDirectoryListResult(rawResult)) {
+      throw new UnprocessableEntityException({
+        code: 'STUDENT_DIRECTORY_EXPORT_SNAPSHOT_INCOMPLETE'
+      })
+    }
+    const result = rawResult
+    if (result.meta.total > MAX_EXPORT_ROWS) {
+      throw new UnprocessableEntityException({
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        details: { maxRows: MAX_EXPORT_ROWS }
+      })
+    }
+    if (result.meta.total !== result.items.length) {
+      throw new UnprocessableEntityException({
+        code: 'STUDENT_DIRECTORY_EXPORT_SNAPSHOT_INCOMPLETE'
+      })
+    }
+    return result.items.map((student) => {
+      if (!student.schoolId || !student.programId) {
+        throw new UnprocessableEntityException({
+          code: 'EXPORT_SCOPE_REFERENCE_MISSING'
+        })
+      }
+      return {
+        schoolId: student.schoolId,
+        programId: student.programId,
+        values: toStudentDirectoryExportValues(student, filters.cycleId, locale)
+      }
+    })
   }
 
   private valuesFor(
@@ -550,7 +753,8 @@ export class ReportExportService {
   ): unknown {
     return {
       id: reportExport.id,
-      reportType: 'assignments',
+      reportType: reportExport.reportType ?? 'assignments',
+      ...(reportExport.locale ? { locale: reportExport.locale } : {}),
       filters: reportExport.filters,
       fields: reportExport.fields,
       format: reportExport.format,

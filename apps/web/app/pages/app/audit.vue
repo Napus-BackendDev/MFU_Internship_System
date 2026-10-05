@@ -16,6 +16,14 @@ interface AuditPage {
 const api = useApi()
 const searchQuery = ref('')
 const selectedAction = ref('all')
+const actionFilterOptions = [
+  { value: 'all', label: 'ทุก Action' },
+  { value: 'auth', label: 'การเข้าสู่ระบบ (Auth)' },
+  { value: 'create', label: 'การสร้างข้อมูล (Create)' },
+  { value: 'update', label: 'การแก้ไขข้อมูล (Update)' },
+  { value: 'delete', label: 'การลบข้อมูล (Delete)' },
+  { value: 'patch', label: 'การปรับปรุง (Patch)' }
+]
 const page = ref(1)
 const pageSize = ref(5)
 
@@ -113,18 +121,12 @@ watch(pageSize, () => {
             class="text-xs font-semibold text-muted whitespace-nowrap"
             >หมวด Action:</label
           >
-          <select
-            id="audit-action-filter"
+          <SearchableSelect
             v-model="selectedAction"
-            class="rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary font-medium"
-          >
-            <option value="all">ทุก Action</option>
-            <option value="auth">การเข้าสู่ระบบ (Auth)</option>
-            <option value="create">การสร้างข้อมูล (Create)</option>
-            <option value="update">การแก้ไขข้อมูล (Update)</option>
-            <option value="delete">การลบข้อมูล (Delete)</option>
-            <option value="patch">การปรับปรุง (Patch)</option>
-          </select>
+            :options="actionFilterOptions"
+            search-placeholder="ค้นหาหมวด Action…"
+            aria-label="หมวด Action"
+          />
         </div>
 
         <UButton

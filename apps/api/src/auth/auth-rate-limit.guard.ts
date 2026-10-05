@@ -51,10 +51,15 @@ export class AuthRateLimitGuard implements CanActivate {
     const response = context.switchToHttp().getResponse<Response>()
     response.setHeader('Retry-After', String(result.retryAfterSeconds))
     const minutes = Math.max(1, Math.ceil(result.retryAfterSeconds / 60))
+    const path = this.normalizedPath(request)
+    const isImport = path.includes('/students/import')
+    const message = isImport
+      ? `คุณอัปโหลดไฟล์นำเข้าข้อมูลเกินจำนวนครั้งที่กำหนด กรุณารออีก ${minutes} นาที แล้วลองใหม่อีกครั้ง`
+      : `คุณกรอกรหัส PIN หรือข้อมูลยืนยันตัวตนเกินจำนวนครั้งที่กำหนด กรุณารออีก ${minutes} นาที แล้วลองใหม่อีกครั้ง`
     throw new HttpException(
       {
         code: 'RATE_LIMITED',
-        message: `คุณกรอกรหัส PIN หรือข้อมูลยืนยันตัวตนเกินจำนวนครั้งที่กำหนด กรุณารออีก ${minutes} นาที แล้วลองใหม่อีกครั้ง`,
+        message,
         retryAfter: result.retryAfterSeconds
       },
       429,

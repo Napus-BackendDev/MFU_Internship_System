@@ -1,7 +1,10 @@
 import { PutObjectCommand } from '@aws-sdk/client-s3'
 import type { Job } from 'bullmq'
 import type { AppEnvironment } from '@internship/config'
-import type { ReportExportField } from '@internship/shared-types'
+import type {
+  ReportExportField,
+  StudentDirectoryExportValues
+} from '@internship/shared-types'
 import { describe, expect, it } from 'vitest'
 
 import { ReportExportProcessor } from '../src/runtime/report-export.processor.js'
@@ -19,7 +22,7 @@ interface UpdateWrite {
 }
 
 interface ExportSnapshotRow {
-  readonly values: Readonly<Record<string, string>>
+  readonly values: Readonly<Record<string, string | number>>
 }
 
 interface ProcessorHarness {
@@ -39,6 +42,8 @@ function createProcessor(
   input: {
     readonly rows?: readonly ExportSnapshotRow[]
     readonly rowCount?: number
+    readonly reportType?: 'studentDirectory'
+    readonly locale?: 'th' | 'en'
   } = {}
 ): ProcessorHarness {
   const uploadedCommands: PutObjectCommand[] = []
@@ -46,7 +51,10 @@ function createProcessor(
   const processingRecord = {
     id: '64b000000000000000000001',
     status: 'processing',
-    format: 'csv',
+    format: input.reportType ? 'xlsx' : 'csv',
+    ...(input.reportType ? { reportType: input.reportType } : {}),
+    ...(input.locale ? { locale: input.locale } : {}),
+    snapshotAt: new Date('2026-09-29T00:00:00.000Z'),
     fields: ['studentName', 'status'] as ReportExportField[],
     rowCount: input.rowCount ?? 1,
     expiresAt: new Date(Date.now() + 60_000)
@@ -171,5 +179,61 @@ describe('ReportExportProcessor', () => {
     expect(uploadedCommands).toHaveLength(0)
     expect(updates).toHaveLength(1)
     expect(updates[0]?.update.$set?.status).toBe('queued')
+  })
+
+  it('renders student-directory XLSX jobs to private XLSX objects', async () => {
+    const values: StudentDirectoryExportValues = {
+      studentId: '6531501001',
+      nameTh: 'นักศึกษา',
+      nameEn: 'Student',
+      email: 'student@example.test',
+      schoolTh: 'สำนักวิชา',
+      schoolEn: 'School',
+      programTh: 'หลักสูตร',
+      programEn: 'Program',
+      courseDisplay: 'Internship',
+      academicYear: 2569,
+      academicYearEn: 2026,
+      semester: '1',
+      semesterEn: 'Semester 1',
+      company: 'บริษัททดสอบ',
+      companyAddress: '-',
+      province: '-',
+      advisorTh: '-',
+      advisorEn: '-',
+      evaluatorTh: '-',
+      evaluatorEn: '-',
+      evaluatorPositionTh: '-',
+      evaluatorPositionEn: '-',
+      evaluatorEmail: '-',
+      statusTh: 'ส่งผลประเมินแล้ว',
+      statusEn: 'Submitted',
+      hardSkillScore: '4.3 / 1–5 (2 ข้อ)',
+      softSkillScore: '3.5 / 1–5 (1 ข้อ)'
+    }
+    const { processor, uploadedCommands, updates } = createProcessor({
+      reportType: 'studentDirectory',
+      locale: 'th',
+      rows: [{ values: { ...values } }]
+    })
+    const job = {
+      data: { exportId: '64b000000000000000000001' },
+      opts: { attempts: 3 },
+      attemptsMade: 0
+    } as Job<ReportExportJob>
+
+    await processor.process(job)
+
+    const command = uploadedCommands[0]
+    if (!command) throw new Error('EXPECTED_PUT_OBJECT_COMMAND')
+    expect(command.input.Key).toMatch(/\/[a-f\d]{64}\.xlsx$/)
+    expect(command.input.ContentType).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    expect(command.input.ContentDisposition).toBe(
+      'attachment; filename="MFU_Internship_Report_TH_20260929.xlsx"'
+    )
+    expect(Buffer.isBuffer(command.input.Body)).toBe(true)
+    expect(updates[0]?.update.$set?.status).toBe('ready')
   })
 })

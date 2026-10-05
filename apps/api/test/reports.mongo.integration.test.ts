@@ -1,6 +1,11 @@
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Queue } from 'bullmq'
-import { createConnection, type Connection, type Model } from 'mongoose'
+import {
+  createConnection,
+  type ClientSession,
+  type Connection,
+  type Model
+} from 'mongoose'
 import type { AuthenticatedActor } from '@internship/shared-types'
 import type { ExecutionContext } from '@nestjs/common'
 import {
@@ -37,6 +42,7 @@ import {
   EvaluationCycleSchema
 } from '../src/evaluations/evaluation.schema.js'
 import { StudentRecord, StudentSchema } from '../src/members/members.schema.js'
+import type { MembersService } from '../src/members/members.service.js'
 import {
   ReportExportRecord,
   ReportExportSchema,
@@ -93,6 +99,7 @@ describe('Reports on an isolated MongoDB replica set', () => {
   let exportService: ReportExportService
   let auditService: AuditService
   const exportQueue = { add: vi.fn().mockResolvedValue({ id: 'queued-job' }) }
+  const directoryMembers = { listStudents: vi.fn() }
 
   beforeAll(async () => {
     replicaSet = await MongoMemoryReplSet.create({
@@ -156,7 +163,8 @@ describe('Reports on an isolated MongoDB replica set', () => {
             S3_ACCESS_KEY_ID: 'test-access-key',
             S3_SECRET_ACCESS_KEY: 'test-secret-key'
           })[key]
-      } as never
+      } as never,
+      directoryMembers as unknown as MembersService
     )
     await Promise.all([
       assignments.init(),
@@ -177,6 +185,7 @@ describe('Reports on an isolated MongoDB replica set', () => {
 
   beforeEach(async () => {
     vi.restoreAllMocks()
+    directoryMembers.listStudents.mockReset()
     exportQueue.add.mockClear().mockResolvedValue({ id: 'queued-job' })
     await Promise.all([
       assignments.deleteMany({}),
@@ -525,7 +534,7 @@ describe('Reports on an isolated MongoDB replica set', () => {
 
     expect(created).toMatchObject({ status: 'queued', rowCount: 1 })
     expect(exportQueue.add).toHaveBeenCalledWith(
-      'generate-csv',
+      'generate-report',
       { exportId: created.id },
       expect.objectContaining({ jobId: `report-export-${created.id}` })
     )
@@ -588,6 +597,159 @@ describe('Reports on an isolated MongoDB replica set', () => {
     await expect(
       auditLogs.countDocuments({ action: 'reports.export_requested' })
     ).resolves.toBe(2)
+  })
+
+  it('snapshots actor-scoped student directory values for an async XLSX export', async () => {
+    const cycleId = '64b0000000000000000000d1'
+    directoryMembers.listStudents.mockImplementationOnce(
+      (_actor, _input, session) => {
+        expect((session as ClientSession | undefined)?.inTransaction()).toBe(
+          true
+        )
+        return Promise.resolve({
+          items: [
+            {
+              schoolId: schoolA,
+              programId: programA,
+              studentId: '6631505101',
+              name: { th: 'นักศึกษาทดสอบ', en: 'Test Student' },
+              email: 'student@example.test',
+              directoryRelations: {
+                assignments: [
+                  {
+                    cycleId,
+                    placementId: 'placement-snapshot',
+                    status: 'submitted',
+                    categoryScores: {
+                      hardSkill: {
+                        average: 4.25,
+                        answeredCount: 2,
+                        scaleMin: 1,
+                        scaleMax: 5
+                      },
+                      softSkill: {
+                        average: 3.5,
+                        answeredCount: 1,
+                        scaleMin: 1,
+                        scaleMax: 5
+                      }
+                    },
+                    evaluator: {
+                      name: { th: 'ผู้ประเมิน', en: 'Evaluator' },
+                      email: 'evaluator@example.test',
+                      position: { th: 'หัวหน้างาน', en: 'Supervisor' }
+                    }
+                  }
+                ],
+                placements: [
+                  {
+                    id: 'placement-snapshot',
+                    academicTermId: '64b0000000000000000000d2',
+                    academicTerm: {
+                      id: '64b0000000000000000000d2',
+                      academicYear: 2026,
+                      semester: '1'
+                    },
+                    organization: {
+                      name: { th: 'บริษัททดสอบ', en: 'Test Company' },
+                      address: { province: 'Chiang Rai' }
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          meta: { total: 1 }
+        })
+      }
+    )
+
+    const created = (await exportService.create(scopedStaff, {
+      reportType: 'studentDirectory',
+      filters: { cycleId, schoolId: schoolA, search: '6631505101' },
+      locale: 'th',
+      format: 'xlsx',
+      idempotencyKey: 'student-directory-export-01',
+      requestId: 'request-directory-export'
+    })) as { id: string; status: string; reportType: string; format: string }
+
+    expect(created).toMatchObject({
+      status: 'queued',
+      reportType: 'studentDirectory',
+      format: 'xlsx'
+    })
+    const directoryCall = directoryMembers.listStudents.mock
+      .calls[0] as unknown as [
+      AuthenticatedActor,
+      Record<string, unknown>,
+      ClientSession
+    ]
+    expect(directoryCall[0]).toEqual(scopedStaff)
+    expect(directoryCall[1]).toEqual(
+      expect.objectContaining({
+        page: 1,
+        pageSize: 5001,
+        includeDirectoryData: false,
+        cycleId,
+        schoolId: schoolA
+      })
+    )
+    const snapshot = await exportSnapshots
+      .findOne({ exportId: created.id })
+      .select('+values')
+      .lean()
+    expect(snapshot).toMatchObject({ schoolId: schoolA, programId: programA })
+    expect(snapshot?.values).toMatchObject({
+      studentId: '6631505101',
+      company: 'บริษัททดสอบ',
+      hardSkillScore: '4.3 / 1–5 (2 ข้อ)',
+      softSkillScore: '3.5 / 1–5 (1 ข้อ)'
+    })
+    expect(exportQueue.add).toHaveBeenCalledWith(
+      'generate-report',
+      { exportId: created.id },
+      expect.objectContaining({ jobId: `report-export-${created.id}` })
+    )
+    await expect(
+      exportService.create(scopedStaff, {
+        reportType: 'studentDirectory',
+        filters: { cycleId, schoolId: schoolA, search: '6631505101' },
+        locale: 'th',
+        format: 'xlsx',
+        idempotencyKey: 'student-directory-export-01',
+        requestId: 'request-directory-export-retry'
+      })
+    ).resolves.toMatchObject({ id: created.id })
+    expect(directoryMembers.listStudents).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects student-directory exports above the server-side row limit', async () => {
+    directoryMembers.listStudents.mockResolvedValueOnce({
+      items: Array.from({ length: 5001 }, (_, index) => ({
+        schoolId: schoolA,
+        programId: programA,
+        studentId: `663150${String(index).padStart(4, '0')}`
+      })),
+      meta: { total: 5001 }
+    })
+
+    await expect(
+      exportService.create(scopedStaff, {
+        reportType: 'studentDirectory',
+        filters: {},
+        locale: 'en',
+        format: 'xlsx',
+        idempotencyKey: 'student-directory-export-over-limit',
+        requestId: 'request-directory-export-over-limit'
+      })
+    ).rejects.toMatchObject({
+      response: {
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        details: { maxRows: 5000 }
+      }
+    })
+    await expect(reportExports.countDocuments({})).resolves.toBe(0)
+    await expect(exportSnapshots.countDocuments({})).resolves.toBe(0)
   })
 
   it('does not add a Student-only assignment to a Coordinator export', async () => {

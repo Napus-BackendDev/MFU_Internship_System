@@ -1,6 +1,10 @@
 import * as XLSX from 'xlsx'
+import type { INestApplication } from '@nestjs/common'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { createConnection, type Connection, type Model } from 'mongoose'
+import { Test } from '@nestjs/testing'
+import request from 'supertest'
+import type { RequestHandler } from 'express'
 import type { AuthenticatedActor } from '@internship/shared-types'
 import {
   afterAll,
@@ -25,6 +29,9 @@ import {
 import { AuditLogRecord, AuditLogSchema } from '../src/audit/audit.schema.js'
 import { AuditService } from '../src/audit/audit.service.js'
 import { StudentRecord, StudentSchema } from '../src/members/members.schema.js'
+import type { AuthenticatedRequest } from '../src/common/http.js'
+import { MembersController } from '../src/members/members.controller.js'
+import { MembersService } from '../src/members/members.service.js'
 import {
   StudentImportBatchRecord,
   StudentImportBatchSchema,
@@ -62,6 +69,7 @@ describe('student import on an isolated MongoDB replica set', () => {
   let commits: Model<StudentImportCommitRecord>
   let auditLogs: Model<AuditLogRecord>
   let auditService: AuditService
+  let app: INestApplication
   let schoolId: string
   let programId: string
   const actor: AuthenticatedActor = {
@@ -114,6 +122,24 @@ describe('student import on an isolated MongoDB replica set', () => {
       commits,
       auditService
     )
+    const moduleRef = await Test.createTestingModule({
+      controllers: [MembersController],
+      providers: [
+        { provide: MembersService, useValue: {} },
+        { provide: StudentImportService, useValue: service }
+      ]
+    }).compile()
+    app = moduleRef.createNestApplication()
+    app.setGlobalPrefix('api/v2')
+    const injectTestActor: RequestHandler = (request, _response, next) => {
+      Object.assign(request, {
+        actor,
+        requestId: 'student-import-http-test'
+      } satisfies Pick<AuthenticatedRequest, 'actor' | 'requestId'>)
+      next()
+    }
+    app.use(injectTestActor)
+    await app.init()
     await Promise.all([
       students.init(),
       schools.init(),
@@ -128,6 +154,7 @@ describe('student import on an isolated MongoDB replica set', () => {
   }, 180_000)
 
   afterAll(async () => {
+    await app?.close()
     await connection?.close()
     await replicaSet?.stop()
   }, 30_000)
@@ -201,6 +228,59 @@ describe('student import on an isolated MongoDB replica set', () => {
       ...overrides
     }
   }
+
+  it('runs preview, reload, and idempotent commit through the student import HTTP routes', async () => {
+    const server = app.getHttpServer() as Parameters<typeof request>[0]
+    const workbook = workbookBuffer([sourceRow()])
+    const previewResponse = await request(server)
+      .post('/api/v2/students/import-preview')
+      .attach('file', workbook, {
+        filename: 'students.xlsx',
+        contentType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      .expect(201)
+    const batch = previewResponse.body as PreviewResponse
+    const rowId = batch.items[0]!.id
+
+    expect(batch.items[0]).toMatchObject({
+      action: 'create',
+      status: 'pending',
+      student: { studentId: '6631503001' }
+    })
+    await expect(students.countDocuments({})).resolves.toBe(0)
+
+    const refreshed = await request(server)
+      .get(`/api/v2/students/imports/${batch.batchId}`)
+      .expect(200)
+    const refreshedBatch = refreshed.body as PreviewResponse
+    expect(refreshedBatch.items[0]).toMatchObject({
+      id: rowId,
+      action: 'create',
+      status: 'pending'
+    })
+
+    const commitResponse = await request(server)
+      .post(`/api/v2/students/imports/${batch.batchId}/commit`)
+      .set('Idempotency-Key', 'http-import-commit-001')
+      .send({ decisions: [{ rowId, action: 'create' }] })
+      .expect(200)
+    const replayResponse = await request(server)
+      .post(`/api/v2/students/imports/${batch.batchId}/commit`)
+      .set('Idempotency-Key', 'http-import-commit-001')
+      .send({ decisions: [{ rowId, action: 'create' }] })
+      .expect(200)
+
+    const commit = commitResponse.body as { commitId: string }
+    const replay = replayResponse.body as { commitId: string }
+    expect(replay.commitId).toBe(commit.commitId)
+    await expect(
+      students.countDocuments({ studentId: '6631503001' })
+    ).resolves.toBe(1)
+    await expect(
+      auditLogs.countDocuments({ action: 'students.import.created' })
+    ).resolves.toBe(1)
+  })
 
   async function preview(
     records: readonly Record<string, unknown>[]

@@ -564,6 +564,14 @@ const server = createServer((request, response) => {
       ],
       request.url
     )
+  } else if (request.method === 'GET' && path === '/api/v2/reports/overview') {
+    payload = {
+      students: 1,
+      assignments: { pending: 1, inProgress: 0, submitted: 0, expired: 0 },
+      failedDeliveries: 0,
+      readyDocuments: 0,
+      generatedAt: '2026-09-27T00:00:00.000Z'
+    }
   } else {
     response.writeHead(404, {
       ...corsHeaders,

@@ -26,6 +26,7 @@ import {
 import { lockActiveAcademicScope } from '../academic/academic-reference-lock.js'
 import { AuditService } from '../audit/audit.service.js'
 import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
+import { runWithTransaction } from '../common/mongo-transaction.js'
 import { StudentRecord } from './members.schema.js'
 import {
   parseStudentWorkbook,
@@ -49,7 +50,7 @@ export interface StudentImportDecision {
 
 interface ImportPayload extends Record<string, unknown> {
   studentId: string
-  name: { th: string; en: string }
+  name: string
   email: string
   schoolId: string
   programId: string
@@ -173,7 +174,7 @@ export class StudentImportService {
       prepared.push(result)
     }
 
-    const batch = await this.connection.transaction(async (session) => {
+    const batch = await runWithTransaction(this.connection, async (session) => {
       const document = await new this.batches({
         actorId: actor.id,
         sourceName: safeName,
@@ -182,11 +183,11 @@ export class StudentImportService {
         sourceRowCount: parsed.rows.length,
         questionFields: [...parsed.questionFields],
         status: 'preview'
-      }).save({ session })
+      }).save(session ? { session } : {})
       const batchId = document.id
       await this.rows.insertMany(
         prepared.map((row) => ({ ...row, batchId, actorId: actor.id })),
-        { ordered: true, session }
+        { ordered: true, ...(session ? { session } : {}) }
       )
       return document
     })
@@ -302,32 +303,78 @@ export class StudentImportService {
     const warnings: StudentImportIssue[] = []
     const sourcePreview = publicSourcePreview(source)
     const sourceRowHash = requestHash(source)
-    const school = findMaster(schools, source.schoolReference, [
-      'schoolCode',
-      'name'
-    ])
-    if (!school) {
+    let school = source.schoolReference
+      ? findMaster(schools, source.schoolReference, ['schoolCode', 'name'])
+      : undefined
+    let program: Record<string, unknown> | undefined
+
+    if (school) {
+      const schoolId = String(school._id)
+      const schoolPrograms = programs.filter(
+        (p) => String(p.schoolId) === schoolId
+      )
+      program = findMaster(schoolPrograms, source.programReference, [
+        'programCode',
+        'name'
+      ])
+      if (!program) {
+        issues.push(
+          issue(
+            'PROGRAM_NOT_FOUND',
+            'program',
+            'Program was not found under the selected school.'
+          )
+        )
+      }
+    } else if (!source.schoolReference && source.programReference) {
+      program = findMaster(programs, source.programReference, [
+        'programCode',
+        'name'
+      ])
+      const resolvedProgram = program
+      if (resolvedProgram) {
+        const derived = schools.find(
+          (s) => String(s._id) === String(resolvedProgram.schoolId)
+        )
+        if (derived) {
+          school = derived
+        }
+      }
+      if (!school) {
+        issues.push(
+          issue('SCHOOL_NOT_FOUND', 'school', 'School is not in master data.')
+        )
+      }
+      if (!program) {
+        issues.push(
+          issue(
+            'PROGRAM_NOT_FOUND',
+            'program',
+            'Program was not found under the selected school.'
+          )
+        )
+      }
+    } else {
       issues.push(
         issue('SCHOOL_NOT_FOUND', 'school', 'School is not in master data.')
       )
+      if (source.programReference) {
+        program = findMaster(programs, source.programReference, [
+          'programCode',
+          'name'
+        ])
+      }
+      if (!program) {
+        issues.push(
+          issue(
+            'PROGRAM_NOT_FOUND',
+            'program',
+            'Program was not found under the selected school.'
+          )
+        )
+      }
     }
     const schoolId = school ? String(school._id) : undefined
-    const schoolPrograms = schoolId
-      ? programs.filter((program) => String(program.schoolId) === schoolId)
-      : []
-    const program = findMaster(schoolPrograms, source.programReference, [
-      'programCode',
-      'name'
-    ])
-    if (school && !program) {
-      issues.push(
-        issue(
-          'PROGRAM_NOT_FOUND',
-          'program',
-          'Program was not found under the selected school.'
-        )
-      )
-    }
     const programId = program ? String(program._id) : undefined
 
     if (
@@ -430,11 +477,10 @@ export class StudentImportService {
 
     const payload: ImportPayload = {
       studentId: source.studentId,
-      name: { th: source.nameTh, en: source.nameEn },
+      name: source.name || source.nameTh || source.nameEn,
       email: source.email,
       schoolId,
       programId,
-      ...(source.personalEmail ? { personalEmail: source.personalEmail } : {}),
       ...(source.courseReference ? { course: source.courseReference } : {}),
       ...(course ? { courseId: String(course._id) } : {}),
       ...(source.semester
@@ -486,17 +532,15 @@ export class StudentImportService {
         expiresAt
       }
     }
+    const changes = existing ? diffPayload(existing, payload) : []
     if (existing?.status === 'archived') {
-      issues.push(
-        issue(
-          'STUDENT_ARCHIVED',
-          'studentId',
-          'Archived student records cannot be reactivated by import.'
-        )
-      )
+      changes.push({
+        field: 'status',
+        before: 'archived',
+        after: 'active'
+      })
     }
 
-    const changes = existing ? diffPayload(existing, payload) : []
     const action =
       issues.length > 0
         ? 'invalid'
@@ -559,7 +603,7 @@ export class StudentImportService {
     requestId: string
   ): Promise<'created' | 'updated' | 'unchanged'> {
     try {
-      return await this.connection.transaction(async (session) => {
+      return await runWithTransaction(this.connection, async (session) => {
         const now = new Date()
         const batch = await this.batches
           .findOne({
@@ -567,12 +611,12 @@ export class StudentImportService {
             actorId: actor.id,
             expiresAt: { $gt: now }
           })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!batch) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
         const row = await this.rows
           .findOne({ _id: decision.rowId, batchId, actorId: actor.id })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!row) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
         if (row.status === 'committed') {
@@ -626,7 +670,7 @@ export class StudentImportService {
               $or: [{ studentId: payload.studentId }, { email: payload.email }]
             })
             .collation({ locale: 'en', strength: 2 })
-            .session(session)
+            .session(session ?? null)
             .exec()
           if (exists) {
             throw new ConflictException({ code: 'IMPORT_ROW_CHANGED' })
@@ -634,7 +678,7 @@ export class StudentImportService {
           await new this.students({
             ...payload,
             status: 'active'
-          }).save({ session })
+          }).save(session ? { session } : {})
           outcome = 'created'
         } else {
           const emailOwner = await this.students
@@ -643,7 +687,7 @@ export class StudentImportService {
               _id: { $ne: row.expectedStudentId }
             })
             .collation({ locale: 'en', strength: 2 })
-            .session(session)
+            .session(session ?? null)
             .exec()
           if (emailOwner) {
             throw new ConflictException({ code: 'IMPORT_EMAIL_ALREADY_USED' })
@@ -654,11 +698,11 @@ export class StudentImportService {
               studentId: payload.studentId,
               updatedAt: row.expectedUpdatedAt
             })
-            .session(session)
+            .session(session ?? null)
             .exec()
           if (
             !existing ||
-            existing.status !== 'active' ||
+            !['active', 'archived'].includes(existing.status) ||
             studentPayloadHash(existing) !== row.expectedPayloadHash ||
             !actorCanManageStudentScope(
               actor,
@@ -672,11 +716,16 @@ export class StudentImportService {
             schoolIds: [existing.schoolId],
             programIds: [existing.programId]
           })
-          const update = toStudentUpdate(payload)
+          const update = {
+            ...toStudentUpdate(payload),
+            ...(existing.status === 'archived'
+              ? { status: 'active', archivedAt: null }
+              : {})
+          }
           const result = await this.students.updateOne(
             { _id: existing.id, updatedAt: row.expectedUpdatedAt },
             { $set: update },
-            { runValidators: true, session }
+            { runValidators: true, ...(session ? { session } : {}) }
           )
           if (result.matchedCount !== 1) {
             throw new ConflictException({ code: 'IMPORT_ROW_CHANGED' })
@@ -700,7 +749,7 @@ export class StudentImportService {
               expectedPayloadHash: ''
             }
           },
-          { session }
+          session ? { session } : {}
         )
         if (rowUpdate.matchedCount !== 1) {
           throw new ConflictException({ code: 'IMPORT_ROW_CHANGED' })
@@ -738,12 +787,12 @@ export class StudentImportService {
     commitId: string,
     rowId: string,
     outcome: 'created' | 'updated' | 'unchanged',
-    session: ClientSession
+    session?: ClientSession
   ): Promise<void> {
     const result = await this.commits.updateOne(
       { _id: commitId, 'decisions.rowId': rowId },
       { $set: { 'decisions.$.outcome': outcome } },
-      { session }
+      session ? { session } : {}
     )
     if (result.matchedCount !== 1) {
       throw new ConflictException({ code: 'IMPORT_COMMIT_RETRY' })
@@ -752,18 +801,18 @@ export class StudentImportService {
 
   private async assertCurrentReferences(
     payload: ImportPayload,
-    session: ClientSession
+    session?: ClientSession
   ): Promise<void> {
     const school = await this.schools
       .exists({ _id: payload.schoolId, status: 'active' })
-      .session(session)
+      .session(session ?? null)
     const program = await this.programs
       .exists({
         _id: payload.programId,
         schoolId: payload.schoolId,
         status: 'active'
       })
-      .session(session)
+      .session(session ?? null)
     if (!school || !program) {
       throw new ConflictException({
         code: 'IMPORT_REFERENCES_CHANGED',
@@ -799,7 +848,7 @@ export class StudentImportService {
           programIds: payload.programId,
           status: 'active'
         })
-        .session(session)
+        .session(session ?? null)
       if (!course) {
         throw new ConflictException({
           code: 'IMPORT_REFERENCES_CHANGED',
@@ -815,7 +864,7 @@ export class StudentImportService {
           status: { $ne: 'archived' }
         })
         .select('academicYear semester')
-        .session(session)
+        .session(session ?? null)
         .lean()
         .exec()
       if (
@@ -969,7 +1018,12 @@ function normalizeLabel(value: string): string {
   return value
     .trim()
     .toLowerCase()
-    .replace(/^school of\s+/, '')
+    .replace(/^school of\s+/i, '')
+    .replace(/^สำนักวิชา\s*/, '')
+    .replace(/^หลักสูตร\s*/, '')
+    .replace(/^สาขาวิชา\s*/, '')
+    .replace(/^สาขา\s*/, '')
+    .replace(/&/g, 'and')
     .replace(/\s+/g, ' ')
 }
 
@@ -1094,7 +1148,6 @@ function studentPayloadHash(student: HydratedDocument<StudentRecord>): string {
     studentId: value.studentId,
     name: value.name,
     email: value.email,
-    personalEmail: value.personalEmail,
     schoolId: value.schoolId,
     programId: value.programId,
     courseId: value.courseId,
@@ -1119,7 +1172,6 @@ function publicStudentPayload(
     studentId: payload.studentId,
     name: payload.name,
     email: payload.email,
-    ...(payload.personalEmail ? { personalEmail: payload.personalEmail } : {}),
     schoolId: payload.schoolId,
     programId: payload.programId,
     ...(payload.course ? { course: payload.course } : {}),

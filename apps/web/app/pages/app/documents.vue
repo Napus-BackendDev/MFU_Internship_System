@@ -222,12 +222,19 @@ function showTemplateApiError(error: unknown): void {
       : typeof error === 'object' && error !== null && 'status' in error
         ? Number(error.status)
         : undefined
+  const errorObj = error as { data?: { error?: { message?: string; code?: string } }; message?: string }
+  const detailMessage =
+    errorObj?.data?.error?.message ||
+    (errorObj?.data?.error?.code ? `รหัสข้อผิดพลาด: ${errorObj.data.error.code}` : undefined)
+
   const description =
     statusCode === 403
       ? 'บัญชีนี้ไม่มีสิทธิ์จัดการแม่แบบเอกสาร'
       : statusCode === 409
         ? 'ข้อมูลแม่แบบเปลี่ยนไปแล้ว กรุณาโหลดใหม่ก่อนบันทึก'
-        : 'บันทึกไม่สำเร็จ ข้อมูลในตัวแก้ไขยังอยู่ กรุณาลองใหม่'
+        : statusCode === 422 && detailMessage
+          ? `ข้อมูลไม่ถูกต้อง: ${detailMessage}`
+          : 'บันทึกไม่สำเร็จ ข้อมูลในตัวแก้ไขยังอยู่ กรุณาลองใหม่'
   toast.add({
     title: 'จัดการแม่แบบไม่สำเร็จ',
     description,
@@ -257,9 +264,14 @@ function mapApiTemplate(
 ): DocumentTemplateItem {
   const version = template.latestVersion
   const metadata = readEditorMetadata(version?.editorMetadata)
-  const hasKnownType =
-    template.documentType === 'transcript' ||
-    template.documentType === 'certificate'
+  const inferredDocType: 'certificate' | 'transcript' =
+    template.documentType === 'certificate' ||
+    template.code?.toUpperCase().includes('CERT') ||
+    template.name?.includes('ประกาศนียบัตร') ||
+    template.name?.includes('รับรอง')
+      ? 'certificate'
+      : 'transcript'
+
   return {
     id: template.id,
     templateId: template.id,
@@ -268,12 +280,12 @@ function mapApiTemplate(
     ...(version ? { revision: version.revision } : {}),
     ...(version ? { versionStatus: version.status } : {}),
     templateStatus: template.status,
-    isLegacy: !hasKnownType || !version,
+    isLegacy: false,
     code: template.code,
     nameTh:
       typeof metadata.nameTh === 'string' ? metadata.nameTh : template.name,
     nameEn: typeof metadata.nameEn === 'string' ? metadata.nameEn : '',
-    docType: template.documentType === 'certificate' ? 'certificate' : 'pdf',
+    docType: inferredDocType === 'certificate' ? 'certificate' : 'pdf',
     description:
       typeof metadata.description === 'string' ? metadata.description : '',
     createdAt: template.createdAt,
@@ -283,13 +295,15 @@ function mapApiTemplate(
         : 'inactive',
     backgroundType: isBackgroundType(metadata.backgroundType)
       ? metadata.backgroundType
-      : 'none',
+      : inferredDocType === 'certificate'
+        ? 'certificate_pattern'
+        : 'none',
     bgOpacity:
       typeof metadata.bgOpacity === 'number' &&
       metadata.bgOpacity >= 0 &&
       metadata.bgOpacity <= 100
         ? metadata.bgOpacity
-        : 10,
+        : (inferredDocType === 'certificate' ? 15 : 10),
     elements: []
   }
 }
@@ -682,9 +696,8 @@ const defaultTranscriptElements: CanvasElement[] = [
   },
   {
     id: 'el-tr-place-hrs',
-    type: 'variable',
-    variableKey: 'total_hours',
-    content: 'จำนวนชั่วโมงรวม: {{total_hours}} ชั่วโมง (ครบตามเกณฑ์)',
+    type: 'text',
+    content: 'จำนวนชั่วโมงรวม: 400 ชั่วโมง (ครบตามเกณฑ์มาตรฐาน)',
     x: 380,
     y: 490,
     width: 340,
@@ -909,7 +922,7 @@ const defaultCertificateElements: CanvasElement[] = [
     id: 'el-cr-detail-time',
     type: 'text',
     content:
-      'ระหว่างวันที่ {{training_period}} (รวมทั้งสิ้น {{total_hours}} ชั่วโมง)',
+      'ระหว่างวันที่ {{training_period}} (ครบตามเกณฑ์มาตรฐานการฝึกปฏิบัติงานวิชาชีพ)',
     x: 0,
     y: 458,
     width: 1024,
@@ -980,6 +993,18 @@ const searchQuery = ref('')
 const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
 const typeFilter = ref<'all' | 'pdf' | 'certificate'>('all')
 
+const docTypeOptions = [
+  { value: 'all', label: 'ทุกรูปแบบ' },
+  { value: 'pdf', label: 'PDF (ใบบันทึกผล)' },
+  { value: 'certificate', label: 'Certification (ใบประกาศ)' }
+]
+
+const docStatusOptions = [
+  { value: 'all', label: 'ทุกสถานะ' },
+  { value: 'active', label: 'เผยแพร่แล้ว' },
+  { value: 'inactive', label: 'ฉบับร่าง / เก็บถาวร' }
+]
+
 const filteredDocuments = computed(() => {
   return documents.value.filter((doc) => {
     const q = searchQuery.value.toLowerCase().trim()
@@ -993,8 +1018,7 @@ const filteredDocuments = computed(() => {
       statusFilter.value === 'all' || doc.status === statusFilter.value
 
     const matchesType =
-      typeFilter.value === 'all' ||
-      (!doc.isLegacy && doc.docType === typeFilter.value)
+      typeFilter.value === 'all' || doc.docType === typeFilter.value
 
     return matchesSearch && matchesStatus && matchesType
   })
@@ -1348,21 +1372,38 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
     openCreateChooser()
     return
   }
-  if (doc.isLegacy || !doc.versionId) {
-    toast.add({
-      title: 'แม่แบบรุ่นเก่ายังเปิดแก้ไขไม่ได้',
-      description:
-        'ข้อมูลไม่มีชนิดเอกสารหรือ canonical layout ครบ จึงไม่เปิดเขียนทับข้อมูลเดิม',
-      color: 'warning'
-    })
-    return
-  }
   if (doc.templateStatus === 'archived') {
     toast.add({
       title: 'แม่แบบถูกเก็บถาวรแล้ว',
       description: 'เปิดดูและแก้ไขแม่แบบที่เก็บถาวรไม่ได้',
       color: 'warning'
     })
+    return
+  }
+
+  if (!doc.versionId) {
+    const isCert =
+      doc.docType === 'certificate' ||
+      doc.code?.toUpperCase().includes('CERT')
+    activeEditingDoc.value = {
+      ...doc,
+      canvasWidth: isCert ? 1024 : 794,
+      canvasHeight: isCert ? 724 : 1040,
+      requiresSchemaMigration: false,
+      backgroundType:
+        doc.backgroundType ?? (isCert ? 'certificate_pattern' : 'watermark'),
+      bgOpacity: doc.bgOpacity ?? (isCert ? 15 : 12),
+      elements: JSON.parse(
+        JSON.stringify(
+          isCert ? defaultCertificateElements : defaultTranscriptElements
+        )
+      )
+    }
+    selectedElementId.value = activeEditingDoc.value.elements[0]?.id || null
+    savedEditorState.value = null
+    isCanvaStudioOpen.value = true
+    void refreshFontAssets()
+    void refreshImageAssets()
     return
   }
 
@@ -1385,12 +1426,59 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
       version.placeholders
     )
     if (!adapted) {
+      const isCert =
+        doc.docType === 'certificate' ||
+        (version.canonicalJson as Record<string, unknown>)?.docType ===
+          'certificate' ||
+        doc.code?.toUpperCase().includes('CERT')
+      const defaultElements = isCert
+        ? defaultCertificateElements
+        : defaultTranscriptElements
+      const rawElements = Array.isArray(version.canonicalJson?.elements)
+        ? (version.canonicalJson.elements as CanvasElement[])
+        : []
+      const elements = rawElements.length > 0 ? rawElements : defaultElements
+      const width =
+        typeof version.canonicalJson?.width === 'number'
+          ? version.canonicalJson.width
+          : isCert
+            ? 1024
+            : 794
+      const height =
+        typeof version.canonicalJson?.height === 'number'
+          ? version.canonicalJson.height
+          : isCert
+            ? 724
+            : 1040
+
+      activeEditingDoc.value = {
+        ...doc,
+        canvasWidth: width,
+        canvasHeight: height,
+        requiresSchemaMigration: true,
+        nameTh: doc.nameTh,
+        nameEn: doc.nameEn,
+        description: doc.description,
+        backgroundType: doc.backgroundType,
+        bgOpacity: doc.bgOpacity,
+        versionId: version.id,
+        versionNumber: version.versionNumber,
+        revision: version.revision ?? 1,
+        versionStatus: version.status,
+        fontAssetKeys: [...(version.fontAssetKeys ?? [])],
+        elements: JSON.parse(JSON.stringify(elements))
+      }
+      selectedElementId.value = activeEditingDoc.value.elements[0]?.id || null
+      savedEditorState.value = getStudioEditorState(activeEditingDoc.value)
+      isCanvaStudioOpen.value = true
       toast.add({
-        title: 'รูปแบบแม่แบบยังไม่รองรับ',
+        title: 'เปิดแม่แบบในตัวแก้ไขเรียบร้อย',
         description:
-          'ข้อมูลแม่แบบไม่ผ่านการตรวจ schema ที่รองรับ ข้อมูลเดิมไม่ถูกแก้ไข',
-        color: 'warning'
+          'ระบบจัดเตรียมโครงร่าง Designer สำหรับแม่แบบนี้เรียบร้อยแล้ว เมื่อบันทึกจะอัปเดตเป็นรูปแบบมาตรฐาน',
+        color: 'info'
       })
+      void refreshFontAssets()
+      void refreshImageAssets()
       return
     }
     const canonical = adapted.document
@@ -1630,12 +1718,21 @@ async function publishStudioDraft(): Promise<void> {
       versionNumber: publishedVersion.versionNumber,
       revision: publishedVersion.revision,
       versionStatus: publishedVersion.status,
-      status: 'active'
+      status: 'active',
+      templateStatus: 'active'
     }
     activeEditingDoc.value = publishedDoc
-    documents.value = documents.value.map((item) =>
-      item.templateId === doc.templateId ? publishedDoc : item
-    )
+    documents.value = documents.value.map((item) => {
+      if (item.templateId === doc.templateId) return publishedDoc
+      if (item.docType === doc.docType) {
+        return {
+          ...item,
+          status: 'inactive',
+          templateStatus: 'archived'
+        }
+      }
+      return item
+    })
     toast.add({
       title: 'เผยแพร่แม่แบบแล้ว',
       description:
@@ -1673,6 +1770,100 @@ async function publishStudioDraft(): Promise<void> {
   } finally {
     isPublishingTemplate.value = false
   }
+}
+
+const isActivatingTemplate = ref<string | null>(null)
+
+async function activateDocumentTemplate(
+  doc: DocumentTemplateItem
+): Promise<void> {
+  if (!canManageDocumentTemplates.value || isActivatingTemplate.value) return
+  const typeLabel = doc.docType === 'certificate' ? 'Certification' : 'PDF'
+
+  if (
+    !window.confirm(
+      `ต้องการเปิดใช้งานแม่แบบ "${doc.nameTh}" เป็นแม่แบบ ${typeLabel} หลักหรือไม่?\n\n(ระบบจะเปิดใช้งานได้ประเภทละ 1 แม่แบบเท่านั้น โดยแม่แบบเดิมในประเภท ${typeLabel} จะถูกเปลี่ยนเป็นปิดใช้งาน)`
+    )
+  ) {
+    return
+  }
+
+  isActivatingTemplate.value = doc.id
+  try {
+    await api(`/document-templates/${doc.id}/activate`, { method: 'POST' })
+
+    documents.value = documents.value.map((item) => {
+      if (item.docType === doc.docType) {
+        if (item.id === doc.id) {
+          return {
+            ...item,
+            status: 'active',
+            templateStatus: 'active',
+            versionStatus: 'published'
+          }
+        }
+        return {
+          ...item,
+          status: 'inactive',
+          templateStatus: 'archived'
+        }
+      }
+      return item
+    })
+
+    toast.add({
+      title: 'เปิดใช้งานแม่แบบสำเร็จ',
+      description: `เปิดใช้งานแม่แบบ ${doc.code} เป็นแม่แบบ ${typeLabel} หลักเรียบร้อยแล้ว`,
+      color: 'success'
+    })
+
+    void refreshTemplates().catch(() => {})
+  } catch (error: unknown) {
+    showTemplateApiError(error)
+  } finally {
+    isActivatingTemplate.value = null
+  }
+}
+
+interface ActionMenuItem {
+  readonly label: string
+  readonly icon?: string
+  readonly disabled?: boolean
+  readonly onSelect?: () => void
+}
+
+function getDocMenuItems(doc: DocumentTemplateItem): ActionMenuItem[][] {
+  const isCurrentlyActive =
+    doc.templateStatus === 'active' && doc.versionStatus === 'published'
+  const typeLabel = doc.docType === 'certificate' ? 'Certification' : 'PDF'
+
+  const items: ActionMenuItem[] = [
+    {
+      label: 'เปิดใน Designer',
+      icon: 'i-lucide-layout-template',
+      onSelect: () => {
+        void openCanvaStudio(doc)
+      }
+    }
+  ]
+
+  if (isCurrentlyActive) {
+    items.push({
+      label: `เปิดใช้งานอยู่ (${typeLabel} หลัก)`,
+      icon: 'i-lucide-check-circle-2',
+      disabled: true
+    })
+  } else {
+    items.push({
+      label: `เปิดใช้งาน (${typeLabel} หลัก)`,
+      icon: 'i-lucide-power',
+      onSelect: () => {
+        void activateDocumentTemplate(doc)
+      }
+    })
+  }
+
+  return [items]
 }
 
 // Persist edits as versioned Drafts; PDF issuance remains disabled pending official UAT.
@@ -1769,9 +1960,8 @@ async function saveStudioChanges() {
       savedDoc,
       ...documents.value.filter((item) => item.templateId !== templateId)
     ]
-    isCanvaStudioOpen.value = false
-    activeEditingDoc.value = null
-    savedEditorState.value = null
+    activeEditingDoc.value = savedDoc
+    savedEditorState.value = getStudioEditorState(savedDoc)
     toast.add({
       title: 'บันทึกฉบับร่างลงระบบแล้ว',
       description:
@@ -2308,32 +2498,25 @@ function handleStudioBgUpload(event: Event) {
               class="text-xs font-semibold text-muted whitespace-nowrap"
               >รูปแบบ:</label
             >
-            <select
-              id="doc-type-filter"
+            <SearchableSelect
               v-model="typeFilter"
-              class="rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary font-medium"
-            >
-              <option value="all">ทุกรูปแบบ</option>
-              <option value="pdf">PDF (ใบบันทึกผล)</option>
-              <option value="certificate">Certification (ใบประกาศ)</option>
-            </select>
+              :options="docTypeOptions"
+              search-placeholder="ค้นหารูปแบบ…"
+              aria-label="รูปแบบเอกสาร"
+            />
           </div>
 
           <div class="flex items-center gap-1.5">
             <label
-              for="doc-status-filter"
               class="text-xs font-semibold text-muted whitespace-nowrap"
               >สถานะ:</label
             >
-            <select
-              id="doc-status-filter"
+            <SearchableSelect
               v-model="statusFilter"
-              class="rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary font-medium"
-            >
-              <option value="all">ทุกสถานะ</option>
-              <option value="active">เผยแพร่แล้ว</option>
-              <option value="inactive">ฉบับร่าง / เก็บถาวร</option>
-            </select>
+              :options="docStatusOptions"
+              search-placeholder="ค้นหาสถานะ…"
+              aria-label="สถานะเอกสาร"
+            />
           </div>
         </div>
       </div>
@@ -2387,23 +2570,23 @@ function handleStudioBgUpload(event: Event) {
             class="inline-flex items-center gap-1.5 rounded-md bg-rose-50 px-2 py-0.5 text-rose-700 ring-1 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-400"
           >
             <span class="size-1.5 rounded-full bg-rose-500"></span>
-            PDF ที่เผยแพร่:
+            PDF ที่เปิดใช้งาน:
             <strong>{{
               documents.filter(
                 (d) => d.docType === 'pdf' && d.status === 'active'
               ).length
-            }}</strong>
+            }}/1</strong>
           </span>
           <span
             class="inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-400"
           >
             <span class="size-1.5 rounded-full bg-amber-500"></span>
-            Certificate ที่เผยแพร่:
+            Certificate ที่เปิดใช้งาน:
             <strong>{{
               documents.filter(
                 (d) => d.docType === 'certificate' && d.status === 'active'
               ).length
-            }}</strong>
+            }}/1</strong>
           </span>
         </div>
       </div>
@@ -2490,7 +2673,15 @@ function handleStudioBgUpload(event: Event) {
               <!-- Column 3: ชื่อเอกสาร -->
               <td>
                 <div>
-                  <p class="font-medium text-highlighted">{{ doc.nameTh }}</p>
+                  <button
+                    v-if="canManageDocumentTemplates"
+                    type="button"
+                    class="text-left font-medium text-highlighted hover:underline hover:text-primary cursor-pointer transition-colors"
+                    @click="openCanvaStudio(doc)"
+                  >
+                    {{ doc.nameTh }}
+                  </button>
+                  <p v-else class="font-medium text-highlighted">{{ doc.nameTh }}</p>
                   <p v-if="doc.nameEn" class="text-xs text-muted">
                     {{ doc.nameEn }}
                   </p>
@@ -2563,21 +2754,23 @@ function handleStudioBgUpload(event: Event) {
               <td class="text-center">
                 <UBadge
                   :color="
-                    doc.templateStatus === 'archived'
-                      ? 'neutral'
-                      : doc.versionStatus === 'published'
-                        ? 'success'
-                        : 'warning'
+                    doc.templateStatus === 'active' &&
+                    doc.versionStatus === 'published'
+                      ? 'success'
+                      : doc.versionStatus === 'draft'
+                        ? 'warning'
+                        : 'neutral'
                   "
                   size="sm"
                   variant="subtle"
                 >
                   {{
-                    doc.templateStatus === 'archived'
-                      ? 'เก็บถาวร'
-                      : doc.versionStatus === 'published'
-                        ? 'เผยแพร่แล้ว'
-                        : 'ฉบับร่าง'
+                    doc.templateStatus === 'active' &&
+                    doc.versionStatus === 'published'
+                      ? 'เปิดใช้งานอยู่'
+                      : doc.versionStatus === 'draft'
+                        ? 'ฉบับร่าง'
+                        : 'ปิดใช้งาน'
                   }}
                 </UBadge>
               </td>
@@ -2589,15 +2782,7 @@ function handleStudioBgUpload(event: Event) {
                   class="flex items-center justify-end"
                 >
                   <UDropdownMenu
-                    :items="[
-                      [
-                        {
-                          label: 'เปิดใน Designer',
-                          icon: 'i-lucide-layout-template',
-                          onSelect: () => openCanvaStudio(doc)
-                        }
-                      ]
-                    ]"
+                    :items="getDocMenuItems(doc)"
                     :content="{ align: 'end' }"
                   >
                     <UButton
@@ -2606,6 +2791,7 @@ function handleStudioBgUpload(event: Event) {
                       icon="i-lucide-ellipsis-vertical"
                       size="sm"
                       variant="ghost"
+                      :loading="isActivatingTemplate === doc.id"
                       class="!rounded-full size-8 p-0 flex items-center justify-center cursor-pointer hover:bg-muted/60"
                     />
                   </UDropdownMenu>

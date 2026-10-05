@@ -26,7 +26,7 @@ interface Assignment {
 interface StudentItem {
   readonly id: string
   readonly studentId: string
-  readonly name: LocalizedText
+  readonly name: string | LocalizedText
   readonly email: string
   readonly company?: string
   readonly companyAddress?: string
@@ -59,11 +59,6 @@ interface AssignmentPage {
 const api = useApi()
 const auth = useAuthStore()
 const toast = useToast()
-const canManageCycles = computed(() =>
-  auth.actor?.roles.some((role) =>
-    ['systemAdmin', 'internshipStaff'].includes(role)
-  )
-)
 const status = ref<string | undefined>()
 const page = ref(1)
 const pageSize = ref(5)
@@ -222,6 +217,12 @@ function getStudent(studentId: string): StudentItem | undefined {
       (s as unknown as { _id?: string })._id === studentId ||
       s.studentId === studentId
   )
+}
+
+function getStudentName(student?: StudentItem | null): string {
+  if (!student) return '-'
+  if (typeof student.name === 'string') return student.name || '-'
+  return student.name.th || student.name.en || '-'
 }
 
 async function copyStudentId(id: string): Promise<void> {
@@ -478,10 +479,11 @@ const previewEmailSubject = computed(() => {
   const t = systemEmailTemplates.value[selectedEmailTemplateCode.value]
   const sub = t?.subject || '[เทมเพลตอีเมลยังโหลดไม่สำเร็จ]'
 
+  const rawName = emailTargetStudent.value?.name
   const sName =
-    emailTargetStudent.value?.name?.th ||
-    emailTargetStudent.value?.name?.en ||
-    'นักศึกษา'
+    (typeof rawName === 'string'
+      ? rawName
+      : rawName?.th || rawName?.en) || 'นักศึกษา'
   return sub.replaceAll('{{student_name}}', sName)
 })
 
@@ -489,10 +491,11 @@ const previewEmailHtml = computed(() => {
   const t = systemEmailTemplates.value[selectedEmailTemplateCode.value]
   const body = t?.html || '<p>[เทมเพลตอีเมลยังโหลดไม่สำเร็จ]</p>'
 
+  const rawName = emailTargetStudent.value?.name
   const sName =
-    emailTargetStudent.value?.name?.th ||
-    emailTargetStudent.value?.name?.en ||
-    'นักศึกษา'
+    (typeof rawName === 'string'
+      ? rawName
+      : rawName?.th || rawName?.en) || 'นักศึกษา'
   const sId = emailTargetStudent.value?.studentId || '[ไม่พบรหัสนักศึกษา]'
   const cName = getCompany(
     selectedAssignmentForEmail.value?.studentId || '',
@@ -560,15 +563,15 @@ async function confirmSendEmail(): Promise<void> {
         }
       )
       toast.add({
-        title: 'เข้าคิวออกคำเชิญใหม่แล้ว',
-        description: `PIN/session เดิมถูกเพิกถอน และเข้าคิวส่งไปยัง ${result.recipientEmail}; deadline เดิมไม่เปลี่ยน ตรวจผลจาก Delivery`,
-        color: 'info',
+        title: 'ออกคำเชิญใหม่เรียบร้อยแล้ว',
+        description: `สร้าง PIN ใหม่และส่งอีเมลไปยัง ${result.recipientEmail} สำเร็จแล้ว`,
+        color: 'success',
         icon: 'i-lucide-check-circle'
       })
       sendEmailModalOpen.value = false
       if (!(await refreshAfterEmailAction())) {
         toast.add({
-          title: 'เข้าคิวแล้ว แต่โหลดรายการไม่สำเร็จ',
+          title: 'ส่งคำเชิญแล้ว แต่โหลดรายการไม่สำเร็จ',
           description: 'รีเฟรชหน้าเพื่อดูสถานะล่าสุด; ไม่ต้องส่งคำสั่งซ้ำ',
           color: 'warning'
         })
@@ -589,13 +592,13 @@ async function confirmSendEmail(): Promise<void> {
     })
 
     toast.add({
-      title: 'คิวส่งอีเมลแล้ว',
-      description: `เข้าคิวอีเมล (${
+      title: 'ส่งอีเมลเรียบร้อยแล้ว',
+      description: `จัดส่งอีเมล (${
         selectedEmailTemplateCode.value === 'evaluation_reminder'
           ? 'แจ้งเตือนการประเมิน'
           : 'ขอความอนุเคราะห์ประเมิน'
-      }) ไปยัง ${recipientEmailInput.value} แล้ว ติดตามผลจากสถานะ Delivery`,
-      color: 'info',
+      }) ไปยัง ${recipientEmailInput.value} สำเร็จแล้ว`,
+      color: 'success',
       icon: 'i-lucide-check-circle'
     })
 
@@ -639,14 +642,6 @@ async function refreshAfterEmailAction(): Promise<boolean> {
         <h1 class="mt-2 text-3xl font-bold text-highlighted">การประเมิน</h1>
       </div>
       <div class="flex items-center gap-2">
-        <UButton
-          v-if="canManageCycles"
-          color="neutral"
-          icon="i-lucide-calendar-range"
-          label="จัดการรอบประเมิน"
-          to="/app/evaluations/cycles"
-          variant="outline"
-        />
         <UButton
           color="neutral"
           icon="i-lucide-mails"
@@ -827,10 +822,7 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                     </button>
                   </div>
                   <p class="font-semibold text-highlighted text-xs">
-                    {{ getStudent(item.studentId)!.name.th }}
-                  </p>
-                  <p class="text-[11px] text-muted truncate">
-                    {{ getStudent(item.studentId)!.name.en }}
+                    {{ getStudentName(getStudent(item.studentId)) }}
                   </p>
                   <p class="text-[10px] text-muted/80 font-mono">
                     {{ getStudent(item.studentId)!.email }}
@@ -1065,7 +1057,7 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                     >ชื่อ-นามสกุล / รหัสนักศึกษา:</span
                   >
                   <span class="font-bold text-highlighted text-xs">
-                    {{ emailTargetStudent?.name?.th || '-' }}
+                    {{ getStudentName(emailTargetStudent) }}
                     <span class="text-muted font-normal"
                       >({{ emailTargetStudent?.studentId }})</span
                     >

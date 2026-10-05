@@ -18,7 +18,6 @@ import { ReportExportService } from './report-export.service.js'
 import { ReportsService } from './reports.service.js'
 import {
   DEFAULT_REPORT_EXPORT_FIELDS,
-  REPORT_EXPORT_FORMATS,
   REPORT_EXPORT_FIELDS
 } from '@internship/shared-types'
 
@@ -36,8 +35,9 @@ const programFilterSchema = z
     schoolId: objectIdSchema.optional()
   })
   .strict()
-const exportRequestSchema = z
+const assignmentExportRequestSchema = z
   .object({
+    reportType: z.literal('assignments').optional(),
     filters: overviewFilterSchema.default({}),
     fields: z
       .array(z.enum(REPORT_EXPORT_FIELDS))
@@ -47,9 +47,43 @@ const exportRequestSchema = z
         message: 'Export fields must be unique.'
       })
       .optional(),
-    format: z.enum(REPORT_EXPORT_FORMATS).default('csv')
+    format: z.literal('csv').default('csv')
   })
   .strict()
+  .transform((input) => ({ ...input, reportType: 'assignments' as const }))
+const studentDirectoryExportRequestSchema = z
+  .object({
+    reportType: z.literal('studentDirectory'),
+    filters: z
+      .object({
+        search: z.string().trim().max(100).optional(),
+        schoolId: objectIdSchema.optional(),
+        cycleId: objectIdSchema.optional(),
+        academicYear: z.number().int().min(2000).max(3000).optional(),
+        semester: z.string().trim().min(1).max(40).optional(),
+        evaluationStatus: z
+          .enum([
+            'awaiting_evaluator',
+            'awaiting_response',
+            'submitted',
+            'email_error',
+            'pending',
+            'inProgress',
+            'expired',
+            'assignment_ambiguous'
+          ])
+          .optional()
+      })
+      .strict()
+      .default({}),
+    locale: z.enum(['th', 'en']),
+    format: z.literal('xlsx')
+  })
+  .strict()
+const exportRequestSchema = z.union([
+  studentDirectoryExportRequestSchema,
+  assignmentExportRequestSchema
+])
 const idempotencyKeySchema = z.string().trim().min(8).max(128)
 const exportIdSchema = objectIdSchema
 
@@ -92,8 +126,11 @@ export class ReportsController {
     const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey)
     const input = exportRequestSchema.parse(raw)
     return this.exportService.create(request.actor!, {
+      reportType: input.reportType,
       filters: input.filters,
-      fields: input.fields ?? [...DEFAULT_REPORT_EXPORT_FIELDS],
+      ...(input.reportType === 'assignments'
+        ? { fields: input.fields ?? [...DEFAULT_REPORT_EXPORT_FIELDS] }
+        : { locale: input.locale }),
       format: input.format,
       idempotencyKey,
       requestId: request.requestId ?? 'unknown'

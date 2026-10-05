@@ -23,7 +23,7 @@ try {
   const past = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
   const future = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000)
 
-  // 1. Schools and Programs (14 Schools, 34 Programs from Mae Fah Luang University)
+  // 1. Schools and Programs (14 Schools, 36 Programs from Mae Fah Luang University)
   const schoolsData = [
     {
       schoolCode: 'LA',
@@ -130,6 +130,34 @@ try {
           course: {
             code: '1201493',
             name: { th: 'การฝึกงานทางการบัญชี', en: 'Accounting Internship' }
+          }
+        },
+        {
+          programCode: 'TBE',
+          name: {
+            th: 'การจัดการการท่องเที่ยวและอีเวนต์',
+            en: 'Tourism Business and Events'
+          },
+          course: {
+            code: '1201494',
+            name: {
+              th: 'การฝึกงานการจัดการการท่องเที่ยวและอีเวนต์',
+              en: 'Tourism Business and Events Internship'
+            }
+          }
+        },
+        {
+          programCode: 'HBM',
+          name: {
+            th: 'การจัดการธุรกิจบริการ',
+            en: 'Hospitality Business Management'
+          },
+          course: {
+            code: '1201495',
+            name: {
+              th: 'การฝึกงานการจัดการธุรกิจบริการ',
+              en: 'Hospitality Business Management Internship'
+            }
           }
         }
       ]
@@ -605,6 +633,24 @@ try {
     }
   }
 
+  // Common Cooperative Education course (COOP101) linked to all programs
+  const allProgramIds = Array.from(programMap.values())
+  const coopId = await upsertId(
+    database,
+    'courses',
+    { courseCode: 'COOP101' },
+    {
+      courseCode: 'COOP101',
+      name: { th: 'สหกิจศึกษา', en: 'Cooperative Education' },
+      programIds: allProgramIds,
+      credits: 6,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now
+    }
+  )
+  courseMap.set('COOP101', coopId)
+
   // Remove stale schools, programs, and courses that are not in the authoritative schoolsData
   const activeSchoolCodes = schoolsData.map((s) => s.schoolCode)
   await database
@@ -658,81 +704,30 @@ try {
     }
   )
 
-  // 3. Organizations
-  const organizationsData = [
+  await upsertId(
+    database,
+    'academicTerms',
+    { code: 'DEV-2025-1' },
     {
-      code: 'DEVCO',
-      name: {
-        th: 'บริษัท ดิจิทัล โซลูชั่นส์ จำกัด',
-        en: 'Digital Solutions Co., Ltd.'
-      },
-      email: 'hr@devco.com',
-      province: 'เชียงใหม่'
-    },
-    {
-      code: 'BAKER',
-      name: {
-        th: 'สำนักงานกฎหมาย เบเกอร์ แอนด์ แอสโซซิเอทส์',
-        en: 'Baker & Associates Law Office'
-      },
-      email: 'contact@bakerlaw.com',
-      province: 'กรุงเทพมหานคร'
-    },
-    {
-      code: 'BGHOSP',
-      name: {
-        th: 'โรงพยาบาลกรุงเทพ เชียงราย',
-        en: 'Bangkok Hospital Chiang Rai'
-      },
-      email: 'hr@bghosp.com',
-      province: 'เชียงราย'
-    },
-    {
-      code: 'CPFOOD',
-      name: {
-        th: 'บริษัท ซีพีเอฟ ฟู้ด แอนด์ เบฟเวอเรจ จำกัด',
-        en: 'CPF Food & Beverage Co., Ltd.'
-      },
-      email: 'internship@cpfood.com',
-      province: 'เชียงใหม่'
-    },
-    {
-      code: 'MILOTT',
-      name: {
-        th: 'บริษัท ไมลอทท์ แลบบอราทอรีส์ จำกัด',
-        en: 'Milott Laboratories Co., Ltd.'
-      },
-      email: 'hr@milott.com',
-      province: 'สมุทรปราการ'
-    },
-    {
-      code: 'SCG',
-      name: {
-        th: 'บริษัท ปูนซิเมนต์ไทย จำกัด (มหาชน)',
-        en: 'Siam Cement Group Public Company Limited'
-      },
-      email: 'careers@scg.com',
-      province: 'สระบุรี'
-    },
-    {
-      code: 'PTTOR',
-      name: {
-        th: 'บริษัท ปตท. น้ำมันและการค้าปลีก จำกัด (มหาชน)',
-        en: 'PTT Oil and Retail Business Public Company Limited'
-      },
-      email: 'internship@pttor.com',
-      province: 'กรุงเทพมหานคร'
-    },
-    {
-      code: 'KASIKORN',
-      name: {
-        th: 'ธนาคารกสิกรไทย จำกัด (มหาชน)',
-        en: 'Kasikornbank Public Company Limited'
-      },
-      email: 'hr@kasikornbank.com',
-      province: 'กรุงเทพมหานคร'
+      code: 'DEV-2025-1',
+      academicYear: 2025,
+      semester: '1',
+      startsAt: past,
+      endsAt: now,
+      timezone: 'Asia/Bangkok',
+      status: 'closed',
+      createdAt: past,
+      updatedAt: now
     }
-  ]
+  )
+
+  // 3. Organizations (No mock organizations seeded)
+  const organizationsData: Array<{
+    code: string
+    name: { th: string; en: string }
+    email: string
+    province: string
+  }> = []
 
   const orgMap = new Map<string, string>()
   for (const org of organizationsData) {
@@ -753,66 +748,13 @@ try {
     orgMap.set(org.code, oId)
   }
 
-  // 4. Evaluators
-  const evaluatorsData = [
-    {
-      orgCode: 'DEVCO',
-      email: 'evaluator.it@devco.com',
-      name: { th: 'นายพงศกร เทคทิม', en: 'Pongsakorn Techteam' },
-      position: { th: 'หัวหน้าทีมพัฒนาซอฟต์แวร์', en: 'Lead Developer' }
-    },
-    {
-      orgCode: 'BAKER',
-      email: 'evaluator.law@bakerlaw.com',
-      name: { th: 'นายธนิต นิติกรรม', en: 'Thanit Nitikarn' },
-      position: { th: 'ทนายความหุ้นส่วนอาวุโส', en: 'Senior Partner' }
-    },
-    {
-      orgCode: 'BGHOSP',
-      email: 'evaluator.nurse@bghosp.com',
-      name: { th: 'นางสาวอรัญญา บริบาล', en: 'Aranya Boriban' },
-      position: { th: 'หัวหน้าฝ่ายการพยาบาล', en: 'Head Nurse' }
-    },
-    {
-      orgCode: 'CPFOOD',
-      email: 'evaluator.food@cpfood.com',
-      name: { th: 'นายวิชัย ควบคุมคุณภาพ', en: 'Wichai Quality' },
-      position: { th: 'ผู้จัดการฝ่ายประกันคุณภาพ', en: 'QA Manager' }
-    },
-    {
-      orgCode: 'MILOTT',
-      email: 'evaluator.cos@milott.com',
-      name: { th: 'ดร.สุดาพร คิดค้น', en: 'Dr. Sudaporn R&D' },
-      position: { th: 'ผู้เชี่ยวชาญวิจัยและพัฒนา', en: 'R&D Specialist' }
-    },
-    {
-      orgCode: 'SCG',
-      email: 'evaluator.eng@scg.com',
-      name: { th: 'นายเกียรติศักดิ์ วิศวกรรม', en: 'Kiattisak Engineering' },
-      position: {
-        th: 'ผู้จัดการฝ่ายวิศวกรรมการผลิต',
-        en: 'Engineering Manager'
-      }
-    },
-    {
-      orgCode: 'PTTOR',
-      email: 'evaluator.hr@pttor.com',
-      name: { th: 'นางสาวศิริพร พัฒนาองค์กร', en: 'Siriporn OrgDev' },
-      position: {
-        th: 'ผู้จัดการฝ่ายพัฒนาทรัพยากรบุคคล',
-        en: 'HR Development Manager'
-      }
-    },
-    {
-      orgCode: 'KASIKORN',
-      email: 'evaluator.fin@kasikornbank.com',
-      name: { th: 'นายธีรเดช การเงิน', en: 'Theeradech Finance' },
-      position: {
-        th: 'ผู้อำนวยการฝ่ายการเงินและธุรกิจ',
-        en: 'Director of Finance'
-      }
-    }
-  ]
+  // 4. Evaluators (No mock evaluators seeded)
+  const evaluatorsData: Array<{
+    orgCode: string
+    email: string
+    name: { th: string; en: string }
+    position: { th: string; en: string }
+  }> = []
 
   const evaluatorMap = new Map<string, string>()
   for (const ev of evaluatorsData) {
@@ -834,866 +776,18 @@ try {
     evaluatorMap.set(ev.orgCode, evId)
   }
 
-  // 5. Students across schools (70 students)
-  const studentsData = [
-    {
-      studentId: '6531501001',
-      name: { th: 'นายสมชาย วิศวกร', en: 'Somchai Witsawakan' },
-      email: '6531501001@lamduan.mfu.ac.th',
-      personalEmail: 'somchai.dev@gmail.com',
-      school: 'IT',
-      program: 'SE',
-      course: '1301493',
-      org: 'DEVCO',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531501002',
-      name: { th: 'นายอนันต์ โค้ดเดอร์', en: 'Anan Coder' },
-      email: '6531501002@lamduan.mfu.ac.th',
-      personalEmail: 'anan.coder@gmail.com',
-      school: 'IT',
-      program: 'CPE',
-      course: '1301491',
-      org: 'DEVCO',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531502015',
-      name: { th: 'นางสาวกิตติมา ยุติธรรม', en: 'Kittima Yuttitham' },
-      email: '6531502015@lamduan.mfu.ac.th',
-      personalEmail: 'kittima.law@gmail.com',
-      school: 'LAW',
-      program: 'LLB',
-      course: '1601491',
-      org: 'BAKER',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531503022',
-      name: { th: 'นายวรเมธ การค้า', en: 'Worameth Kanka' },
-      email: '6531503022@lamduan.mfu.ac.th',
-      personalEmail: 'worameth.biz@gmail.com',
-      school: 'MGT',
-      program: 'BA',
-      course: '1201491',
-      org: 'KASIKORN',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531504008',
-      name: { th: 'นางสาวพิมพาภรณ์ เมตตา', en: 'Pimpaporn Metta' },
-      email: '6531504008@lamduan.mfu.ac.th',
-      personalEmail: 'pimpaporn.nurse@gmail.com',
-      school: 'NS',
-      program: 'NSB',
-      course: '1501491',
-      org: 'BGHOSP',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531505012',
-      name: { th: 'นายภัทรดนัย เกษตรกร', en: 'Phatradanai Kaset' },
-      email: '6531505012@lamduan.mfu.ac.th',
-      personalEmail: 'phatradanai.agro@gmail.com',
-      school: 'AI',
-      program: 'FST',
-      course: '1401491',
-      org: 'CPFOOD',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531506005',
-      name: { th: 'นางสาวณัฐธิดา สวยงาม', en: 'Natthida Suayngam' },
-      email: '6531506005@lamduan.mfu.ac.th',
-      personalEmail: 'natthida.cos@gmail.com',
-      school: 'COS',
-      program: 'CSB',
-      course: '1701491',
-      org: 'MILOTT',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531507019',
-      name: { th: 'นายธนากร สุขภาพ', en: 'Thanakorn Sukapap' },
-      email: '6531507019@lamduan.mfu.ac.th',
-      personalEmail: 'thanakorn.health@gmail.com',
-      school: 'HS',
-      program: 'OHS',
-      course: '1801494',
-      org: 'CPFOOD',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531501009',
-      name: { th: 'นางสาวชญานุช ปัญญาดี', en: 'Chayanuch Panyadee' },
-      email: '6531501009@lamduan.mfu.ac.th',
-      personalEmail: 'chayanuch.ai@gmail.com',
-      school: 'IT',
-      program: 'DCE',
-      course: '1301492',
-      org: 'DEVCO',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531503045',
-      name: { th: 'นายชยพล การเงิน', en: 'Chayapol Kanngern' },
-      email: '6531503045@lamduan.mfu.ac.th',
-      personalEmail: 'chayapol.fin@gmail.com',
-      school: 'MGT',
-      program: 'ACC',
-      course: '1201493',
-      org: 'KASIKORN',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531501033',
-      name: { th: 'นายพีรพัฒน์ โปรแกรมเมอร์', en: 'Peerapat Programmer' },
-      email: '6531501033@lamduan.mfu.ac.th',
-      personalEmail: 'peerapat.dev@gmail.com',
-      school: 'IT',
-      program: 'SE',
-      course: '1301493',
-      org: 'DEVCO',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531502048',
-      name: { th: 'นายศรัณย์ ความยุติธรรม', en: 'Saran Khwamyuttitham' },
-      email: '6531502048@lamduan.mfu.ac.th',
-      personalEmail: 'saran.justice@gmail.com',
-      school: 'LAW',
-      program: 'LLB',
-      course: '1601491',
-      org: 'BAKER',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531508003',
-      name: { th: 'นางสาวมินตรา อักษรศาสตร์', en: 'Mintra Aksornsart' },
-      email: '6531508003@lamduan.mfu.ac.th',
-      personalEmail: 'mintra.arts@gmail.com',
-      school: 'LA',
-      program: 'ENG',
-      course: '1001491',
-      org: 'PTTOR',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531508027',
-      name: { th: 'นายชานนท์ ภาษาไทย', en: 'Chanon Phasathai' },
-      email: '6531508027@lamduan.mfu.ac.th',
-      personalEmail: 'chanon.thai@gmail.com',
-      school: 'LA',
-      program: 'TLC',
-      course: '1001492',
-      org: 'PTTOR',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531509014',
-      name: { th: 'นายธนกฤต วิทยาเคมี', en: 'Thanakrit Wittayakhemi' },
-      email: '6531509014@lamduan.mfu.ac.th',
-      personalEmail: 'thanakrit.chem@gmail.com',
-      school: 'SCI',
-      program: 'AC',
-      course: '1101491',
-      org: 'SCG',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531509038',
-      name: { th: 'นางสาวกัญญาณัฐ ชีววิทยา', en: 'Kanyanat Cheewawitthaya' },
-      email: '6531509038@lamduan.mfu.ac.th',
-      personalEmail: 'kanyanat.bio@gmail.com',
-      school: 'SCI',
-      program: 'BIO',
-      course: '1101492',
-      org: 'SCG',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531503088',
-      name: { th: 'นายปวริศ เศรษฐการ', en: 'Pawaris Setthakarn' },
-      email: '6531503088@lamduan.mfu.ac.th',
-      personalEmail: 'pawaris.econ@gmail.com',
-      school: 'MGT',
-      program: 'ECON',
-      course: '1201492',
-      org: 'KASIKORN',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531510011',
-      name: {
-        th: 'นางสาวศศิธร สังคมนวัตกรรม',
-        en: 'Sasithorn Sangkhomnawattacham'
-      },
-      email: '6531510011@lamduan.mfu.ac.th',
-      personalEmail: 'sasithorn.soc@gmail.com',
-      school: 'SOC',
-      program: 'ID',
-      course: '2101491',
-      org: 'PTTOR',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531511025',
-      name: { th: 'นายเจียรนัย จีนศึกษา', en: 'Jiaranai Jeensuksa' },
-      email: '6531511025@lamduan.mfu.ac.th',
-      personalEmail: 'jiaranai.chinese@gmail.com',
-      school: 'SIN',
-      program: 'CS',
-      course: '2201491',
-      org: 'PTTOR',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531512007',
-      name: { th: 'นางสาวอารยา การแพทย์ไทย', en: 'Araya Karnphaetthai' },
-      email: '6531512007@lamduan.mfu.ac.th',
-      personalEmail: 'araya.med@gmail.com',
-      school: 'IM',
-      program: 'ATM',
-      course: '2301491',
-      org: 'BGHOSP',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531501041',
-      name: { th: 'นายกฤษณะ ธนทรัพย์', en: 'Kritsana Thanasap' },
-      email: '6531501041@lamduan.mfu.ac.th',
-      personalEmail: 'kritsana.net@gmail.com',
-      school: 'IT',
-      program: 'DCE',
-      course: '1301492',
-      org: 'DEVCO',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531501042',
-      name: { th: 'นายธีรภัทร ชัยมงคล', en: 'Theerapat Chaimongkol' },
-      email: '6531501042@lamduan.mfu.ac.th',
-      personalEmail: 'theerapat.biz@gmail.com',
-      school: 'IT',
-      program: 'DBI',
-      course: '1301494',
-      org: 'DEVCO',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531501043',
-      name: { th: 'นางสาววราภรณ์ มัลติมีเดีย', en: 'Waraporn Multimedia' },
-      email: '6531501043@lamduan.mfu.ac.th',
-      personalEmail: 'waraporn.media@gmail.com',
-      school: 'IT',
-      program: 'MTA',
-      course: '1301495',
-      org: 'DEVCO',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531501044',
-      name: { th: 'นายอัครเดช ดิจิทัล', en: 'Akkaradech Digital' },
-      email: '6531501044@lamduan.mfu.ac.th',
-      personalEmail: 'akkaradech.dev@gmail.com',
-      school: 'IT',
-      program: 'SE',
-      course: '1301493',
-      org: 'SCG',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531501045',
-      name: {
-        th: 'นายรัชชานนท์ ปัญญาเครือข่าย',
-        en: 'Ratchanon Panyakhrueakhai'
-      },
-      email: '6531501045@lamduan.mfu.ac.th',
-      personalEmail: 'ratchanon.cpe@gmail.com',
-      school: 'IT',
-      program: 'CPE',
-      course: '1301491',
-      org: 'PTTOR',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531502051',
-      name: { th: 'นายพงศ์พิสุทธิ์ นิติวิทย์', en: 'Pongpisut Nitiwit' },
-      email: '6531502051@lamduan.mfu.ac.th',
-      personalEmail: 'pongpisut.law@gmail.com',
-      school: 'LAW',
-      program: 'BLC',
-      course: '1601492',
-      org: 'BAKER',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531502052',
-      name: {
-        th: 'นางสาวณัฐภัสสร กฎหมายสากล',
-        en: 'Natthaphatsorn Kodmaisaakon'
-      },
-      email: '6531502052@lamduan.mfu.ac.th',
-      personalEmail: 'natthaphatsorn.law@gmail.com',
-      school: 'LAW',
-      program: 'LLB',
-      course: '1601491',
-      org: 'BAKER',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531502053',
-      name: { th: 'นายสหรัฐ นิติธรรมการ', en: 'Saharat Nitithamkarn' },
-      email: '6531502053@lamduan.mfu.ac.th',
-      personalEmail: 'saharat.law@gmail.com',
-      school: 'LAW',
-      program: 'BLC',
-      course: '1601492',
-      org: 'KASIKORN',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531503051',
-      name: { th: 'นางสาวชลธิชา บริหารสุข', en: 'Chonthicha Borihansuk' },
-      email: '6531503051@lamduan.mfu.ac.th',
-      personalEmail: 'chonthicha.mgt@gmail.com',
-      school: 'MGT',
-      program: 'BA',
-      course: '1201491',
-      org: 'KASIKORN',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531503052',
-      name: { th: 'นายภัทรพล ทรัพยากร', en: 'Phattaraphon Sapphayakon' },
-      email: '6531503052@lamduan.mfu.ac.th',
-      personalEmail: 'phattaraphon.hr@gmail.com',
-      school: 'MGT',
-      program: 'BA',
-      course: '1201491',
-      org: 'PTTOR',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531503053',
-      name: {
-        th: 'นายศุภชัย วิเคราะห์เศรษฐกิจ',
-        en: 'Suphachai Wikhrosetthakit'
-      },
-      email: '6531503053@lamduan.mfu.ac.th',
-      personalEmail: 'suphachai.econ@gmail.com',
-      school: 'MGT',
-      program: 'ECON',
-      course: '1201492',
-      org: 'KASIKORN',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531503054',
-      name: {
-        th: 'นางสาวพิมพ์วลัญช์ ตรวจสอบบัญชี',
-        en: 'Pimwalun Truatsobbanchi'
-      },
-      email: '6531503054@lamduan.mfu.ac.th',
-      personalEmail: 'pimwalun.acc@gmail.com',
-      school: 'MGT',
-      program: 'ACC',
-      course: '1201493',
-      org: 'SCG',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531503055',
-      name: { th: 'นายณภัทร ธุรกิจนำเข้า', en: 'Naphat Thurakitnamkhao' },
-      email: '6531503055@lamduan.mfu.ac.th',
-      personalEmail: 'naphat.trade@gmail.com',
-      school: 'MGT',
-      program: 'BA',
-      course: '1201491',
-      org: 'SCG',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531504011',
-      name: {
-        th: 'นางสาวเบญญาภา พยาบาลเชี่ยวชาญ',
-        en: 'Benyapha Phayabancheochan'
-      },
-      email: '6531504011@lamduan.mfu.ac.th',
-      personalEmail: 'benyapha.nurse@gmail.com',
-      school: 'NS',
-      program: 'NSB',
-      course: '1501491',
-      org: 'BGHOSP',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531504012',
-      name: { th: 'นางสาววริศรา บริรักษ์', en: 'Waritsara Borirak' },
-      email: '6531504012@lamduan.mfu.ac.th',
-      personalEmail: 'waritsara.nurse@gmail.com',
-      school: 'NS',
-      program: 'NSB',
-      course: '1501491',
-      org: 'BGHOSP',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531504013',
-      name: { th: 'นายภัทรดนัย ดูแลผู้ป่วย', en: 'Phatradanai Dulaephuphuai' },
-      email: '6531504013@lamduan.mfu.ac.th',
-      personalEmail: 'phatradanai.nurse@gmail.com',
-      school: 'NS',
-      program: 'NSB',
-      course: '1501491',
-      org: 'BGHOSP',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531505021',
-      name: { th: 'นายกิตติศักดิ์ พัฒนาอาหาร', en: 'Kittisak Phattanaahan' },
-      email: '6531505021@lamduan.mfu.ac.th',
-      personalEmail: 'kittisak.food@gmail.com',
-      school: 'AI',
-      program: 'FST',
-      course: '1401491',
-      org: 'CPFOOD',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531505022',
-      name: {
-        th: 'นางสาวชนัญชิดา ห่วงโซ่อุปทาน',
-        en: 'Chananchida Huangso-uppathan'
-      },
-      email: '6531505022@lamduan.mfu.ac.th',
-      personalEmail: 'chananchida.log@gmail.com',
-      school: 'AI',
-      program: 'AFL',
-      course: '1401492',
-      org: 'CPFOOD',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531505023',
-      name: {
-        th: 'นายภูริช โลจิสติกส์การเกษตร',
-        en: 'Phurich Logisticskankaset'
-      },
-      email: '6531505023@lamduan.mfu.ac.th',
-      personalEmail: 'phurich.agri@gmail.com',
-      school: 'AI',
-      program: 'AFL',
-      course: '1401492',
-      org: 'SCG',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531506011',
-      name: { th: 'นางสาวกฤติยา พัฒนาสูตร', en: 'Krittiya Phattanasut' },
-      email: '6531506011@lamduan.mfu.ac.th',
-      personalEmail: 'krittiya.cos@gmail.com',
-      school: 'COS',
-      program: 'CSB',
-      course: '1701491',
-      org: 'MILOTT',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531506012',
-      name: {
-        th: 'นางสาวปัณฑิตา ความงามนวัตกรรม',
-        en: 'Panthita Khwamngamnawattacham'
-      },
-      email: '6531506012@lamduan.mfu.ac.th',
-      personalEmail: 'panthita.beauty@gmail.com',
-      school: 'COS',
-      program: 'BT',
-      course: '1701492',
-      org: 'MILOTT',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531506013',
-      name: { th: 'นางสาวธนัชชา เวชสำอาง', en: 'Thanatcha Wetchasamang' },
-      email: '6531506013@lamduan.mfu.ac.th',
-      personalEmail: 'thanatcha.cos@gmail.com',
-      school: 'COS',
-      program: 'CSB',
-      course: '1701491',
-      org: 'MILOTT',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531507021',
-      name: {
-        th: 'นายกฤษฎา ปลอดภัยสิ่งแวดล้อม',
-        en: 'Kritsada Plotphaisingwaetlom'
-      },
-      email: '6531507021@lamduan.mfu.ac.th',
-      personalEmail: 'kritsada.env@gmail.com',
-      school: 'HS',
-      program: 'ENV',
-      course: '1801493',
-      org: 'SCG',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531507022',
-      name: {
-        th: 'นางสาวพัชรีพร อนามัยชุมชน',
-        en: 'Patchareeporn Anamaichumchon'
-      },
-      email: '6531507022@lamduan.mfu.ac.th',
-      personalEmail: 'patchareeporn.ph@gmail.com',
-      school: 'HS',
-      program: 'PH',
-      course: '1801491',
-      org: 'BGHOSP',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531507023',
-      name: {
-        th: 'นายเมธัส กีฬาและเวชศาสตร์',
-        en: 'Methas Kila-lae-wetchasat'
-      },
-      email: '6531507023@lamduan.mfu.ac.th',
-      personalEmail: 'methas.sport@gmail.com',
-      school: 'HS',
-      program: 'SHS',
-      course: '1801492',
-      org: 'BGHOSP',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531507024',
-      name: {
-        th: 'นางสาวปรียานุช ควบคุมอาชีวอนามัย',
-        en: 'Preeyanuch Khuapkhumachilwa'
-      },
-      email: '6531507024@lamduan.mfu.ac.th',
-      personalEmail: 'preeyanuch.ohs@gmail.com',
-      school: 'HS',
-      program: 'OHS',
-      course: '1801494',
-      org: 'PTTOR',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531508031',
-      name: { th: 'นายวรัญญู สื่อสารอังกฤษ', en: 'Waranyoo Suesanangrit' },
-      email: '6531508031@lamduan.mfu.ac.th',
-      personalEmail: 'waranyoo.eng@gmail.com',
-      school: 'LA',
-      program: 'ENG',
-      course: '1001491',
-      org: 'PTTOR',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531508032',
-      name: {
-        th: 'นางสาวสโรชา วัฒนธรรมนานาชาติ',
-        en: 'Sarocha Watthanathamnanachat'
-      },
-      email: '6531508032@lamduan.mfu.ac.th',
-      personalEmail: 'sarocha.thai@gmail.com',
-      school: 'LA',
-      program: 'TLC',
-      course: '1001492',
-      org: 'DEVCO',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531508033',
-      name: { th: 'นายทรงกลด ล่ามภาษา', en: 'Songklod Lamphasa' },
-      email: '6531508033@lamduan.mfu.ac.th',
-      personalEmail: 'songklod.inter@gmail.com',
-      school: 'LA',
-      program: 'ENG',
-      course: '1001491',
-      org: 'BAKER',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531509041',
-      name: { th: 'นายกฤษณพงศ์ โพลิเมอร์แล็บ', en: 'Kritsanaphong Polymerlab' },
-      email: '6531509041@lamduan.mfu.ac.th',
-      personalEmail: 'kritsanaphong.mat@gmail.com',
-      school: 'SCI',
-      program: 'MATE',
-      course: '1101493',
-      org: 'SCG',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531509042',
-      name: {
-        th: 'นางสาวนภัสสร จุลชีววิทยา',
-        en: 'Naphatsorn Junlacheewawitthaya'
-      },
-      email: '6531509042@lamduan.mfu.ac.th',
-      personalEmail: 'naphatsorn.bio@gmail.com',
-      school: 'SCI',
-      program: 'BIO',
-      course: '1101492',
-      org: 'CPFOOD',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531509043',
-      name: { th: 'นางสาวสุธิมา วิเคราะห์สาร', en: 'Suthima Wikhrohsan' },
-      email: '6531509043@lamduan.mfu.ac.th',
-      personalEmail: 'suthima.chem@gmail.com',
-      school: 'SCI',
-      program: 'AC',
-      course: '1101491',
-      org: 'MILOTT',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531510021',
-      name: {
-        th: 'นายปรัชญา พัฒนาสังคมยั่งยืน',
-        en: 'Pratchaya Phattanasangkhomyangyuen'
-      },
-      email: '6531510021@lamduan.mfu.ac.th',
-      personalEmail: 'pratchaya.soc@gmail.com',
-      school: 'SOC',
-      program: 'ID',
-      course: '2101491',
-      org: 'PTTOR',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531510022',
-      name: { th: 'นางสาวธนพร ชุมชนสากล', en: 'Thanaporn Chumchonsaakon' },
-      email: '6531510022@lamduan.mfu.ac.th',
-      personalEmail: 'thanaporn.dev@gmail.com',
-      school: 'SOC',
-      program: 'ID',
-      course: '2101491',
-      org: 'SCG',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531511031',
-      name: { th: 'นางสาวหทัยชนก ธุรกิจจีน', en: 'Hathaichanok Thurakitchin' },
-      email: '6531511031@lamduan.mfu.ac.th',
-      personalEmail: 'hathaichanok.sin@gmail.com',
-      school: 'SIN',
-      program: 'BC',
-      course: '2201492',
-      org: 'PTTOR',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531511032',
-      name: {
-        th: 'นายภาคิน วัฒนธรรมจีนสัมพันธ์',
-        en: 'Phakin Watthanathamchin'
-      },
-      email: '6531511032@lamduan.mfu.ac.th',
-      personalEmail: 'phakin.sin@gmail.com',
-      school: 'SIN',
-      program: 'CLC',
-      course: '2201493',
-      org: 'DEVCO',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531511033',
-      name: {
-        th: 'นายพิชญุตม์ ครูสอนภาษาจีน',
-        en: 'Pitchayut Khrusonphasachin'
-      },
-      email: '6531511033@lamduan.mfu.ac.th',
-      personalEmail: 'pitchayut.teach@gmail.com',
-      school: 'SIN',
-      program: 'TCL',
-      course: '2201494',
-      org: 'BAKER',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531511034',
-      name: {
-        th: 'นางสาวกุลธิดา จีนศึกษาการทูต',
-        en: 'Kultida Chinsuksakantuut'
-      },
-      email: '6531511034@lamduan.mfu.ac.th',
-      personalEmail: 'kultida.diplo@gmail.com',
-      school: 'SIN',
-      program: 'CS',
-      course: '2201491',
-      org: 'KASIKORN',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531512011',
-      name: {
-        th: 'นายชลธิศ กายภาพบำบัดฟื้นฟู',
-        en: 'Chonthit Kaiyaphabbambatfuenfu'
-      },
-      email: '6531512011@lamduan.mfu.ac.th',
-      personalEmail: 'chonthit.pt@gmail.com',
-      school: 'IM',
-      program: 'PT',
-      course: '2301492',
-      org: 'BGHOSP',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531512012',
-      name: {
-        th: 'นางสาวณิชกานต์ แพทย์แผนจีนสมุนไพร',
-        en: 'Nichakan Phaetphaenchin'
-      },
-      email: '6531512012@lamduan.mfu.ac.th',
-      personalEmail: 'nichakan.tcm@gmail.com',
-      school: 'IM',
-      program: 'TCM',
-      course: '2301493',
-      org: 'BGHOSP',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531512013',
-      name: {
-        th: 'นายธีรโชติ สมุนไพรไทยประยุกต์',
-        en: 'Theerachot Samunphraithai'
-      },
-      email: '6531512013@lamduan.mfu.ac.th',
-      personalEmail: 'theerachot.atm@gmail.com',
-      school: 'IM',
-      program: 'ATM',
-      course: '2301491',
-      org: 'BGHOSP',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531513001',
-      name: { th: 'นายภูวดล คลินิกเวชกรรม', en: 'Phuwadol Khlinikwetchakam' },
-      email: '6531513001@lamduan.mfu.ac.th',
-      personalEmail: 'phuwadol.md@gmail.com',
-      school: 'MED',
-      program: 'MD',
-      course: '1901491',
-      org: 'BGHOSP',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531513002',
-      name: {
-        th: 'นางสาวธวัลหทัย เวชปฏิบัติ',
-        en: 'Thawanrhathai Wetchapatibat'
-      },
-      email: '6531513002@lamduan.mfu.ac.th',
-      personalEmail: 'thawanrhathai.md@gmail.com',
-      school: 'MED',
-      program: 'MD',
-      course: '1901491',
-      org: 'BGHOSP',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531514001',
-      name: { th: 'นายจิรภัทร ทันตกรรมบูรณะ', en: 'Jiraphat Thantakamburana' },
-      email: '6531514001@lamduan.mfu.ac.th',
-      personalEmail: 'jiraphat.dent@gmail.com',
-      school: 'DENT',
-      program: 'DDS',
-      course: '2001491',
-      org: 'BGHOSP',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531514002',
-      name: {
-        th: 'นางสาววริยา ทันตกรรมหัตถการ',
-        en: 'Wariya Thantakamhattakarn'
-      },
-      email: '6531514002@lamduan.mfu.ac.th',
-      personalEmail: 'wariya.dent@gmail.com',
-      school: 'DENT',
-      program: 'DDS',
-      course: '2001491',
-      org: 'BGHOSP',
-      status: 'pending' as const
-    },
-    {
-      studentId: '6531501061',
-      name: {
-        th: 'นายอลงกรณ์ พัฒนาโมบายแอป',
-        en: 'Alongkorn Phattanamobileapp'
-      },
-      email: '6531501061@lamduan.mfu.ac.th',
-      personalEmail: 'alongkorn.app@gmail.com',
-      school: 'IT',
-      program: 'SE',
-      course: '1301493',
-      org: 'DEVCO',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531501062',
-      name: {
-        th: 'นางสาวจันทกานต์ ฐานข้อมูลองค์กร',
-        en: 'Chanthakan Thankhomun'
-      },
-      email: '6531501062@lamduan.mfu.ac.th',
-      personalEmail: 'chanthakan.data@gmail.com',
-      school: 'IT',
-      program: 'DBI',
-      course: '1301494',
-      org: 'KASIKORN',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531502061',
-      name: {
-        th: 'นายภานุวัฒน์ นิติธรรมพาณิชย์',
-        en: 'Phanuwat Nitithamphanit'
-      },
-      email: '6531502061@lamduan.mfu.ac.th',
-      personalEmail: 'phanuwat.legal@gmail.com',
-      school: 'LAW',
-      program: 'LLB',
-      course: '1601491',
-      org: 'BAKER',
-      status: 'submitted' as const
-    },
-    {
-      studentId: '6531503061',
-      name: {
-        th: 'นายกษิดิศ เศรษฐศาสตร์ระหว่างประเทศ',
-        en: 'Khasidit Setthasatrawangprathet'
-      },
-      email: '6531503061@lamduan.mfu.ac.th',
-      personalEmail: 'khasidit.econ@gmail.com',
-      school: 'MGT',
-      program: 'ECON',
-      course: '1201492',
-      org: 'KASIKORN',
-      status: 'inProgress' as const
-    },
-    {
-      studentId: '6531506021',
-      name: {
-        th: 'นางสาวลลิตา วิทยาการเครื่องสำอางชั้นสูง',
-        en: 'Lalita Wittayakankhrueangsamang'
-      },
-      email: '6531506021@lamduan.mfu.ac.th',
-      personalEmail: 'lalita.cosmetic@gmail.com',
-      school: 'COS',
-      program: 'CSB',
-      course: '1701491',
-      org: 'MILOTT',
-      status: 'submitted' as const
-    }
-  ]
+  // 5. Students (No mock students seeded)
+  const studentsData: Array<{
+    studentId: string
+    name: { th: string; en: string }
+    email: string
+    personalEmail: string
+    school: string
+    program: string
+    course: string
+    org: string
+    status: 'pending' | 'inProgress' | 'submitted'
+  }> = []
 
   // 6. Competency Sets & Versions
   const competencySetId = await upsertId(
@@ -1713,6 +807,7 @@ try {
   )
 
   const sections = [
+    // หมวดที่ 1: ทักษะทั่วไปและความประพฤติ (Soft Skills)
     {
       id: 'general-conduct',
       title: {
@@ -1756,22 +851,38 @@ try {
           scaleMin: 1,
           scaleMax: 5,
           weight: 1
+        },
+        {
+          id: 'problem-solving-general',
+          label: {
+            th: 'การปรับตัวและการแก้ปัญหาเฉพาะหน้าในการทำงาน',
+            en: 'Adaptability and Practical Problem Solving'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
         }
       ]
     },
+
+    // 14 Specialized Sections (หมวด 2 เฉพาะทางสำหรับ 14 สำนักวิชา)
+    // 1. LA: ศิลปศาสตร์
     {
-      id: 'technical-competency',
+      id: 'spec-la',
       title: {
-        th: 'หมวด 2: ทักษะวิชาชีพเฉพาะทางตามสาขาวิชา (Hard Skills)',
-        en: 'Section 2: Specialized Professional Competencies'
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาศิลปศาสตร์ (ภาษาและการสื่อสารสากล)',
+        en: 'Specialized Skills: School of Liberal Arts'
       },
       category: 'special',
+      schoolId: schoolMap.get('LA'),
       questions: [
         {
-          id: 'technical-knowledge',
+          id: 'la-lang-proficiency',
           label: {
-            th: 'ความรู้ความสามารถทางวิชาการและทักษะเทคนิคในสายงาน',
-            en: 'Technical and Academic Knowledge in the Field'
+            th: 'ทักษะการใช้ภาษาเพื่อการสื่อสารระดับมืออาชีพ ทั้งการฟัง พูด อ่าน และเขียน',
+            en: 'Professional Language Proficiency (Listening, Speaking, Reading & Writing)'
           },
           type: 'rating',
           required: true,
@@ -1780,32 +891,851 @@ try {
           weight: 2
         },
         {
-          id: 'problem-solving',
+          id: 'la-translation',
           label: {
-            th: 'การคิดวิเคราะห์ การแก้ปัญหา และการประยุกต์ใช้งานจริง',
-            en: 'Analytical Thinking, Problem Solving & Practical Application'
+            th: 'ทักษะการแปล การล่าม และการเรียบเรียงเนื้อหาข้ามภาษา',
+            en: 'Translation, Interpretation & Multilingual Content Adaptation'
           },
           type: 'rating',
           required: true,
           scaleMin: 1,
           scaleMax: 5,
           weight: 2
+        },
+        {
+          id: 'la-intercultural',
+          label: {
+            th: 'ความเข้าใจในบริบทความหลากหลายทางวัฒนธรรมและการทำงานร่วมกับชาวต่างชาติ',
+            en: 'Intercultural Awareness and International Workplace Adaptability'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'la-critical-thinking',
+          label: {
+            th: 'การค้นคว้าข้อมูล การคิดเชิงวิพากษ์ และการสังเคราะห์เนื้อหา',
+            en: 'Information Research, Critical Thinking & Content Synthesis'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
         }
       ]
     },
+
+    // 2. SCI: วิทยาศาสตร์
+    {
+      id: 'spec-sci',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาวิทยาศาสตร์ (การวิจัยและปฏิบัติการวิทยาศาสตร์)',
+        en: 'Specialized Skills: School of Science'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('SCI'),
+      questions: [
+        {
+          id: 'sci-lab-safety',
+          label: {
+            th: 'ทักษะการใช้เครื่องมือและการปฏิบัติการทางวิทยาศาสตร์ตามมาตรฐานความปลอดภัย',
+            en: 'Scientific Equipment Operation & Laboratory Safety Standards'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'sci-data-analysis',
+          label: {
+            th: 'การวิเคราะห์ข้อมูล การทดลอง และการตีความผลเชิงวิทยาศาสตร์',
+            en: 'Scientific Experimentation, Data Analysis & Result Interpretation'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'sci-reporting',
+          label: {
+            th: 'การค้นคว้าทางวิชาการและการจัดทำรายงานเชิงวิทยาศาสตร์',
+            en: 'Academic Literature Research & Technical Scientific Reporting'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'sci-reasoning',
+          label: {
+            th: 'การคิดเชิงเหตุและผลและการประยุกต์ใช้องค์ความรู้ทางวิทยาศาสตร์',
+            en: 'Logical Scientific Reasoning & Practical Knowledge Application'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 3. MGT: การจัดการ
+    {
+      id: 'spec-mgt',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาการจัดการ (บริหารธุรกิจ บัญชี เศรษฐศาสตร์)',
+        en: 'Specialized Skills: School of Management'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('MGT'),
+      questions: [
+        {
+          id: 'mgt-business-analysis',
+          label: {
+            th: 'การวิเคราะห์ข้อมูลทางธุรกิจ การเงิน และการวางแผนกลยุทธ์',
+            en: 'Business & Financial Analysis, Strategic Planning'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'mgt-communication',
+          label: {
+            th: 'การสื่อสารทางธุรกิจ การนำเสนอผลงาน และการเจรจาต่อรอง',
+            en: 'Business Communication, Professional Presentation & Negotiation'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'mgt-project-mgmt',
+          label: {
+            th: 'ความเข้าใจในกระบวนการทำงาน การจัดการโครงการ และการแก้ปัญหาเฉพาะหน้า',
+            en: 'Process & Project Management, Practical Problem Solving'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'mgt-digital-tools',
+          label: {
+            th: 'การประยุกต์ใช้เทคโนโลยีดิจิทัลและซอฟต์แวร์ในการทำงานธุรกิจ',
+            en: 'Digital Business Tools and Enterprise Software Application'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 4. IT: เทคโนโลยีสารสนเทศ
+    {
+      id: 'spec-it',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาเทคโนโลยีสารสนเทศ (ซอฟต์แวร์และเทคโนโลยีดิจิทัล)',
+        en: 'Specialized Skills: School of Information Technology'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('IT'),
+      questions: [
+        {
+          id: 'it-software-dev',
+          label: {
+            th: 'ทักษะการพัฒนาซอฟต์แวร์ การเขียนโปรแกรม และการออกแบบตรรกะระบบ',
+            en: 'Software Development, Coding & System Logic Design'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'it-database',
+          label: {
+            th: 'การออกแบบ จัดการ และสืบค้นฐานข้อมูล',
+            en: 'Database Design, Management & Querying'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'it-debugging',
+          label: {
+            th: 'การวิเคราะห์ปัญหา การค้นหาข้อผิดพลาด และการทดสอบระบบ',
+            en: 'System Analysis, Debugging & Quality Testing'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'it-security',
+          label: {
+            th: 'การปฏิบัติตามมาตรฐานความปลอดภัยของข้อมูลและระบบสารสนเทศ',
+            en: 'Information Security Standards and Best Practices'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 5. AI: อุตสาหกรรมเกษตร
+    {
+      id: 'spec-ai',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาอุตสาหกรรมเกษตร (เทคโนโลยีอาหารและหลังการเก็บเกี่ยว)',
+        en: 'Specialized Skills: School of Agro-Industry'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('AI'),
+      questions: [
+        {
+          id: 'ai-qa-standards',
+          label: {
+            th: 'การควบคุมคุณภาพและความปลอดภัยของอาหารตามมาตรฐานสากล (GMP / HACCP / ISO)',
+            en: 'Food Safety & Quality Assurance Standards (GMP / HACCP / ISO)'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'ai-lab-analysis',
+          label: {
+            th: 'ทักษะการวิเคราะห์และทดสอบในห้องปฏิบัติการทางวิทยาศาสตร์อาหาร',
+            en: 'Laboratory Testing & Food Analysis Competencies'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'ai-processing',
+          label: {
+            th: 'ความเข้าใจในกระบวนการแปรรูปและสายการผลิตอุตสาหกรรมเกษตร',
+            en: 'Food Processing Operations & Agro-Industrial Production Lines'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'ai-product-dev',
+          label: {
+            th: 'การวิจัยพัฒนาผลิตภัณฑ์อาหารและการจัดการห่วงโซ่อุปทาน',
+            en: 'Food Product Development & Supply Chain Management'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 6. LAW: นิติศาสตร์
+    {
+      id: 'spec-law',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชานิติศาสตร์ (การปฏิบัติงานทางกฎหมาย)',
+        en: 'Specialized Skills: School of Law'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('LAW'),
+      questions: [
+        {
+          id: 'law-research',
+          label: {
+            th: 'การค้นคว้า รวบรวมข้อเท็จจริง และสืบค้นตัวบทกฎหมายและคำพิพากษา',
+            en: 'Legal Research & Case Law Fact-Finding'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'law-drafting',
+          label: {
+            th: 'ทักษะการร่างเอกสารทางกฎหมาย นิติกรรม และสัญญา',
+            en: 'Legal Drafting, Contracts & Instruments'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'law-reasoning',
+          label: {
+            th: 'การคิดวิเคราะห์ ตีความ และปรับบทกฎหมายเข้ากับข้อเท็จจริง',
+            en: 'Legal Reasoning & Statutory Interpretation'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'law-ethics',
+          label: {
+            th: 'การยึดมั่นในจรรยาบรรณวิชาชีพกฎหมายและความซื่อสัตย์สุจริต',
+            en: 'Legal Professional Ethics & Integrity'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 7. COS: วิทยาศาสตร์เครื่องสำอาง
+    {
+      id: 'spec-cos',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาวิทยาศาสตร์เครื่องสำอาง',
+        en: 'Specialized Skills: School of Cosmetic Science'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('COS'),
+      questions: [
+        {
+          id: 'cos-formulation',
+          label: {
+            th: 'การพัฒนาและตั้งตำรับผลิตภัณฑ์เครื่องสำอาง',
+            en: 'Cosmetic Formulation & Product Development'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'cos-safety-testing',
+          label: {
+            th: 'การทดสอบความคงตัว ความปลอดภัย และประสิทธิภาพของผลิตภัณฑ์',
+            en: 'Stability, Safety & Efficacy Testing'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'cos-regulatory',
+          label: {
+            th: 'การควบคุมคุณภาพและการปฏิบัติตามกฎหมายเครื่องสำอางสากล',
+            en: 'Quality Control & Cosmetic Regulatory Compliance'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'cos-trends',
+          label: {
+            th: 'ความเข้าใจแนวโน้มตลาดเครื่องสำอางและการตอบสนองความต้องการผู้บริโภค',
+            en: 'Cosmetic Industry Trends & Consumer Demand Adaptation'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 8. HS: วิทยาศาสตร์สุขภาพ
+    {
+      id: 'spec-hs',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาวิทยาศาสตร์สุขภาพ (สาธารณสุขและอาชีวอนามัย)',
+        en: 'Specialized Skills: School of Health Science'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('HS'),
+      questions: [
+        {
+          id: 'hs-risk-assessment',
+          label: {
+            th: 'การประเมินความเสี่ยงด้านสุขภาพ อาชีวอนามัย และสิ่งแวดล้อม',
+            en: 'Health Risk, Occupational & Environmental Assessment'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'hs-health-promotion',
+          label: {
+            th: 'การวางแผนและการจัดทำโครงการส่งเสริมสุขภาพในสถานประกอบการ/ชุมชน',
+            en: 'Health Promotion Project Planning & Execution'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'hs-safety-standards',
+          label: {
+            th: 'การปฏิบัติตามกฎหมายและมาตรฐานความปลอดภัยในการทำงาน',
+            en: 'Safety Standards & Occupational Regulatory Compliance'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'hs-epidemiology',
+          label: {
+            th: 'ทักษะการเฝ้าระวังและการเก็บข้อมูลทางสุขภาพเชิงระบาดวิทยา',
+            en: 'Health Surveillance & Epidemiological Data Collection'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 9. NS: พยาบาลศาสตร์
+    {
+      id: 'spec-ns',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาพยาบาลศาสตร์ (การบริบาลผู้ป่วยและการพยาบาล)',
+        en: 'Specialized Skills: School of Nursing'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('NS'),
+      questions: [
+        {
+          id: 'ns-assessment',
+          label: {
+            th: 'ทักษะการประเมินสภาพผู้ป่วยและการวินิจฉัยทางการพยาบาล',
+            en: 'Patient Health Assessment & Nursing Diagnosis'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'ns-safety-infection',
+          label: {
+            th: 'การปฏิบัติการพยาบาลตามมาตรฐานความปลอดภัยและการควบคุมการติดเชื้อ',
+            en: 'Nursing Clinical Practice, Safety & Infection Control'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'ns-therapeutic-comm',
+          label: {
+            th: 'การสื่อสารเพื่อการบำบัดและการสร้างสัมพันธภาพกับผู้ป่วยและญาติ',
+            en: 'Therapeutic Communication with Patients & Families'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'ns-ethics',
+          label: {
+            th: 'จรรยาบรรณวิชาชีพการพยาบาลและการเคารพสิทธิผู้ป่วย',
+            en: 'Professional Nursing Ethics & Patient Rights Respect'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 10. MED: แพทยศาสตร์
+    {
+      id: 'spec-med',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาแพทยศาสตร์ (เวชปฏิบัติและการดูแลรักษา)',
+        en: 'Specialized Skills: School of Medicine'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('MED'),
+      questions: [
+        {
+          id: 'med-diagnosis',
+          label: {
+            th: 'ทักษะการซักประวัติ ตรวจร่างกาย และการวิเคราะห์วินิจฉัยโรค',
+            en: 'History Taking, Physical Exam & Clinical Diagnosis'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'med-management-plan',
+          label: {
+            th: 'การเลือกใช้และแปลผลการตรวจทางห้องปฏิบัติการและการวางแผนการรักษา',
+            en: 'Laboratory Investigation & Management Plan Formulation'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'med-communication',
+          label: {
+            th: 'การสื่อสารทางการแพทย์ การให้ข้อมูลแก่ผู้ป่วยและญาติอย่างเห็นอกเห็นใจ',
+            en: 'Medical Communication & Empathic Patient Engagement'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'med-ethics-safety',
+          label: {
+            th: 'จริยธรรมทางการแพทย์และความตระหนักในความปลอดภัยของผู้ป่วย',
+            en: 'Medical Ethics, Confidentiality & Patient Safety'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 11. DENT: ทันตแพทยศาสตร์
+    {
+      id: 'spec-dent',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาทันตแพทยศาสตร์ (การบริบาลทางทันตกรรม)',
+        en: 'Specialized Skills: School of Dentistry'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('DENT'),
+      questions: [
+        {
+          id: 'dent-assessment',
+          label: {
+            th: 'การตรวจประเมิน วินิจฉัย และวางแผนการรักษาทางทันตกรรม',
+            en: 'Dental Assessment, Diagnosis & Treatment Planning'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'dent-procedures',
+          label: {
+            th: 'ทักษะการทำหัตถการทางทันตกรรมและการควบคุมการติดเชื้อ',
+            en: 'Clinical Dental Procedures & Infection Control'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'dent-patient-comm',
+          label: {
+            th: 'การสื่อสาร สร้างสัมพันธภาพ และการให้คำแนะนำแก่ผู้ป่วยทันตกรรม',
+            en: 'Dental Patient Communication & Oral Health Education'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'dent-ethics',
+          label: {
+            th: 'จรรยาบรรณวิชาชีพทันตแพทย์และมาตรฐานความปลอดภัยของผู้ป่วย',
+            en: 'Dental Professional Ethics & Patient Safety Standards'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 12. SOC: นวัตกรรมสังคม
+    {
+      id: 'spec-soc',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชานวัตกรรมสังคม (การพัฒนาชุมชนและนวัตกรรมสังคม)',
+        en: 'Specialized Skills: School of Social Innovation'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('SOC'),
+      questions: [
+        {
+          id: 'soc-needs-assessment',
+          label: {
+            th: 'การสำรวจความต้องการ การวิเคราะห์ปัญหาชุมชนและบริบทสังคม',
+            en: 'Social Needs Assessment & Community Problem Analysis'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'soc-innovation-design',
+          label: {
+            th: 'การออกแบบโครงการและการร่วมสร้างสรรค์นวัตกรรมเพื่อแก้ไขปัญหาสังคม',
+            en: 'Social Project Design & Collaborative Innovation Co-Creation'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'soc-stakeholders',
+          label: {
+            th: 'ทักษะการประสานงาน การมีส่วนร่วม และการสื่อสารกับผู้มีส่วนได้ส่วนเสีย',
+            en: 'Stakeholder Engagement, Facilitation & Community Outreach'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'soc-impact-eval',
+          label: {
+            th: 'การติดตามและประเมินผลกระทบทางสังคมของโครงการ',
+            en: 'Social Impact Measurement, Monitoring & Evaluation'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 13. SIN: จีนวิทยา
+    {
+      id: 'spec-sin',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาจีนวิทยา (ภาษาจีนและการสื่อสารธุรกิจจีน)',
+        en: 'Specialized Skills: School of Sinology'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('SIN'),
+      questions: [
+        {
+          id: 'sin-language-mastery',
+          label: {
+            th: 'ทักษะการใช้ภาษาจีนระดับสูงเพื่อการสื่อสารและการทำงานอย่างมืออาชีพ',
+            en: 'Advanced Chinese Proficiency for Workplace & Professional Communication'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'sin-translation-negotiation',
+          label: {
+            th: 'ทักษะการแปล ล่าม และการเจรจาต่อรองในบริบทธุรกิจจีน',
+            en: 'Chinese Translation, Interpretation & Business Negotiation'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'sin-contextual-understanding',
+          label: {
+            th: 'ความเข้าใจในบริบทเศรษฐกิจ สังคม และวัฒนธรรมจีนร่วมสมัย',
+            en: 'Understanding of Contemporary Chinese Socio-Economic & Cultural Context'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'sin-collaboration',
+          label: {
+            th: 'มนุษยสัมพันธ์และการประสานงานกับองค์กรหรือคู่ค้าชาวจีน',
+            en: 'Interpersonal & Organizational Liaison Skills with Chinese Partners'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // 14. IM: การแพทย์บูรณาการ
+    {
+      id: 'spec-im',
+      title: {
+        th: 'ทักษะเฉพาะทาง: สำนักวิชาการแพทย์บูรณาการ (แพทย์แผนไทยประยุกต์ / กายภาพบำบัด / แพทย์แผนจีน)',
+        en: 'Specialized Skills: School of Integrative Medicine'
+      },
+      category: 'special',
+      schoolId: schoolMap.get('IM'),
+      questions: [
+        {
+          id: 'im-clinical-eval',
+          label: {
+            th: 'การตรวจวินิจฉัยและประเมินสภาพร่างกายตามหลักวิชาชีพเฉพาะทาง',
+            en: 'Specialized Clinical Diagnostic & Physical Assessment'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'im-therapeutic-skills',
+          label: {
+            th: 'ทักษะการรักษา การทำหัตถการ และการฟื้นฟูสมรรถภาพ',
+            en: 'Therapeutic Treatment, Clinical Procedures & Rehabilitation Skills'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 2
+        },
+        {
+          id: 'im-patient-counseling',
+          label: {
+            th: 'การสื่อสารและการให้คำแนะนำในการดูแลส่งเสริมสุขภาพแบบองค์รวม',
+            en: 'Holistic Health Guidance & Patient Counseling'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        },
+        {
+          id: 'im-ethics-safety',
+          label: {
+            th: 'จรรยาบรรณวิชาชีพการแพทย์บูรณาการและการคำนึงถึงความปลอดภัยของผู้รับบริการ',
+            en: 'Integrative Healthcare Ethics & Patient Safety Assurance'
+          },
+          type: 'rating',
+          required: true,
+          scaleMin: 1,
+          scaleMax: 5,
+          weight: 1
+        }
+      ]
+    },
+
+    // หมวดที่ 3: ข้อเสนอแนะและข้อคิดเห็นเพิ่มเติม (Suggestion Section)
     {
       id: 'feedback-section',
       title: {
-        th: 'หมวด 3: ข้อเสนอแนะและความคิดเห็นเพิ่มเติม',
-        en: 'Section 3: Feedback & Remarks'
+        th: 'หมวด 3: ข้อคิดเห็นและข้อเสนอแนะเพิ่มเติมสำหรับนักศึกษา',
+        en: 'Section 3: Feedback, Strengths & Recommendations'
       },
-      category: 'general',
+      category: 'suggestion',
       questions: [
         {
           id: 'strengths',
           label: {
-            th: 'จุดเด่นและข้อดีของนักศึกษา',
-            en: 'Student Strengths and Commendable Points'
+            th: 'จุดเด่นและข้อดีของนักศึกษาที่น่าชื่นชม (Strengths)',
+            en: 'Student Strengths and Commendable Professional Qualities'
           },
           type: 'text',
           required: false
@@ -1813,8 +1743,8 @@ try {
         {
           id: 'areas-for-improvement',
           label: {
-            th: 'จุดที่ควรพัฒนาและข้อเสนอแนะสำหรับการทำงานในอนาคต',
-            en: 'Areas for Improvement & Recommendations'
+            th: 'จุดที่ควรพัฒนาและข้อเสนอแนะสำหรับการทำงานในอนาคต (Areas for Improvement)',
+            en: 'Areas for Improvement and Guidance for Future Career Growth'
           },
           type: 'text',
           required: false
@@ -1839,26 +1769,8 @@ try {
     }
   )
 
-  // 7. Evaluation Cycle
-  const cycleId = await upsertId(
-    database,
-    'evaluationCycles',
-    { code: 'DEV-CYCLE-2026' },
-    {
-      code: 'DEV-CYCLE-2026',
-      name: {
-        th: 'รอบการประเมินการฝึกงาน ภาคการศึกษาที่ 1/2569',
-        en: 'Internship Evaluation Cycle 1/2026'
-      },
-      competencySetVersionId: versionId,
-      academicTermId: termId,
-      opensAt: past,
-      closesAt: future,
-      status: 'active',
-      createdAt: now,
-      updatedAt: now
-    }
-  )
+  // 7. Evaluation Cycle (No mock cycles seeded)
+  const cycleId: string | undefined = undefined
 
   // 8. Seed students, placements, and evaluation assignments
   const createdStudentIds: string[] = []
@@ -1877,7 +1789,6 @@ try {
         studentId: stu.studentId,
         name: stu.name,
         email: stu.email,
-        personalEmail: stu.personalEmail,
         schoolId: sId,
         programId: pId,
         courseId: cId,
@@ -1955,7 +1866,29 @@ try {
     }
   }
 
-  // 9. Document Template & Generated Document
+  // 9. Document Assets, Template & Generated Document
+  await upsertId(
+    database,
+    'documentAssets',
+    { key: 'approved-fonts/tahoma.ttf' },
+    {
+      key: 'approved-fonts/tahoma.ttf',
+      assetType: 'font',
+      originalName: 'tahoma.ttf',
+      fontFamily: 'Tahoma',
+      contentType: 'font/ttf',
+      size: 919260,
+      sha256:
+        '9af03d4ad44a3b413d92f7de48b94aa7cc8a1471a75d498406eae837f62ee1d1',
+      rightsBasis: 'System Standard Font',
+      rightsConfirmedBy: 'system',
+      rightsConfirmedAt: now,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now
+    }
+  )
+
   const docTemplateId = await upsertId(
     database,
     'documentTemplates',
@@ -1963,6 +1896,7 @@ try {
     {
       code: 'CERT-MFU-2026',
       name: 'หนังสือรับรองและทรานสคริปต์การฝึกงาน (MFU Internship Transcript)',
+      documentType: 'certificate',
       status: 'active',
       createdAt: now,
       updatedAt: now
@@ -1977,18 +1911,84 @@ try {
       templateId: docTemplateId,
       versionNumber: 1,
       status: 'published',
+      schemaVersion: 2,
+      revision: 1,
       canonicalJson: {
-        docType: 'certificate',
-        title: 'Internship Transcript',
-        elements: []
+        width: 1024,
+        height: 724,
+        editorMetadata: {
+          nameTh: 'ใบประกาศนียบัตรรับรองการฝึกงาน (Certificate of Completion)',
+          nameEn: 'Certificate of Professional Internship Completion',
+          description: 'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ (A4 แนวนอน)',
+          backgroundType: 'certificate_pattern',
+          bgOpacity: 15
+        },
+        elements: [
+          {
+            id: 'el-cr-emblem',
+            type: 'emblem',
+            content: 'GOLD-AWARD',
+            x: 476,
+            y: 45,
+            width: 72,
+            height: 72,
+            fontSize: 16,
+            fontWeight: 'normal',
+            color: '#b45309',
+            textAlign: 'center'
+          },
+          {
+            id: 'el-cr-univ',
+            type: 'text',
+            content: 'มหาวิทยาลัยแม่ฟ้าหลวง • MAE FAH LUANG UNIVERSITY',
+            x: 0,
+            y: 128,
+            width: 1024,
+            fontSize: 13,
+            fontWeight: 'bold',
+            color: '#b45309',
+            textAlign: 'center'
+          },
+          {
+            id: 'el-cr-title-th',
+            type: 'heading',
+            content: 'ใบประกาศนียบัตรรับรองการฝึกงาน',
+            x: 0,
+            y: 156,
+            width: 1024,
+            fontSize: 34,
+            fontWeight: 'bold',
+            color: '#0f172a',
+            textAlign: 'center'
+          },
+          {
+            id: 'el-cr-title-en',
+            type: 'text',
+            content: 'CERTIFICATE OF INTERNSHIP COMPLETION',
+            x: 0,
+            y: 202,
+            width: 1024,
+            fontSize: 13,
+            fontWeight: 'bold',
+            color: '#64748b',
+            textAlign: 'center'
+          },
+          {
+            id: 'el-cr-std-name-th',
+            type: 'variable',
+            variableKey: 'student_name_th',
+            content: '{{student_name_th}}',
+            x: 0,
+            y: 270,
+            width: 1024,
+            fontSize: 34,
+            fontWeight: 'bold',
+            color: '#78350f',
+            textAlign: 'center'
+          }
+        ]
       },
-      placeholders: [
-        'student_name',
-        'school_name',
-        'program_name',
-        'organization_name',
-        'evaluation_score'
-      ],
+      placeholders: ['student_name_th'],
       fontAssetKeys: [],
       publishedAt: now,
       createdAt: now,
@@ -2004,6 +2004,7 @@ try {
     {
       code: 'DOC-RF-001',
       name: 'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน (Official Internship Referral Letter)',
+      documentType: 'transcript',
       status: 'active',
       createdAt: now,
       updatedAt: now
@@ -2018,17 +2019,47 @@ try {
       templateId: referralTemplateId,
       versionNumber: 1,
       status: 'published',
+      schemaVersion: 2,
+      revision: 1,
       canonicalJson: {
-        docType: 'official_letter',
-        title: 'หนังสือส่งตัวนักศึกษาฝึกงาน',
-        elements: []
+        width: 794,
+        height: 1040,
+        editorMetadata: {
+          nameTh: 'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน (Official Internship Referral Letter)',
+          nameEn: 'Official Internship Referral Letter',
+          description: 'เอกสารหนังสือส่งตัวนักศึกษาเข้าฝึกงาน (A4 แนวตั้ง)',
+          backgroundType: 'watermark',
+          bgOpacity: 12
+        },
+        elements: [
+          {
+            id: 'el-rf-header',
+            type: 'text',
+            content: 'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน',
+            x: 0,
+            y: 80,
+            width: 794,
+            fontSize: 20,
+            fontWeight: 'bold',
+            color: '#0f172a',
+            textAlign: 'center'
+          },
+          {
+            id: 'el-rf-std-name-th',
+            type: 'variable',
+            variableKey: 'student_name_th',
+            content: 'ชื่อนักศึกษา: {{student_name_th}}',
+            x: 75,
+            y: 200,
+            width: 640,
+            fontSize: 14,
+            fontWeight: 'normal',
+            color: '#0f172a',
+            textAlign: 'left'
+          }
+        ]
       },
-      placeholders: [
-        'student_name',
-        'school_name',
-        'organization_name',
-        'training_period'
-      ],
+      placeholders: ['student_name_th'],
       fontAssetKeys: [],
       publishedAt: now,
       createdAt: now,
@@ -2154,17 +2185,6 @@ try {
       outcome: 'success',
       metadata: { code: 'DEV-COMP' },
       createdAt: past
-    },
-    {
-      requestId: 'req_seed_3',
-      actorId: 'dev:admin@localhost',
-      actorEmail: 'admin@localhost',
-      action: 'PUBLISH_EVALUATION_CYCLE',
-      route: '/api/v2/evaluation-cycles',
-      method: 'POST',
-      outcome: 'success',
-      metadata: { code: 'DEV-CYCLE-2026' },
-      createdAt: now
     }
   ]
 

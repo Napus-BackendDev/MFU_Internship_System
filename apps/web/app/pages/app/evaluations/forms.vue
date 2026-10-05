@@ -205,21 +205,22 @@ function openCreateForm() {
   editorForm.code = `EVAL-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`
   editorForm.nameTh = ''
   editorForm.nameEn = ''
-  // Default with 1 General section and 1 Special section
-  editorForm.sections = [
+
+  const baseNow = Date.now()
+  const initialSections: Section[] = [
     {
-      id: `sec_gen_${Date.now()}`,
+      id: `sec_gen_${baseNow}`,
       title: {
-        th: 'หมวดทั่วไป: ทักษะและความประพฤติ (Soft Skills)',
-        en: 'General Section: Soft Skills & Conduct'
+        th: 'หมวด 1: ทักษะทั่วไปและความประพฤติ (Soft Skills)',
+        en: 'Section 1: General Skills & Professional Conduct'
       },
       category: 'general',
       questions: [
         {
           id: `q_gen_1`,
           label: {
-            th: 'ความตรงต่อเวลาและการปฏิบัติตามกฎระเบียบ',
-            en: 'Punctuality and Compliance with Regulations'
+            th: 'ความตรงต่อเวลาและการปฏิบัติตามกฎระเบียบขององค์กร',
+            en: 'Punctuality and Compliance with Workplace Regulations'
           },
           type: 'rating',
           required: true,
@@ -230,8 +231,32 @@ function openCreateForm() {
         {
           id: `q_gen_2`,
           label: {
-            th: 'การทำงานร่วมกับผู้อื่นและการสื่อสาร',
-            en: 'Teamwork and Communication'
+            th: 'การทำงานร่วมกับผู้อื่นและการสื่อสารในทีม',
+            en: 'Teamwork and Workplace Communication'
+          },
+          type: 'rating',
+          required: true,
+          weight: 1,
+          scaleMin: 1,
+          scaleMax: 5
+        },
+        {
+          id: `q_gen_3`,
+          label: {
+            th: 'ความรับผิดชอบต่องานและความกระตือรือร้นในการเรียนรู้',
+            en: 'Task Responsibility and Learning Enthusiasm'
+          },
+          type: 'rating',
+          required: true,
+          weight: 1,
+          scaleMin: 1,
+          scaleMax: 5
+        },
+        {
+          id: `q_gen_4`,
+          label: {
+            th: 'การปรับตัวและการแก้ปัญหาเฉพาะหน้าในการทำงาน',
+            en: 'Adaptability and Practical Problem Solving'
           },
           type: 'rating',
           required: true,
@@ -240,35 +265,84 @@ function openCreateForm() {
           scaleMax: 5
         }
       ]
-    },
-    {
-      id: `sec_spec_${Date.now() + 1}`,
-      title: {
-        th: 'หมวดพิเศษ: ทักษะทางวิชาชีพเฉพาะทาง (Hard Skills)',
-        en: 'Special Section: Professional Competencies'
-      },
-      category: 'special',
-      schoolId: schoolsData.value?.items[0]?.id ?? '',
+    }
+  ]
+
+  // Pre-populate all schools with standard presets
+  const schools = schoolsData.value?.items || []
+  for (const [idx, school] of schools.entries()) {
+    const preset = SCHOOL_PRESETS[school.schoolCode] || {
+      titleTh: `ทักษะเฉพาะทาง: สำนักวิชา${school.name.th}`,
+      titleEn: `Specialized Skills: ${school.name.en}`,
       questions: [
         {
-          id: `q_spec_1`,
-          label: {
-            th: 'ความรู้ความสามารถทางวิชาการและทักษะเทคนิคในสายงาน',
-            en: 'Technical and Academic Knowledge in Field'
-          },
-          type: 'rating',
-          required: true,
-          weight: 2,
-          scaleMin: 1,
-          scaleMax: 5
+          labelTh: 'ความรู้ความสามารถทางวิชาการและทักษะเทคนิคในสายงาน',
+          labelEn: 'Technical and Academic Knowledge in Field',
+          type: 'rating' as const,
+          weight: 2
+        },
+        {
+          labelTh: 'การคิดวิเคราะห์ การแก้ปัญหา และการประยุกต์ใช้งานจริง',
+          labelEn: 'Analytical Thinking, Problem Solving & Practical Application',
+          type: 'rating' as const,
+          weight: 2
         }
       ]
     }
-  ]
+    initialSections.push({
+      id: `sec_spec_${school.id}_${baseNow + idx + 1}`,
+      title: { th: preset.titleTh, en: preset.titleEn },
+      category: 'special',
+      schoolId: school.id,
+      questions: preset.questions.map((q, qIdx) => ({
+        id: `q_${school.schoolCode.toLowerCase()}_${baseNow + idx + 1}_${qIdx + 1}`,
+        label: { th: q.labelTh, en: q.labelEn },
+        type: q.type,
+        required: true,
+        weight: q.weight,
+        scaleMin: 1,
+        scaleMax: 5
+      }))
+    })
+  }
+
+  // Suggestion section
+  initialSections.push({
+    id: `sec_sug_${baseNow + 200}`,
+    title: {
+      th: 'หมวด 3: ข้อคิดเห็นและข้อเสนอแนะเพิ่มเติมสำหรับนักศึกษา',
+      en: 'Section 3: Feedback, Strengths & Recommendations'
+    },
+    category: 'suggestion',
+    questions: [
+      {
+        id: `q_sug_1`,
+        label: {
+          th: 'จุดเด่นและข้อดีของนักศึกษาที่น่าชื่นชม (Strengths)',
+          en: 'Student Strengths and Commendable Professional Qualities'
+        },
+        type: 'text',
+        required: false,
+        weight: 0
+      },
+      {
+        id: `q_sug_2`,
+        label: {
+          th: 'จุดที่ควรพัฒนาและข้อเสนอแนะสำหรับการทำงานในอนาคต (Areas for Improvement)',
+          en: 'Areas for Improvement and Guidance for Future Career Growth'
+        },
+        type: 'text',
+        required: false,
+        weight: 0
+      }
+    ]
+  })
+
+  editorForm.sections = initialSections
   selectedForm.value = null
   selectedVersion.value = null
   editorActiveTab.value = 'general'
-  selectedSchoolHubId.value = schoolsData.value?.items[0]?.id ?? ''
+  selectedSchoolHubId.value = schools[0]?.id ?? ''
   isEditorOpen.value = true
 }
 
@@ -907,69 +981,74 @@ interface PresetCriteria {
 }
 
 const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
-  IT: {
-    titleTh: 'ทักษะเฉพาะทางด้านเทคโนโลยีสารสนเทศและการพัฒนาซอฟต์แวร์',
-    titleEn: 'IT & Software Engineering Competencies',
+  LA: {
+    titleTh: 'ทักษะเฉพาะทาง: สำนักวิชาศิลปศาสตร์ (ภาษาและการสื่อสารสากล)',
+    titleEn: 'Specialized Skills: School of Liberal Arts',
     questions: [
       {
         labelTh:
-          'ทักษะการพัฒนาซอฟต์แวร์ การเขียนโปรแกรม และการออกแบบตรรกะระบบ (Software Development)',
-        labelEn: 'Software Development, Coding & Logic Design Skills',
+          'ทักษะการใช้ภาษาเพื่อการสื่อสารระดับมืออาชีพ ทั้งการฟัง พูด อ่าน และเขียน (Language Proficiency)',
+        labelEn:
+          'Professional Language Proficiency (Listening, Speaking, Reading & Writing)',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'การออกแบบ จัดการ และสืบค้นฐานข้อมูล (Database Management & Querying)',
-        labelEn: 'Database Design, Management & Querying',
+          'ทักษะการแปล การล่าม และการเรียบเรียงเนื้อหาข้ามภาษา (Translation & Interpretation)',
+        labelEn:
+          'Translation, Interpretation & Multilingual Content Adaptation',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'การวิเคราะห์ปัญหา การค้นหาข้อผิดพลาด และการทดสอบระบบ (Debugging & Testing)',
-        labelEn: 'System Analysis, Debugging & Testing',
+          'ความเข้าใจในบริบทความหลากหลายทางวัฒนธรรมและการทำงานร่วมกับชาวต่างชาติ (Intercultural Awareness)',
+        labelEn:
+          'Intercultural Awareness and International Workplace Adaptability',
         type: 'rating',
         weight: 1
       },
       {
         labelTh:
-          'การปฏิบัติตามมาตรฐานความปลอดภัยของข้อมูลและระบบสารสนเทศ (Security Standards)',
-        labelEn: 'Information Security Standards Compliance',
+          'การค้นคว้าข้อมูล การคิดเชิงวิพากษ์ และการสังเคราะห์เนื้อหา (Research & Critical Thinking)',
+        labelEn: 'Information Research, Critical Thinking & Content Synthesis',
         type: 'rating',
         weight: 1
       }
     ]
   },
-  LAW: {
-    titleTh: 'ทักษะเฉพาะทางด้านนิติศาสตร์และการปฏิบัติงานทางกฎหมาย',
-    titleEn: 'Legal Practice & Law Competencies',
+  SCI: {
+    titleTh: 'ทักษะเฉพาะทาง: สำนักวิชาวิทยาศาสตร์ (การวิจัยและปฏิบัติการวิทยาศาสตร์)',
+    titleEn: 'Specialized Skills: School of Science',
     questions: [
       {
         labelTh:
-          'การค้นคว้า รวบรวมข้อเท็จจริง และสืบค้นตัวบทกฎหมายและคำพิพากษา (Legal Research)',
-        labelEn: 'Legal Research & Case Law Fact-Finding',
+          'ทักษะการใช้เครื่องมือและการปฏิบัติการทางวิทยาศาสตร์ตามมาตรฐานความปลอดภัย (Lab Equipment & Safety)',
+        labelEn: 'Scientific Equipment Operation & Laboratory Safety Standards',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'ทักษะการร่างเอกสารทางกฎหมาย นิติกรรม และสัญญา (Legal Drafting)',
-        labelEn: 'Legal Drafting, Contracts & Instruments',
+          'การวิเคราะห์ข้อมูล การทดลอง และการตีความผลเชิงวิทยาศาสตร์ (Experimentation & Data Analysis)',
+        labelEn:
+          'Scientific Experimentation, Data Analysis & Result Interpretation',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'การคิดวิเคราะห์ ตีความ และปรับบทกฎหมายเข้ากับข้อเท็จจริง (Legal Reasoning)',
-        labelEn: 'Legal Reasoning & Interpretation',
+          'การค้นคว้าทางวิชาการและการจัดทำรายงานเชิงวิทยาศาสตร์ (Scientific Reporting)',
+        labelEn: 'Academic Literature Research & Technical Scientific Reporting',
         type: 'rating',
-        weight: 2
+        weight: 1
       },
       {
         labelTh:
-          'การยึดมั่นในจรรยาบรรณวิชาชีพกฎหมายและความซื่อสัตย์สุจริต (Legal Ethics)',
-        labelEn: 'Legal Professional Ethics & Integrity',
+          'การคิดเชิงเหตุและผลและการประยุกต์ใช้องค์ความรู้ทางวิทยาศาสตร์ (Scientific Reasoning)',
+        labelEn:
+          'Logical Scientific Reasoning & Practical Knowledge Application',
         type: 'rating',
         weight: 1
       }
@@ -1009,6 +1088,176 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
       }
     ]
   },
+  IT: {
+    titleTh: 'ทักษะเฉพาะทางด้านเทคโนโลยีสารสนเทศและการพัฒนาซอฟต์แวร์',
+    titleEn: 'IT & Software Engineering Competencies',
+    questions: [
+      {
+        labelTh:
+          'ทักษะการพัฒนาซอฟต์แวร์ การเขียนโปรแกรม และการออกแบบตรรกะระบบ (Software Development)',
+        labelEn: 'Software Development, Coding & Logic Design Skills',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การออกแบบ จัดการ และสืบค้นฐานข้อมูล (Database Management & Querying)',
+        labelEn: 'Database Design, Management & Querying',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การวิเคราะห์ปัญหา การค้นหาข้อผิดพลาด และการทดสอบระบบ (Debugging & Testing)',
+        labelEn: 'System Analysis, Debugging & Testing',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'การปฏิบัติตามมาตรฐานความปลอดภัยของข้อมูลและระบบสารสนเทศ (Security Standards)',
+        labelEn: 'Information Security Standards Compliance',
+        type: 'rating',
+        weight: 1
+      }
+    ]
+  },
+  AI: {
+    titleTh: 'ทักษะเฉพาะทางด้านอุตสาหกรรมเกษตรและเทคโนโลยีอาหาร',
+    titleEn: 'Agro-Industry & Food Science Competencies',
+    questions: [
+      {
+        labelTh:
+          'การควบคุมคุณภาพและความปลอดภัยของอาหารตามมาตรฐานสากล (GMP / HACCP / ISO)',
+        labelEn: 'Food Safety & Quality Assurance Standards',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'ทักษะการวิเคราะห์และทดสอบในห้องปฏิบัติการทางวิทยาศาสตร์อาหาร (Laboratory Skills)',
+        labelEn: 'Laboratory Testing & Food Analysis Skills',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'ความเข้าใจในกระบวนการแปรรูปและสายการผลิตอุตสาหกรรมเกษตร (Food Processing)',
+        labelEn: 'Food Processing & Agro-Industrial Production Line',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'การวิจัยพัฒนาผลิตภัณฑ์อาหารและการจัดการห่วงโซ่อุปทาน (Food Product Dev & Supply Chain)',
+        labelEn: 'Food Product Development & Supply Chain Management',
+        type: 'rating',
+        weight: 1
+      }
+    ]
+  },
+  LAW: {
+    titleTh: 'ทักษะเฉพาะทางด้านนิติศาสตร์และการปฏิบัติงานทางกฎหมาย',
+    titleEn: 'Legal Practice & Law Competencies',
+    questions: [
+      {
+        labelTh:
+          'การค้นคว้า รวบรวมข้อเท็จจริง และสืบค้นตัวบทกฎหมายและคำพิพากษา (Legal Research)',
+        labelEn: 'Legal Research & Case Law Fact-Finding',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'ทักษะการร่างเอกสารทางกฎหมาย นิติกรรม และสัญญา (Legal Drafting)',
+        labelEn: 'Legal Drafting, Contracts & Instruments',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การคิดวิเคราะห์ ตีความ และปรับบทกฎหมายเข้ากับข้อเท็จจริง (Legal Reasoning)',
+        labelEn: 'Legal Reasoning & Interpretation',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การยึดมั่นในจรรยาบรรณวิชาชีพกฎหมายและความซื่อสัตย์สุจริต (Legal Ethics)',
+        labelEn: 'Legal Professional Ethics & Integrity',
+        type: 'rating',
+        weight: 1
+      }
+    ]
+  },
+  COS: {
+    titleTh: 'ทักษะเฉพาะทางด้านวิทยาศาสตร์เครื่องสำอาง',
+    titleEn: 'Cosmetic Science Competencies',
+    questions: [
+      {
+        labelTh:
+          'การพัฒนาและตั้งตำรับผลิตภัณฑ์เครื่องสำอาง (Cosmetic Formulation)',
+        labelEn: 'Cosmetic Formulation & Product Development',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การทดสอบความคงตัว ความปลอดภัย และประสิทธิภาพของผลิตภัณฑ์ (Safety & Efficacy)',
+        labelEn: 'Stability, Safety & Efficacy Testing',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การควบคุมคุณภาพและการปฏิบัติตามกฎหมายเครื่องสำอางสากล (Quality Control)',
+        labelEn: 'Quality Control & Regulatory Compliance',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'ความเข้าใจแนวโน้มตลาดเครื่องสำอางและการตอบสนองความต้องการผู้บริโภค (Market Trends)',
+        labelEn: 'Cosmetic Industry Trends & Consumer Demand Adaptation',
+        type: 'rating',
+        weight: 1
+      }
+    ]
+  },
+  HS: {
+    titleTh: 'ทักษะเฉพาะทางด้านวิทยาศาสตร์สุขภาพและสาธารณสุข',
+    titleEn: 'Health Science & Public Health Competencies',
+    questions: [
+      {
+        labelTh:
+          'การประเมินความเสี่ยงด้านสุขภาพ อาชีวอนามัย และสิ่งแวดล้อม (Risk Assessment)',
+        labelEn: 'Health Risk, Occupational & Environmental Assessment',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การวางแผนและการจัดทำโครงการส่งเสริมสุขภาพในสถานประกอบการ/ชุมชน (Health Promotion)',
+        labelEn: 'Health Promotion Project Planning',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การปฏิบัติตามกฎหมายและมาตรฐานความปลอดภัยในการทำงาน (Safety Standards)',
+        labelEn: 'Safety Standards & Regulatory Compliance',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'ทักษะการเฝ้าระวังและการเก็บข้อมูลทางสุขภาพเชิงระบาดวิทยา (Epidemiological Data)',
+        labelEn: 'Health Surveillance & Epidemiological Data Collection',
+        type: 'rating',
+        weight: 1
+      }
+    ]
+  },
   NS: {
     titleTh: 'ทักษะเฉพาะทางด้านการพยาบาลและการบริบาลผู้ป่วย',
     titleEn: 'Clinical Nursing & Patient Care Competencies',
@@ -1043,82 +1292,177 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
       }
     ]
   },
-  AI: {
-    titleTh: 'ทักษะเฉพาะทางด้านอุตสาหกรรมเกษตรและเทคโนโลยีอาหาร',
-    titleEn: 'Agro-Industry & Food Science Competencies',
+  MED: {
+    titleTh: 'ทักษะเฉพาะทางด้านเวชปฏิบัติและการดูแลรักษาผู้ป่วย',
+    titleEn: 'Clinical Medicine & Patient Care Competencies',
     questions: [
       {
         labelTh:
-          'การควบคุมคุณภาพและความปลอดภัยของอาหารตามมาตรฐานสากล (GMP / HACCP / ISO)',
-        labelEn: 'Food Safety & Quality Assurance Standards',
+          'ทักษะการซักประวัติ ตรวจร่างกาย และการวิเคราะห์วินิจฉัยโรค (Clinical Diagnosis)',
+        labelEn: 'History Taking, Physical Exam & Clinical Diagnosis',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'ทักษะการวิเคราะห์และทดสอบในห้องปฏิบัติการทางวิทยาศาสตร์อาหาร (Laboratory Skills)',
-        labelEn: 'Laboratory Testing & Food Analysis Skills',
+          'การเลือกใช้และแปลผลการตรวจทางห้องปฏิบัติการและการวางแผนการรักษา (Management Plan)',
+        labelEn: 'Laboratory Investigation & Management Plan Formulation',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'ความเข้าใจในกระบวนการแปรรูปและสายการผลิตอุตสาหกรรมเกษตร (Food Processing)',
-        labelEn: 'Food Processing & Agro-Industrial Production Line',
+          'การสื่อสารทางการแพทย์ การให้ข้อมูลแก่ผู้ป่วยและญาติอย่างเห็นอกเห็นใจ (Medical Communication)',
+        labelEn: 'Medical Communication & Empathic Patient Engagement',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'จริยธรรมทางการแพทย์และความตระหนักในความปลอดภัยของผู้ป่วย (Medical Ethics & Safety)',
+        labelEn: 'Medical Ethics, Confidentiality & Patient Safety',
         type: 'rating',
         weight: 1
       }
     ]
   },
-  COS: {
-    titleTh: 'ทักษะเฉพาะทางด้านวิทยาศาสตร์เครื่องสำอาง',
-    titleEn: 'Cosmetic Science Competencies',
+  DENT: {
+    titleTh: 'ทักษะเฉพาะทางด้านทันตแพทยศาสตร์และการบริบาลทางทันตกรรม',
+    titleEn: 'Dentistry & Clinical Dental Competencies',
     questions: [
       {
         labelTh:
-          'การพัฒนาและตั้งตำรับผลิตภัณฑ์เครื่องสำอาง (Cosmetic Formulation)',
-        labelEn: 'Cosmetic Formulation & Product Development',
+          'การตรวจประเมิน วินิจฉัย และวางแผนการรักษาทางทันตกรรม (Dental Assessment)',
+        labelEn: 'Dental Assessment, Diagnosis & Treatment Planning',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'การทดสอบความคงตัว ความปลอดภัย และประสิทธิภาพของผลิตภัณฑ์ (Safety & Efficacy)',
-        labelEn: 'Stability, Safety & Efficacy Testing',
+          'ทักษะการทำหัตถการทางทันตกรรมและการควบคุมการติดเชื้อ (Dental Procedures)',
+        labelEn: 'Clinical Dental Procedures & Infection Control',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'การควบคุมคุณภาพและการปฏิบัติตามกฎหมายเครื่องสำอางสากล (Quality Control)',
-        labelEn: 'Quality Control & Regulatory Compliance',
+          'การสื่อสาร สร้างสัมพันธภาพ และการให้คำแนะนำแก่ผู้ป่วยทันตกรรม (Patient Communication)',
+        labelEn: 'Dental Patient Communication & Oral Health Education',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'จรรยาบรรณวิชาชีพทันตแพทย์และมาตรฐานความปลอดภัยของผู้ป่วย (Dental Ethics)',
+        labelEn: 'Dental Professional Ethics & Patient Safety Standards',
         type: 'rating',
         weight: 1
       }
     ]
   },
-  HS: {
-    titleTh: 'ทักษะเฉพาะทางด้านวิทยาศาสตร์สุขภาพและสาธารณสุข',
-    titleEn: 'Health Science & Public Health Competencies',
+  SOC: {
+    titleTh: 'ทักษะเฉพาะทางด้านการพัฒนานวัตกรรมสังคมและการพัฒนาชุมชน',
+    titleEn: 'Social Innovation & Community Development Competencies',
     questions: [
       {
         labelTh:
-          'การประเมินความเสี่ยงด้านสุขภาพ อาชีวอนามัย และสิ่งแวดล้อม (Risk Assessment)',
-        labelEn: 'Health Risk, Occupational & Environmental Assessment',
+          'การสำรวจความต้องการ การวิเคราะห์ปัญหาชุมชนและบริบทสังคม (Social Needs Assessment)',
+        labelEn: 'Social Needs Assessment & Community Problem Analysis',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'การวางแผนและการจัดทำโครงการส่งเสริมสุขภาพในสถานประกอบการ/ชุมชน (Health Promotion)',
-        labelEn: 'Health Promotion Project Planning',
+          'การออกแบบโครงการและการร่วมสร้างสรรค์นวัตกรรมเพื่อแก้ไขปัญหาสังคม (Social Project Design)',
+        labelEn: 'Social Project Design & Collaborative Innovation Co-Creation',
         type: 'rating',
         weight: 2
       },
       {
         labelTh:
-          'การปฏิบัติตามกฎหมายและมาตรฐานความปลอดภัยในการทำงาน (Safety Standards)',
-        labelEn: 'Safety Standards & Regulatory Compliance',
+          'ทักษะการประสานงาน การมีส่วนร่วม และการสื่อสารกับผู้มีส่วนได้ส่วนเสีย (Stakeholder Engagement)',
+        labelEn:
+          'Stakeholder Engagement, Facilitation & Community Outreach',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'การติดตามและประเมินผลกระทบทางสังคมของโครงการ (Social Impact Evaluation)',
+        labelEn: 'Social Impact Measurement, Monitoring & Evaluation',
+        type: 'rating',
+        weight: 1
+      }
+    ]
+  },
+  SIN: {
+    titleTh: 'ทักษะเฉพาะทางด้านภาษาจีนและการสื่อสารทางธุรกิจจีน',
+    titleEn: 'Sinology & Chinese Business Communication Competencies',
+    questions: [
+      {
+        labelTh:
+          'ทักษะการใช้ภาษาจีนระดับสูงเพื่อการสื่อสารและการทำงานอย่างมืออาชีพ (Advanced Chinese Proficiency)',
+        labelEn:
+          'Advanced Chinese Proficiency for Workplace & Professional Communication',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'ทักษะการแปล ล่าม และการเจรจาต่อรองในบริบทธุรกิจจีน (Translation & Negotiation)',
+        labelEn: 'Chinese Translation, Interpretation & Business Negotiation',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'ความเข้าใจในบริบทเศรษฐกิจ สังคม และวัฒนธรรมจีนร่วมสมัย (Chinese Contextual Understanding)',
+        labelEn:
+          'Understanding of Contemporary Chinese Socio-Economic & Cultural Context',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'มนุษยสัมพันธ์และการประสานงานกับองค์กรหรือคู่ค้าชาวจีน (Liaison with Chinese Partners)',
+        labelEn:
+          'Interpersonal & Organizational Liaison Skills with Chinese Partners',
+        type: 'rating',
+        weight: 1
+      }
+    ]
+  },
+  IM: {
+    titleTh:
+      'ทักษะเฉพาะทางด้านการแพทย์บูรณาการ (แพทย์แผนไทยประยุกต์ / กายภาพบำบัด / แพทย์แผนจีน)',
+    titleEn: 'Integrative Medicine & Therapeutic Competencies',
+    questions: [
+      {
+        labelTh:
+          'การตรวจวินิจฉัยและประเมินสภาพร่างกายตามหลักวิชาชีพเฉพาะทาง (Diagnostic & Physical Evaluation)',
+        labelEn: 'Specialized Clinical Diagnostic & Physical Assessment',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'ทักษะการรักษา การทำหัตถการ และการฟื้นฟูสมรรถภาพ (Therapeutic Techniques)',
+        labelEn:
+          'Therapeutic Treatment, Clinical Procedures & Rehabilitation Skills',
+        type: 'rating',
+        weight: 2
+      },
+      {
+        labelTh:
+          'การสื่อสารและการให้คำแนะนำในการดูแลส่งเสริมสุขภาพแบบองค์รวม (Holistic Health Counseling)',
+        labelEn: 'Holistic Health Guidance & Patient Counseling',
+        type: 'rating',
+        weight: 1
+      },
+      {
+        labelTh:
+          'จรรยาบรรณวิชาชีพการแพทย์บูรณาการและการคำนึงถึงความปลอดภัยของผู้รับบริการ (Ethics & Safety)',
+        labelEn: 'Integrative Healthcare Ethics & Patient Safety Assurance',
         type: 'rating',
         weight: 1
       }
@@ -1126,7 +1470,7 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
   }
 }
 
-function applySchoolPreset(school: School) {
+function applySchoolPreset(school: School, silent = false) {
   const preset = SCHOOL_PRESETS[school.schoolCode] || {
     titleTh: `ทักษะวิชาชีพเฉพาะทางสำหรับสำนักวิชา${school.name.th}`,
     titleEn: `Specialized Professional Competencies for ${school.name.en}`,
@@ -1183,9 +1527,24 @@ function applySchoolPreset(school: School) {
     scaleMax: 5
   }))
 
+  if (!silent) {
+    toast.add({
+      title: 'โหลดแม่แบบสำเร็จ',
+      description: `เพิ่มเกณฑ์มาตรฐานสำหรับ ${school.name.th} เรียบร้อยแล้ว`,
+      color: 'success'
+    })
+  }
+}
+
+function applyAllSchoolPresets() {
+  const schools = schoolsData.value?.items || []
+  if (schools.length === 0) return
+  for (const sc of schools) {
+    applySchoolPreset(sc, true)
+  }
   toast.add({
-    title: 'โหลดแม่แบบสำเร็จ',
-    description: `เพิ่มเกณฑ์มาตรฐานสำหรับ ${school.name.th} เรียบร้อยแล้ว`,
+    title: 'โหลดแม่แบบครบทุกสำนักวิชาสำเร็จ',
+    description: `เพิ่มเกณฑ์มาตรฐานครบทั้ง ${schools.length} สำนักวิชาเรียบร้อยแล้ว`,
     color: 'success'
   })
 }
@@ -1807,7 +2166,7 @@ function handleExecuteCopyCriteria() {
               <span>หมวดเฉพาะสำนักวิชา (School Hub)</span>
               <UBadge
                 :color="configuredSchoolsCount > 0 ? 'secondary' : 'neutral'"
-                :label="`${configuredSchoolsCount}/${schoolsData?.items.length || 15} สำนักวิชา (${specialSections.length} หมวด)`"
+                :label="`${configuredSchoolsCount}/${schoolsData?.items.length || 14} สำนักวิชา (${specialSections.length} หมวด)`"
                 size="xs"
                 variant="subtle"
               />
@@ -2110,6 +2469,14 @@ function handleExecuteCopyCriteria() {
                 >
               </div>
               <div class="flex items-center gap-2 shrink-0">
+                <UButton
+                  color="secondary"
+                  size="xs"
+                  variant="soft"
+                  icon="i-lucide-sparkles"
+                  label="⚡ โหลดแม่แบบมาตรฐานครบทุกสำนักวิชา (14 สำนัก)"
+                  @click="applyAllSchoolPresets"
+                />
                 <UBadge
                   :color="configuredSchoolsCount > 0 ? 'success' : 'neutral'"
                   :label="`กำหนดแล้ว ${configuredSchoolsCount} สำนักวิชา`"
@@ -2117,8 +2484,9 @@ function handleExecuteCopyCriteria() {
                   variant="subtle"
                 />
                 <UBadge
+                  v-if="(schoolsData?.items.length || 14) - configuredSchoolsCount > 0"
                   color="neutral"
-                  :label="`ยังว่าง ${(schoolsData?.items.length || 15) - configuredSchoolsCount} สำนักวิชา`"
+                  :label="`ยังว่าง ${(schoolsData?.items.length || 14) - configuredSchoolsCount} สำนักวิชา`"
                   size="xs"
                   variant="subtle"
                 />

@@ -14,7 +14,7 @@ const emit = defineEmits<{
 const api = useApi()
 const toast = useToast()
 const auth = useAuthStore()
-const showDemoData = import.meta.dev
+const showDemoData = false
 
 const currentStep = ref<1 | 2 | 3 | 4>(1)
 const loading = ref(false)
@@ -45,10 +45,10 @@ const selectedSchoolFilter = ref('')
 export interface WizardStudentRow {
   tempId: string
   studentId: string
-  nameTh: string
-  nameEn: string
+  name: string
+  nameTh?: string
+  nameEn?: string
   email: string
-  personalEmail: string
   schoolId: string
   programId: string
   company: string
@@ -137,7 +137,8 @@ function validateRow(row: WizardStudentRow): {
     errors.push('รหัสนักศึกษาต้องเป็นตัวเลข 10 หลัก')
   }
 
-  if (!row.nameTh.trim() && !row.nameEn.trim()) {
+  const studentName = (row.name || row.nameTh || row.nameEn || '').trim()
+  if (!studentName) {
     errors.push('กรุณาระบุชื่อ-นามสกุล')
   }
 
@@ -146,13 +147,6 @@ function validateRow(row: WizardStudentRow): {
     errors.push('กรุณาระบุอีเมลนักศึกษา')
   } else if (!cleanEmail.includes('@') || !cleanEmail.endsWith('mfu.ac.th')) {
     errors.push('อีเมลนักศึกษาควรลงท้ายด้วย @lamduan.mfu.ac.th')
-  }
-
-  if (
-    row.personalEmail &&
-    (!row.personalEmail.includes('@') || !row.personalEmail.includes('.'))
-  ) {
-    errors.push('รูปแบบอีเมลส่วนตัวไม่ถูกต้อง')
   }
 
   if (!row.schoolId) {
@@ -188,10 +182,10 @@ function loadDemoStudents(): void {
     {
       tempId: 'row-1',
       studentId: '6631501001',
+      name: 'นายกิตติศักดิ์ พัฒนศิลป์',
       nameTh: 'นายกิตติศักดิ์ พัฒนศิลป์',
       nameEn: 'Mr. Kittisak Pattanasin',
       email: '6631501001@lamduan.mfu.ac.th',
-      personalEmail: 'kittisak.dev@gmail.com',
       schoolId: s0,
       programId: p0,
       company: 'บริษัท ดิจิทัล โซลูชั่นส์ จำกัด',
@@ -204,10 +198,10 @@ function loadDemoStudents(): void {
     {
       tempId: 'row-2',
       studentId: '6631501002',
+      name: 'นางสาววราภรณ์ สุขสวัสดิ์',
       nameTh: 'นางสาววราภรณ์ สุขสวัสดิ์',
       nameEn: 'Ms. Varaporn Suksawat',
       email: '6631501002@lamduan.mfu.ac.th',
-      personalEmail: 'varaporn.s@outlook.com',
       schoolId: s0,
       programId: p0,
       company: 'บริษัท เชียงใหม่ ซอฟต์แวร์ เฮาส์ จำกัด',
@@ -220,10 +214,10 @@ function loadDemoStudents(): void {
     {
       tempId: 'row-3',
       studentId: '6631503003',
+      name: 'นายธนภัทร ธรรมมงคล',
       nameTh: 'นายธนภัทร ธรรมมงคล',
       nameEn: 'Mr. Thanapat Thammamongkol',
       email: '6631503003@lamduan.mfu.ac.th',
-      personalEmail: 'thanapat.work@gmail.com',
       schoolId: s1,
       programId: p1,
       company: 'ธนาคารกสิกรไทย (สำนักงานใหญ่)',
@@ -283,16 +277,22 @@ function handleFileUpload(event: Event): void {
             row['รหัสนักศึกษา (studentId)'] ||
             ''
         ).trim()
+        const explicitName = String(
+          row['name'] ||
+            row['ชื่อ-นามสกุล'] ||
+            row['ชื่อ-นามสกุล (name)'] ||
+            row['ชื่อ-นามสกุล (Name)'] ||
+            row['ชื่อนักศึกษา'] ||
+            ''
+        ).trim()
         const nTh = String(
           row['nameTh'] || row['ชื่อ-นามสกุลไทย'] || row['ชื่อ'] || ''
         ).trim()
         const nEn = String(
           row['nameEn'] || row['ชื่อ-นามสกุลอังกฤษ'] || ''
         ).trim()
+        const studentName = explicitName || nTh || nEn
         const mail = String(row['email'] || row['อีเมลนักศึกษา'] || '').trim()
-        const pMail = String(
-          row['personalEmail'] || row['อีเมลส่วนตัว'] || ''
-        ).trim()
         const scCode = String(
           row['schoolCode'] || row['รหัสสำนักวิชา'] || ''
         ).trim()
@@ -330,10 +330,10 @@ function handleFileUpload(event: Event): void {
         const item: WizardStudentRow = {
           tempId: `upload-${idx}-${Date.now()}`,
           studentId: sId,
-          nameTh: nTh || nEn,
-          nameEn: nEn || nTh,
+          name: studentName,
+          nameTh: nTh || studentName,
+          nameEn: nEn || studentName,
           email: mail,
-          personalEmail: pMail,
           schoolId,
           programId,
           company: comp,
@@ -387,9 +387,13 @@ function saveEditedRow(): void {
     studentRows.value[idx] = { ...editingRow.value }
   }
   isEditModalOpen.value = false
+  const displayName =
+    editingRow.value.name ||
+    editingRow.value.nameTh ||
+    editingRow.value.studentId
   toast.add({
     title: 'แก้ไขข้อมูลสำเร็จ',
-    description: `อัปเดตข้อมูลของ ${editingRow.value.nameTh} (${editingRow.value.studentId}) เรียบร้อยแล้ว`,
+    description: `อัปเดตข้อมูลของ ${displayName} (${editingRow.value.studentId}) เรียบร้อยแล้ว`,
     color: 'success'
   })
 }
@@ -402,10 +406,10 @@ function addNewEmptyRow(): void {
   const newRow: WizardStudentRow = {
     tempId: `manual-${Date.now()}`,
     studentId: '',
+    name: '',
     nameTh: '',
     nameEn: '',
     email: '',
-    personalEmail: '',
     schoolId: '',
     programId: '',
     company: '',
@@ -445,15 +449,13 @@ async function handleConfirmAndSubmit(): Promise<void> {
 
   saving.value = true
   const outcomes = await persistStudentRows(validRows, async (row) => {
+    const studentName = (row.name || row.nameTh || row.nameEn || '').trim()
     await api('/students', {
       method: 'POST',
       body: {
         studentId: row.studentId.trim(),
-        name: { th: row.nameTh.trim(), en: row.nameEn.trim() },
+        name: studentName,
         email: row.email.trim().toLowerCase(),
-        personalEmail: row.personalEmail?.trim()
-          ? row.personalEmail.trim().toLowerCase()
-          : undefined,
         schoolId: row.schoolId,
         programId: row.programId,
         semester: row.semester || undefined,
@@ -989,7 +991,6 @@ function handleClose(): void {
                       <th class="p-2.5">รหัสนักศึกษา</th>
                       <th class="p-2.5">ชื่อ-นามสกุล</th>
                       <th class="p-2.5">อีเมลนักศึกษา</th>
-                      <th class="p-2.5">อีเมลส่วนตัว</th>
                       <th class="p-2.5">สำนักวิชา / หลักสูตร</th>
                       <th class="p-2.5">สถานประกอบการ</th>
                       <th class="p-2.5 text-right">จัดการ</th>
@@ -1035,19 +1036,12 @@ function handleClose(): void {
 
                       <td class="p-2.5 whitespace-nowrap">
                         <p class="font-medium text-highlighted">
-                          {{ row.nameTh || row.nameEn || '-' }}
-                        </p>
-                        <p class="text-[10px] text-muted">
-                          {{ row.nameEn }}
+                          {{ row.name || row.nameTh || row.nameEn || '-' }}
                         </p>
                       </td>
 
                       <td class="p-2.5 font-mono text-muted whitespace-nowrap">
                         {{ row.email || '-' }}
-                      </td>
-
-                      <td class="p-2.5 font-mono text-muted whitespace-nowrap">
-                        {{ row.personalEmail || '-' }}
                       </td>
 
                       <td class="p-2.5 max-w-[180px] truncate">
@@ -1259,52 +1253,28 @@ function handleClose(): void {
             />
           </div>
 
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="font-semibold text-muted"
-                >ชื่อ-นามสกุล (ภาษาไทย):</label
-              >
-              <UInput
-                v-model="editingRow.nameTh"
-                class="mt-1"
-                placeholder="นายสมชาย ใจดี"
-                size="sm"
-              />
-            </div>
-            <div>
-              <label class="font-semibold text-muted"
-                >ชื่อ-นามสกุล (ภาษาอังกฤษ):</label
-              >
-              <UInput
-                v-model="editingRow.nameEn"
-                class="mt-1"
-                placeholder="Mr. Somchai Jaidee"
-                size="sm"
-              />
-            </div>
+          <div>
+            <label class="font-semibold text-muted"
+              >ชื่อ-นามสกุล (Full Name):</label
+            >
+            <UInput
+              v-model="editingRow.name"
+              class="mt-1"
+              placeholder="นายสมชาย ใจดี"
+              size="sm"
+            />
           </div>
 
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="font-semibold text-muted"
-                >อีเมลนักศึกษา (@lamduan):</label
-              >
-              <UInput
-                v-model="editingRow.email"
-                class="mt-1"
-                placeholder="6631501001@lamduan.mfu.ac.th"
-                size="sm"
-              />
-            </div>
-            <div>
-              <label class="font-semibold text-muted">อีเมลส่วนตัว:</label>
-              <UInput
-                v-model="editingRow.personalEmail"
-                class="mt-1"
-                placeholder="personal@gmail.com"
-                size="sm"
-              />
-            </div>
+          <div>
+            <label class="font-semibold text-muted"
+              >อีเมลนักศึกษา (@lamduan):</label
+            >
+            <UInput
+              v-model="editingRow.email"
+              class="mt-1"
+              placeholder="6631501001@lamduan.mfu.ac.th"
+              size="sm"
+            />
           </div>
 
           <div>

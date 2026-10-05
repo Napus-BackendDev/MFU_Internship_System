@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq'
 import { MongooseModule } from '@nestjs/mongoose'
 
 import { AuditModule } from '../audit/audit.module.js'
+import { MembersModule } from '../members/members.module.js'
 import {
   DeliveryRecord,
   DeliverySchema
@@ -31,6 +32,7 @@ import { ReportsService } from './reports.service.js'
 @Module({
   imports: [
     AuditModule,
+    MembersModule,
     BullModule.registerQueue({ name: 'report-exports' }),
     MongooseModule.forFeature([
       {

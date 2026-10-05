@@ -430,10 +430,7 @@ export class UsersService {
           throw new NotFoundException({ code: 'STUDENT_NOT_FOUND' })
         }
         linkedStudentId = student.studentId
-        const allowedEmails = [student.email, student.personalEmail]
-          .filter((email): email is string => Boolean(email))
-          .map((email) => email.toLowerCase())
-        if (!allowedEmails.includes(input.email.toLowerCase())) {
+        if (student.email.toLowerCase() !== input.email.toLowerCase()) {
           throw new UnprocessableEntityException({
             code: 'STUDENT_EMAIL_MISMATCH'
           })
@@ -564,13 +561,10 @@ export class UsersService {
             .findOne({ studentId: user.studentId, status: 'active' })
             .session(session ?? null)
             .exec()
-          const allowedEmails = [
-            linkedStudent?.email,
-            linkedStudent?.personalEmail
-          ]
-            .filter((email): email is string => Boolean(email))
-            .map((email) => email.toLowerCase())
-          if (!allowedEmails.includes(input.email.toLowerCase())) {
+          if (
+            linkedStudent?.email &&
+            linkedStudent.email.toLowerCase() !== input.email.toLowerCase()
+          ) {
             throw new UnprocessableEntityException({
               code: 'STUDENT_EMAIL_MISMATCH'
             })
@@ -608,10 +602,7 @@ export class UsersService {
             code: 'STUDENT_LINK_ROLE_MISMATCH'
           })
         }
-        const allowedEmails = [student.email, student.personalEmail]
-          .filter((email): email is string => Boolean(email))
-          .map((email) => email.toLowerCase())
-        if (!allowedEmails.includes(user.email.toLowerCase())) {
+        if (student.email.toLowerCase() !== user.email.toLowerCase()) {
           throw new UnprocessableEntityException({
             code: 'STUDENT_EMAIL_MISMATCH'
           })
@@ -661,10 +652,7 @@ export class UsersService {
           if (!student) {
             throw new NotFoundException({ code: 'STUDENT_NOT_FOUND' })
           }
-          const allowedEmails = [student.email, student.personalEmail]
-            .filter((email): email is string => Boolean(email))
-            .map((email) => email.toLowerCase())
-          if (!allowedEmails.includes(user.email.toLowerCase())) {
+          if (student.email.toLowerCase() !== user.email.toLowerCase()) {
             throw new UnprocessableEntityException({
               code: 'STUDENT_EMAIL_MISMATCH'
             })

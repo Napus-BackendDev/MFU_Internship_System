@@ -6,7 +6,17 @@ definePageMeta({ layout: 'public' })
 const config = useRuntimeConfig()
 const auth = useAuthStore()
 const errorMessage = ref('')
-const isDevelopment = config.public.appEnvironment === 'development'
+const requestUrl = useRequestURL()
+const isDevelopment = computed(() => {
+  if (config.public.appEnvironment === 'development') return true
+  const host = requestUrl.hostname
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host.endsWith('.local')
+  )
+})
 const pendingRole = ref<string | null>(null)
 
 interface DevPersona {
@@ -312,6 +322,16 @@ async function loginSSO(): Promise<void> {
               </div>
             </div>
           </NuxtLink>
+
+          <div class="pt-2 text-center">
+            <button
+              type="button"
+              class="text-xs text-muted hover:text-highlighted underline cursor-pointer transition-colors"
+              @click="loginSSO"
+            >
+              หรือเข้าสู่ระบบด้วย MFU SSO
+            </button>
+          </div>
         </div>
 
         <!-- โหมด Production: ปุ่ม SSO ปกติ -->

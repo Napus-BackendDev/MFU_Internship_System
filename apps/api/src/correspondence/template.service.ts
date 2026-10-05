@@ -9,6 +9,7 @@ import { sanitizeEmailTemplateHtml } from '@internship/email-security'
 import type { HydratedDocument, Model } from 'mongoose'
 
 import { paginate, type PaginationInput } from '../common/pagination.js'
+import { runWithTransaction } from '../common/mongo-transaction.js'
 import {
   EmailTemplateRecord,
   EmailTemplateVersionRecord
@@ -173,15 +174,8 @@ export class TemplateService {
     text: string
   }): Promise<unknown> {
     const html = sanitizeEmailTemplateHtml(input.html)
-    const session = await this.templates.db.startSession()
-    let result:
-      | {
-          readonly template: HydratedDocument<EmailTemplateRecord>
-          readonly version: HydratedDocument<EmailTemplateVersionRecord>
-        }
-      | undefined
     try {
-      await session.withTransaction(async () => {
+      const result = await runWithTransaction(this.templates.db, async (session) => {
         const [template] = await this.templates.create(
           [
             {
@@ -190,7 +184,7 @@ export class TemplateService {
               status: 'active'
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         if (!template)
           throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
@@ -208,11 +202,11 @@ export class TemplateService {
               ]
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         if (!version)
           throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        result = { template, version }
+        return { template, version }
       })
       if (!result)
         throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
@@ -230,8 +224,6 @@ export class TemplateService {
         throw new ConflictException({ code: 'TEMPLATE_CODE_ALREADY_EXISTS' })
       }
       throw error
-    } finally {
-      await session.endSession()
     }
   }
 
@@ -319,20 +311,16 @@ export class TemplateService {
     code: keyof typeof DEFAULT_SYSTEM_TEMPLATES
   ): Promise<string> {
     const def = DEFAULT_SYSTEM_TEMPLATES[code]
-    const session = await this.templates.db.startSession()
-    let versionId: string | undefined
-
     try {
-      await session.withTransaction(async () => {
-        versionId = undefined
+      const versionId = await runWithTransaction(this.templates.db, async (session) => {
         let template = await this.templates
           .findOne({ code })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!template) {
           const [created] = await this.templates.create(
             [{ code, audience: 'evaluator', status: 'active' }],
-            { session }
+            session ? { session } : {}
           )
           if (!created)
             throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
@@ -342,17 +330,16 @@ export class TemplateService {
         const published = await this.versions
           .findOne({ templateId: template.id, status: 'published' })
           .sort({ versionNumber: -1 })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (published) {
-          versionId = published.id
-          return
+          return published.id
         }
 
         const latest = await this.versions
           .findOne({ templateId: template.id })
           .sort({ versionNumber: -1 })
-          .session(session)
+          .session(session ?? null)
           .exec()
         const subject = def.subject
         const html = sanitizeEmailTemplateHtml(def.html)
@@ -370,12 +357,14 @@ export class TemplateService {
               publishedAt: new Date()
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         if (!version)
           throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        versionId = version.id
+        return version.id
       })
+      if (!versionId) throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+      return versionId
     } catch (error: unknown) {
       if (isDuplicateKeyError(error)) {
         const template = await this.templates.findOne({ code }).exec()
@@ -391,13 +380,7 @@ export class TemplateService {
         })
       }
       throw error
-    } finally {
-      await session.endSession()
     }
-
-    if (!versionId)
-      throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-    return versionId
   }
 
   public async updateSystemTemplate(
@@ -424,21 +407,18 @@ export class TemplateService {
       })
     }
 
-    const session = await this.templates.db.startSession()
     let templateId: string | undefined
     let newVersion: HydratedDocument<EmailTemplateVersionRecord> | undefined
     try {
-      await session.withTransaction(async () => {
-        templateId = undefined
-        newVersion = undefined
+      const result = await runWithTransaction(this.templates.db, async (session) => {
         let template = await this.templates
           .findOne({ code })
-          .session(session)
+          .session(session ?? null)
           .exec()
         if (!template) {
           const [created] = await this.templates.create(
             [{ code, audience: 'evaluator', status: 'active' }],
-            { session }
+            session ? { session } : {}
           )
           if (!created)
             throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
@@ -447,7 +427,7 @@ export class TemplateService {
         const latest = await this.versions
           .findOne({ templateId: template.id })
           .sort({ versionNumber: -1 })
-          .session(session)
+          .session(session ?? null)
           .exec()
         const [createdVersion] = await this.versions.create(
           [
@@ -462,14 +442,15 @@ export class TemplateService {
               publishedAt: new Date()
             }
           ],
-          { session }
+          session ? { session } : {}
         )
         if (!createdVersion) {
           throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
         }
-        templateId = template.id
-        newVersion = createdVersion
+        return { templateId: template.id, newVersion: createdVersion }
       })
+      templateId = result.templateId
+      newVersion = result.newVersion
     } catch (error: unknown) {
       if (isDuplicateKeyError(error)) {
         throw new ConflictException({
@@ -477,8 +458,6 @@ export class TemplateService {
         })
       }
       throw error
-    } finally {
-      await session.endSession()
     }
     if (!templateId || !newVersion) {
       throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })

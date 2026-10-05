@@ -111,3 +111,27 @@ test('CI supplies supported Redis to BullMQ recovery integration tests', () => {
     assert.match(source, /describe\.skipIf\(!testRedisUrl\)/u)
   }
 })
+
+test('CI installs pnpm before dependency caching and keeps Node and pnpm versions explicit', () => {
+  const setupPnpmIndex = ciWorkflow.indexOf(
+    'uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024'
+  )
+  const installDependenciesIndex = ciWorkflow.indexOf(
+    'run: pnpm install --frozen-lockfile'
+  )
+
+  assert.notEqual(
+    setupPnpmIndex,
+    -1,
+    'CI must use the pinned pnpm/setup action'
+  )
+  assert.ok(setupPnpmIndex < installDependenciesIndex)
+
+  const setupStep = ciWorkflow.slice(setupPnpmIndex, installDependenciesIndex)
+  assert.match(setupStep, /version:\s*11\.0\.7/u)
+  assert.match(setupStep, /runtime:\s*node@24\.14\.0/u)
+  assert.match(setupStep, /cache:\s*true/u)
+  assert.match(setupStep, /install:\s*false/u)
+  assert.doesNotMatch(setupStep, /corepack/u)
+  assert.doesNotMatch(ciWorkflow, /uses:\s*actions\/setup-node@/u)
+})

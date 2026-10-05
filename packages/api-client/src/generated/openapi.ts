@@ -1239,6 +1239,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/document-templates/{templateId}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Activate a document template as the primary active template for its document type
+         * @description Activates this document template and archives any other active template of the same document type, enforcing strictly one active template per type.
+         */
+        post: operations["activateDocumentTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/document-templates/{templateId}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate a document template
+         * @description Archives this document template.
+         */
+        post: operations["deactivateDocumentTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/document-templates/{templateId}/versions": {
         parameters: {
             query?: never;
@@ -1412,7 +1456,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Request a scoped asynchronous CSV export */
+        /** Request a scoped asynchronous report export */
         post: operations["createReportExport"];
         delete?: never;
         options?: never;
@@ -1818,6 +1862,7 @@ export interface components {
             status: components["schemas"]["AssignmentStatus"];
             /** Format: date-time */
             deadlineAt?: string;
+            categoryScores?: components["schemas"]["EvaluationCategoryScores"];
             evaluator?: components["schemas"]["StudentDirectoryEvaluator"];
         };
         StudentDirectoryEvaluator: {
@@ -2342,6 +2387,17 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            assignment?: {
+                id?: string;
+                studentId?: string;
+                studentName?: string;
+                evaluatorName?: string;
+                evaluatorEmail?: string;
+                company?: string;
+                status?: string;
+                /** Format: date-time */
+                deadlineAt?: string | null;
+            };
         };
         DeliveryList: {
             items: components["schemas"]["Delivery"][];
@@ -2581,7 +2637,13 @@ export interface components {
                 [key: string]: number;
             };
         };
-        ReportExportRequest: {
+        ReportExportRequest: components["schemas"]["AssignmentReportExportRequest"] | components["schemas"]["StudentDirectoryReportExportRequest"];
+        AssignmentReportExportRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            reportType: "assignments";
             filters?: {
                 termId?: components["schemas"]["ObjectId"];
                 schoolId?: components["schemas"]["ObjectId"];
@@ -2594,16 +2656,38 @@ export interface components {
              */
             format: "csv";
         };
+        StudentDirectoryReportExportRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            reportType: "studentDirectory";
+            filters?: {
+                search?: string;
+                schoolId?: components["schemas"]["ObjectId"];
+                cycleId?: components["schemas"]["ObjectId"];
+                academicYear?: number;
+                semester?: string;
+                /** @enum {string} */
+                evaluationStatus?: "awaiting_evaluator" | "awaiting_response" | "submitted" | "email_error" | "pending" | "inProgress" | "expired" | "assignment_ambiguous";
+            };
+            /** @enum {string} */
+            locale: "th" | "en";
+            /** @enum {string} */
+            format: "xlsx";
+        };
         ReportExport: {
             id: components["schemas"]["ObjectId"];
             /** @enum {string} */
-            reportType: "assignments";
+            reportType: "assignments" | "studentDirectory";
+            /** @enum {string} */
+            locale?: "th" | "en";
             filters: {
                 [key: string]: unknown;
             };
             fields: ("studentNumber" | "studentName" | "studentEmail" | "schoolId" | "programId" | "termId" | "cycleId" | "status" | "deadlineAt")[];
             /** @enum {string} */
-            format: "csv";
+            format: "csv" | "xlsx";
             /** @enum {string} */
             status: "queued" | "processing" | "ready" | "failed" | "expired";
             rowCount: number;
@@ -5229,6 +5313,57 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    activateDocumentTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Template activated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentTemplate"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    deactivateDocumentTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Template deactivated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentTemplate"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listDocumentTemplateVersions: {

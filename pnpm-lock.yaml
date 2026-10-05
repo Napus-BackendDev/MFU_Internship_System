@@ -107,6 +107,9 @@ importers:
       '@pdf-lib/fontkit':
         specifier: 1.1.1
         version: 1.1.1
+      '@types/nodemailer':
+        specifier: ^8.0.2
+        version: 8.0.2
       bullmq:
         specifier: 6.2.0
         version: 6.2.0(ioredis@6.0.0)
@@ -131,6 +134,9 @@ importers:
       nestjs-pino:
         specifier: 4.6.1
         version: 4.6.1(@nestjs/common@11.2.1(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2))(pino-http@11.0.0)(pino@10.3.1)(rxjs@7.8.2)
+      nodemailer:
+        specifier: 10.0.10
+        version: 10.0.10
       openid-client:
         specifier: 6.8.7
         version: 6.8.7
@@ -289,6 +295,9 @@ importers:
       pino:
         specifier: 10.3.1
         version: 10.3.1
+      xlsx:
+        specifier: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
+        version: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
     devDependencies:
       tsx:
         specifier: 4.23.12
@@ -2790,6 +2799,9 @@ packages:
 
   '@types/node@24.13.3':
     resolution: {integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==}
+
+  '@types/nodemailer@8.0.2':
+    resolution: {integrity: sha512-c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==}
 
   '@types/qs@6.15.1':
     resolution: {integrity: sha512-GZHUBZR9hckSUhrxmp1nG6NwdpM9fCunJwyThLW1X3AyHgd9IlHb6VANpQQqDr2o/qQp6McZ3y/IA2rVzKzSbw==}
@@ -10729,6 +10741,10 @@ snapshots:
   '@types/node@24.13.3':
     dependencies:
       undici-types: 7.18.2
+
+  '@types/nodemailer@8.0.2':
+    dependencies:
+      '@types/node': 24.13.3
 
   '@types/qs@6.15.1': {}
 

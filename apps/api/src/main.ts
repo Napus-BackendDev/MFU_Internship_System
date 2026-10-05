@@ -13,6 +13,7 @@ import { Logger } from 'nestjs-pino'
 import { AppModule } from './app.module.js'
 import { createApiCorsOptions } from './common/cors-options.js'
 import { ApiExceptionFilter } from './common/api-exception.filter.js'
+import { disableExpressFingerprinting } from './common/express-security.js'
 import { HealthService } from './health.service.js'
 
 async function bootstrap(): Promise<void> {
@@ -33,8 +34,9 @@ async function bootstrap(): Promise<void> {
     .split(',')
     .map((cidr) => cidr.trim())
     .filter(Boolean)
+  const expressApp = app.getHttpAdapter().getInstance() as Express
+  disableExpressFingerprinting(expressApp)
   if (trustedProxyCidrs.length > 0) {
-    const expressApp = app.getHttpAdapter().getInstance() as Express
     expressApp.set('trust proxy', trustedProxyCidrs)
   }
   app.enableCors(

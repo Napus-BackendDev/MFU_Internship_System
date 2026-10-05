@@ -387,7 +387,10 @@ export class EmailProcessor {
         .sign(this.signingKey)
       const invitationParameters = new URLSearchParams({ token })
       const values = {
-        student_name: student.name?.th ?? student.name?.en ?? student.studentId,
+        student_name:
+          typeof student.name === 'string'
+            ? student.name
+            : student.name?.th ?? student.name?.en ?? student.studentId,
         student_id: student.studentId ?? student.id,
         company_name:
           (student as unknown as { company?: string }).company ||

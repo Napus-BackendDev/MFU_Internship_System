@@ -196,7 +196,9 @@ export default defineNuxtConfig({
   },
   runtimeConfig: {
     apiInternalBaseUrl:
-      process.env.API_INTERNAL_BASE_URL ?? 'http://127.0.0.1:8081/api/v2',
+      process.env.NUXT_API_INTERNAL_BASE_URL ??
+      process.env.API_INTERNAL_BASE_URL ??
+      'http://127.0.0.1:8081/api/v2',
     public: {
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL ?? '/api/v2',
       appEnvironment: resolvePublicAppEnvironment(

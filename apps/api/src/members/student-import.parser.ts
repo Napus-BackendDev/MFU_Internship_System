@@ -9,10 +9,10 @@ export interface StudentImportSourceRow {
   readonly sheet: string
   readonly rowNumber: number
   readonly studentId: string
+  readonly name: string
   readonly nameTh: string
   readonly nameEn: string
   readonly email: string
-  readonly personalEmail?: string
   readonly schoolReference: string
   readonly programReference: string
   readonly courseReference?: string
@@ -42,7 +42,20 @@ const HEADER_ALIASES = {
     'รหัสนักศึกษา',
     'รหัสนักศึกษา (studentId)',
     'Student ID',
-    'ID'
+    'ID',
+    'รหัส',
+    'student_id'
+  ],
+  name: [
+    'name',
+    'ชื่อ-นามสกุล',
+    'ชื่อ-นามสกุล (name)',
+    'ชื่อ-นามสกุล (Name)',
+    'Student Name',
+    'Full Name',
+    'FullName',
+    'ชื่อนักศึกษา',
+    'Name'
   ],
   nameTh: [
     'nameTh',
@@ -58,7 +71,9 @@ const HEADER_ALIASES = {
     'ชื่อ-นามสกุลอังกฤษ',
     'ชื่อ-นามสกุลอังกฤษ (nameEn)',
     'ชื่ออังกฤษ',
-    'Name EN'
+    'Name EN',
+    'Name-Surname (Eng)',
+    'Name-Surname (English)'
   ],
   email: [
     'email',
@@ -67,12 +82,6 @@ const HEADER_ALIASES = {
     'อีเมล (email)',
     'อีเมลนักศึกษา',
     'อีเมลนักศึกษา (email)'
-  ],
-  personalEmail: [
-    'personalEmail',
-    'Personal Email',
-    'อีเมลส่วนตัว',
-    'อีเมลส่วนตัว (personalEmail)'
   ],
   school: [
     'schoolCode',
@@ -86,10 +95,12 @@ const HEADER_ALIASES = {
     'programCode',
     'Program',
     'Programe',
+    'Programme',
     'program',
     'รหัสหลักสูตร',
     'รหัสหลักสูตร (programCode)',
-    'หลักสูตร'
+    'หลักสูตร',
+    'Major'
   ],
   course: [
     'courseCode',
@@ -102,11 +113,20 @@ const HEADER_ALIASES = {
   semester: [
     'semester',
     'Semester',
+    'Semmester',
     'ภาคการศึกษา',
     'ภาคการศึกษา (semester)',
     'เทอม'
   ],
-  academicYear: ['academicYear', 'Year', 'ปีฝึกงาน', 'ปีการศึกษาฝึกงาน'],
+  academicYear: [
+    'academicYear',
+    'Year',
+    'ปีฝึกงาน',
+    'ปีการศึกษาฝึกงาน',
+    'ปีการศึกษา',
+    'Academic Year',
+    'AcademicYear'
+  ],
   admissionYear: [
     'admissionYear',
     'ปีการศึกษา (admissionYear)',
@@ -117,6 +137,8 @@ const HEADER_ALIASES = {
     'company',
     'Company',
     'Organization name',
+    'Organization Name',
+    'Organization',
     'สถานประกอบการ',
     'สถานประกอบการ (company)',
     'บริษัท'
@@ -157,19 +179,75 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
       blankrows: true
     })
 
+    const isTrackingSheet =
+      /^(send\s*email|email\s*sent|mail\s*merge|email\s*logs?|delivery\s*logs?)$/i.test(
+        sheetName.trim()
+      ) ||
+      (records.length > 0 &&
+        Object.keys(records[0] ?? {}).some((k) => /email\s*sent/i.test(k)) &&
+        Object.keys(records[0] ?? {}).some((k) => /pdf\s*url/i.test(k)))
+
     for (const [index, record] of records.entries()) {
       const studentIdCell = pick(record, HEADER_ALIASES.studentId)
       if (toText(studentIdCell) === '') continue
       const studentId = normalizeStudentId(studentIdCell)
-      const email = toText(pick(record, HEADER_ALIASES.email)).toLowerCase()
-      const schoolReference = toText(pick(record, HEADER_ALIASES.school))
-      const programReference = toText(pick(record, HEADER_ALIASES.program))
+      if (/^(studentid|รหัสนักศึกษา|id)$/i.test(studentId.trim())) continue
+
+      // If workbook has multiple sheets and this is a tracking/mail-merge sheet,
+      // skip students that were already parsed from primary sheets to avoid duplicate key conflicts.
+      if (
+        isTrackingSheet &&
+        workbook.SheetNames.length > 1 &&
+        rows.some((r) => r.studentId === studentId)
+      ) {
+        continue
+      }
+
+      const rawEmailCell = toText(pick(record, HEADER_ALIASES.email))
+      let email = rawEmailCell.toLowerCase()
+      let schoolReference = toText(pick(record, HEADER_ALIASES.school))
+      let programReference = toText(pick(record, HEADER_ALIASES.program))
       const courseReference = toText(pick(record, HEADER_ALIASES.course))
-      const semester = toText(pick(record, HEADER_ALIASES.semester))
-      const academicYear = parseYear(pick(record, HEADER_ALIASES.academicYear))
+      let semester = toText(pick(record, HEADER_ALIASES.semester))
+      let academicYear = parseYear(pick(record, HEADER_ALIASES.academicYear))
       const admissionYear = parseYear(
         pick(record, HEADER_ALIASES.admissionYear)
       )
+      const explicitName = toText(pick(record, HEADER_ALIASES.name))
+      let rawNameTh = toText(pick(record, HEADER_ALIASES.nameTh))
+      let rawNameEn = toText(pick(record, HEADER_ALIASES.nameEn))
+      let company = toText(pick(record, HEADER_ALIASES.company))
+      const province = toText(pick(record, HEADER_ALIASES.province))
+
+      // Check for shifted columns (e.g. Email column has English name, Programe column has email address)
+      if (
+        !/^\S+@\S+\.\S+$/.test(email) &&
+        /^\S+@\S+\.\S+$/.test(programReference)
+      ) {
+        rawNameTh = rawNameTh || rawNameEn || explicitName
+        rawNameEn = rawEmailCell
+        email = programReference.toLowerCase()
+        programReference = schoolReference
+        if (semester && !company) {
+          company = semester
+        }
+        const rawYearVal = toText(pick(record, HEADER_ALIASES.academicYear))
+        if (rawYearVal && !parseYear(rawYearVal)) {
+          semester = rawYearVal
+          academicYear = null
+        } else {
+          semester = ''
+        }
+      } else if (!/^\S+@\S+\.\S+$/.test(email)) {
+        for (const val of Object.values(record)) {
+          const str = toText(val)
+          if (/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(str)) {
+            email = str.toLowerCase()
+            break
+          }
+        }
+      }
+
       const rowQuestionFields = Object.keys(record).filter((header) =>
         /^(Hard|HS|HM|HA|HSD|SS|SM|SA|SSD)/i.test(header.trim())
       )
@@ -184,18 +262,13 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
           message: 'Student ID must contain 7–20 digits and preserve its value.'
         })
       }
-      if (!toText(pick(record, HEADER_ALIASES.nameTh))) {
+      const resolvedName = explicitName || rawNameTh || rawNameEn
+
+      if (!resolvedName) {
         issues.push({
-          code: 'NAME_THAI_REQUIRED',
-          field: 'nameTh',
-          message: 'Thai name is required.'
-        })
-      }
-      if (!toText(pick(record, HEADER_ALIASES.nameEn))) {
-        issues.push({
-          code: 'NAME_ENGLISH_REQUIRED',
-          field: 'nameEn',
-          message: 'English name is required.'
+          code: 'NAME_REQUIRED',
+          field: 'name',
+          message: 'Student name is required.'
         })
       }
       if (!/^\S+@\S+\.\S+$/.test(email)) {
@@ -203,14 +276,6 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
           code: 'INVALID_EMAIL',
           field: 'email',
           message: 'A valid student email is required.'
-        })
-      }
-      const personalEmail = toText(pick(record, HEADER_ALIASES.personalEmail))
-      if (personalEmail && !/^\S+@\S+\.\S+$/.test(personalEmail)) {
-        issues.push({
-          code: 'INVALID_PERSONAL_EMAIL',
-          field: 'personalEmail',
-          message: 'Personal email format is invalid.'
         })
       }
       if (!schoolReference) {
@@ -227,9 +292,13 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
           message: 'Program code or name is required; no default is applied.'
         })
       }
+      const rawYearCandidate = toText(pick(record, HEADER_ALIASES.academicYear))
+      const isShiftedSemesterInYear =
+        /^(first|second|third|summer|ต้น|ปลาย|ฤดูร้อน)/i.test(rawYearCandidate)
       if (
         academicYear === null &&
-        hasValue(record, HEADER_ALIASES.academicYear)
+        hasValue(record, HEADER_ALIASES.academicYear) &&
+        !isShiftedSemesterInYear
       ) {
         issues.push({
           code: 'INVALID_ACADEMIC_YEAR',
@@ -256,20 +325,18 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
         sheet: sheetName.slice(0, 80),
         rowNumber,
         studentId,
-        nameTh: toText(pick(record, HEADER_ALIASES.nameTh)),
-        nameEn: toText(pick(record, HEADER_ALIASES.nameEn)),
+        name: resolvedName,
+        nameTh: rawNameTh || resolvedName,
+        nameEn: rawNameEn || resolvedName,
         email,
-        ...(personalEmail
-          ? { personalEmail: personalEmail.toLowerCase() }
-          : {}),
         schoolReference,
         programReference,
         ...(courseReference ? { courseReference } : {}),
         ...(semester ? { semester } : {}),
         ...(academicYear !== null ? { academicYear } : {}),
         ...(admissionYear !== null ? { admissionYear } : {}),
-        ...optionalCell(record, HEADER_ALIASES.company, 'company'),
-        ...optionalCell(record, HEADER_ALIASES.province, 'province'),
+        ...(company ? { company } : {}),
+        ...(province ? { province } : {}),
         questionFields: rowQuestionFields,
         issues
       })

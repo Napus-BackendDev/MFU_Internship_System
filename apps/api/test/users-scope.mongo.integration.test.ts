@@ -43,6 +43,26 @@ const scopedStaff: AuthenticatedActor = {
   ]
 }
 
+const tenantStaffActor: AuthenticatedActor = {
+  id: 'tenant-staff',
+  email: 'staff@mfu.ac.test',
+  displayName: 'MFU Staff',
+  roles: ['internshipStaff'],
+  scope: {
+    tenant: true,
+    schoolIds: [],
+    programIds: []
+  },
+  roleScopes: [
+    {
+      role: 'internshipStaff',
+      tenant: true,
+      schoolIds: [],
+      programIds: []
+    }
+  ]
+}
+
 describe('user directory filters preserve assignment scope', () => {
   let replicaSet: MongoMemoryReplSet
   let connection: Connection
@@ -214,6 +234,87 @@ describe('user directory filters preserve assignment scope', () => {
       email: 'multi-role@example.test',
       roleAssignments: [{ role: 'coordinator', schoolIds: ['school-a'] }]
     })
+  })
+
+  it('allows tenant-wide internshipStaff to list operational users and view summary across schools', async () => {
+    await users.create({
+      oidcSubject: 'admin-subject-tenant-test',
+      email: 'admin@mfu.ac.test',
+      displayName: 'System Admin',
+      status: 'active',
+      roleAssignments: [
+        {
+          role: 'systemAdmin',
+          tenant: true,
+          schoolIds: [],
+          programIds: [],
+          active: true
+        }
+      ]
+    })
+    await users.create({
+      oidcSubject: 'staff-subject-tenant-test',
+      email: 'staff@mfu.ac.test',
+      displayName: 'MFU Staff',
+      status: 'active',
+      roleAssignments: [
+        {
+          role: 'internshipStaff',
+          tenant: true,
+          schoolIds: [],
+          programIds: [],
+          active: true
+        }
+      ]
+    })
+    await users.create({
+      oidcSubject: 'coordinator-subject-tenant-test',
+      email: 'advisor@mfu.ac.test',
+      displayName: 'Advisor IT',
+      status: 'active',
+      roleAssignments: [
+        {
+          role: 'coordinator',
+          tenant: false,
+          schoolIds: ['school-it'],
+          programIds: ['program-cpe'],
+          active: true
+        }
+      ]
+    })
+
+    const directory = (await service.listUsers(tenantStaffActor, {
+      page: 1,
+      pageSize: 25
+    })) as {
+      items: readonly Record<string, unknown>[]
+      meta: { total: number }
+    }
+    expect(directory.meta.total).toBe(2)
+    expect(directory.items.map((u) => u.email).sort()).toEqual([
+      'advisor@mfu.ac.test',
+      'staff@mfu.ac.test'
+    ])
+
+    const summary = await service.getUserSummary(tenantStaffActor)
+    expect(summary).toMatchObject({
+      total: 2,
+      systemAdmin: 0,
+      internshipStaff: 1,
+      coordinator: 1,
+      student: 0
+    })
+
+    const filtered = (await service.listUsers(
+      tenantStaffActor,
+      { page: 1, pageSize: 25 },
+      { schoolId: 'school-it' }
+    )) as {
+      items: readonly Record<string, unknown>[]
+      meta: { total: number }
+    }
+    expect(filtered.meta.total).toBe(1)
+    expect(filtered.items[0]?.email).toBe('advisor@mfu.ac.test')
   })
 
   it('records role mutations atomically and aborts the mutation if audit persistence fails', async () => {

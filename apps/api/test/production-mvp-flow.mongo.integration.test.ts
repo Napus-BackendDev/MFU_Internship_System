@@ -832,7 +832,7 @@ describe('production MVP flow across import, invitation, evaluation, and documen
       student: {
         recordId: student.id,
         studentId: student.studentId,
-        name: { th: 'นางสาวตัวอย่าง ระบบ', en: 'Example Student' },
+        name: { th: 'นางสาวตัวอย่าง ระบบ', en: 'นางสาวตัวอย่าง ระบบ' },
         academicYear: 2566,
         schoolId: school.id,
         programId: program.id
@@ -857,7 +857,7 @@ describe('production MVP flow across import, invitation, evaluation, and documen
       .select('+sourceSnapshot')
       .lean()
     expect(stableSnapshot?.sourceSnapshot).toMatchObject({
-      student: { name: { th: 'นางสาวตัวอย่าง ระบบ', en: 'Example Student' } }
+      student: { name: { th: 'นางสาวตัวอย่าง ระบบ', en: 'นางสาวตัวอย่าง ระบบ' } }
     })
     expect(documentQueueAdd).toHaveBeenCalledWith(
       'generate-pdf',

@@ -348,6 +348,12 @@ describe('campaign outbox on an isolated MongoDB replica set', () => {
       attempts: 2
     })
     expect(page.items[0]).toHaveProperty('assignmentId', assignmentId)
+    expect(page.items[0]).toHaveProperty('assignment')
+    expect((page.items[0] as Record<string, unknown>).assignment).toMatchObject({
+      studentId: 'student-outbox',
+      studentName: 'นักศึกษาทดสอบ',
+      evaluatorName: 'ผู้ประเมิน'
+    })
     expect(page.items[0]).not.toHaveProperty('recipientEmail')
     expect(page.items[0]).not.toHaveProperty('providerMessageId')
     expect(page.items[0]).not.toHaveProperty('processingToken')

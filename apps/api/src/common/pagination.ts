@@ -1,5 +1,5 @@
 import type { Paginated } from '@internship/shared-types'
-import type { Model, QueryFilter } from 'mongoose'
+import type { ClientSession, Model, QueryFilter } from 'mongoose'
 
 export interface PaginationInput {
   readonly page: number
@@ -10,17 +10,30 @@ export async function paginate<T>(
   model: Model<T>,
   filter: QueryFilter<T>,
   input: PaginationInput,
-  sort: Readonly<Record<string, 1 | -1>> = { createdAt: -1, _id: -1 }
+  sort: Readonly<Record<string, 1 | -1>> = { createdAt: -1, _id: -1 },
+  session?: ClientSession
 ): Promise<Paginated<Readonly<Record<string, unknown>>>> {
-  const [documents, total] = await Promise.all([
-    model
-      .find(filter)
-      .sort(sort)
-      .skip((input.page - 1) * input.pageSize)
-      .limit(input.pageSize)
-      .exec(),
-    model.countDocuments(filter).exec()
-  ])
+  const documentsQuery = model
+    .find(filter)
+    .sort(sort)
+    .skip((input.page - 1) * input.pageSize)
+    .limit(input.pageSize)
+  const totalQuery = model.countDocuments(filter)
+  if (session) {
+    documentsQuery.session(session)
+    totalQuery.session(session)
+  }
+  let documents: Awaited<ReturnType<typeof documentsQuery.exec>>
+  let total: number
+  if (session) {
+    documents = await documentsQuery.exec()
+    total = await totalQuery.exec()
+  } else {
+    ;[documents, total] = await Promise.all([
+      documentsQuery.exec(),
+      totalQuery.exec()
+    ])
+  }
 
   return {
     items: documents.map(

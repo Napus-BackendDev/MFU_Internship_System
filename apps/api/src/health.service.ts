@@ -8,6 +8,37 @@ import type { Connection } from 'mongoose'
 
 import { supportsMongoTransactions } from './health.mongo-capability.js'
 
+const DEPENDENCY_CHECK_TIMEOUT_MS = 2_000
+
+function withTimeout<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error('Dependency readiness check timed out.')),
+      timeoutMs
+    )
+
+    void Promise.resolve()
+      .then(operation)
+      .then(
+        (result) => {
+          clearTimeout(timeout)
+          resolve(result)
+        },
+        (error: unknown) => {
+          clearTimeout(timeout)
+          reject(
+            error instanceof Error
+              ? error
+              : new Error('Dependency readiness check failed.')
+          )
+        }
+      )
+  })
+}
+
 @Injectable()
 export class HealthService implements OnModuleDestroy {
   private readonly redis: Redis
@@ -41,8 +72,10 @@ export class HealthService implements OnModuleDestroy {
     dependencies: Readonly<Record<'mongodb' | 'redis', 'ok' | 'unavailable'>>
     timestamp: string
   }> {
-    const mongodb = await this.checkMongo()
-    const redis = await this.checkRedis()
+    const [mongodb, redis] = await Promise.all([
+      this.checkMongo(),
+      this.checkRedis()
+    ])
     return {
       ready: mongodb === 'ok' && redis === 'ok',
       dependencies: { mongodb, redis },
@@ -56,16 +89,18 @@ export class HealthService implements OnModuleDestroy {
 
   private async checkMongo(): Promise<'ok' | 'unavailable'> {
     try {
-      if (!this.mongo.db) return 'unavailable'
-      const admin = this.mongo.db.admin()
-      if (!this.requireMongoTransactions) {
-        await admin.ping()
-        return 'ok'
-      }
+      const ready = await withTimeout(async () => {
+        if (!this.mongo.db) return false
+        const admin = this.mongo.db.admin()
+        if (!this.requireMongoTransactions) {
+          await admin.ping()
+          return true
+        }
 
-      const hello = await admin.command({ hello: 1 })
-      if (!supportsMongoTransactions(hello)) return 'unavailable'
-      return 'ok'
+        const hello = await admin.command({ hello: 1 })
+        return supportsMongoTransactions(hello)
+      }, DEPENDENCY_CHECK_TIMEOUT_MS)
+      return ready ? 'ok' : 'unavailable'
     } catch {
       return 'unavailable'
     }
@@ -73,10 +108,13 @@ export class HealthService implements OnModuleDestroy {
 
   private async checkRedis(): Promise<'ok' | 'unavailable'> {
     try {
-      if (['wait', 'close', 'end'].includes(this.redis.status)) {
-        await this.redis.connect()
-      }
-      return (await isBullMqRedisReady(this.redis)) ? 'ok' : 'unavailable'
+      const ready = await withTimeout(async () => {
+        if (['wait', 'close', 'end'].includes(this.redis.status)) {
+          await this.redis.connect()
+        }
+        return isBullMqRedisReady(this.redis)
+      }, DEPENDENCY_CHECK_TIMEOUT_MS)
+      return ready ? 'ok' : 'unavailable'
     } catch {
       return 'unavailable'
     }

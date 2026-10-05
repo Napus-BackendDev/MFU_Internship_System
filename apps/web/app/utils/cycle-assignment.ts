@@ -11,9 +11,17 @@ export interface CycleAssignmentResolution<T extends CycleAssignmentReference> {
 
 export function resolveAssignmentForCycle<T extends CycleAssignmentReference>(
   assignments: readonly T[],
-  selectedCycleId: string,
+  selectedCycleId?: string,
   assignmentDataUnavailable = false
 ): CycleAssignmentResolution<T> {
+  if (assignmentDataUnavailable) {
+    return {
+      requiresCycleSelection: false,
+      ambiguous: false,
+      unavailable: true
+    }
+  }
+
   if (selectedCycleId === 'all') {
     return {
       requiresCycleSelection: true,
@@ -21,11 +29,20 @@ export function resolveAssignmentForCycle<T extends CycleAssignmentReference>(
       unavailable: false
     }
   }
-  if (assignmentDataUnavailable) {
+
+  if (!selectedCycleId) {
+    if (assignments.length === 0) {
+      return {
+        requiresCycleSelection: false,
+        ambiguous: false,
+        unavailable: false
+      }
+    }
     return {
+      assignment: assignments[assignments.length - 1],
       requiresCycleSelection: false,
       ambiguous: false,
-      unavailable: true
+      unavailable: false
     }
   }
 

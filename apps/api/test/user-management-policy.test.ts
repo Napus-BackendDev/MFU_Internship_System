@@ -185,7 +185,7 @@ describe('user management authorization', () => {
     expect(query).toContain('"program-a"')
   })
 
-  it('does not allow a tenant staff account to list users without explicit scope', () => {
+  it('allows a tenant staff account to list users within tenant scope excluding systemAdmin', () => {
     const tenantStaff: AuthenticatedActor = {
       ...staff,
       scope: { tenant: true, schoolIds: [], programIds: [] },
@@ -198,7 +198,71 @@ describe('user management authorization', () => {
         }
       ]
     }
-    expect(userManagementScope(tenantStaff, 'read')).toEqual({ _id: null })
+    expect(userManagementScope(tenantStaff, 'read')).toEqual({
+      $and: [
+        {
+          roleAssignments: {
+            $elemMatch: {
+              active: true,
+              role: {
+                $in: ['internshipStaff', 'coordinator', 'student']
+              }
+            }
+          }
+        },
+        {
+          $nor: [
+            {
+              roleAssignments: {
+                $elemMatch: { active: true, role: 'systemAdmin' }
+              }
+            }
+          ]
+        }
+      ]
+    })
+    expect(
+      userManagementScope(tenantStaff, 'manage', { role: 'systemAdmin' })
+    ).toEqual({ _id: null })
+    expect(
+      roleAssignmentWithinScope(
+        tenantStaff,
+        {
+          role: 'internshipStaff',
+          tenant: true,
+          schoolIds: [],
+          programIds: [],
+          active: true
+        },
+        'read'
+      )
+    ).toBe(true)
+    expect(
+      roleAssignmentWithinScope(
+        tenantStaff,
+        {
+          role: 'coordinator',
+          tenant: false,
+          schoolIds: ['school-a'],
+          programIds: ['program-a'],
+          active: true
+        },
+        'manage'
+      )
+    ).toBe(true)
+    expect(
+      roleAssignmentWithinScope(
+        tenantStaff,
+        {
+          role: 'systemAdmin',
+          tenant: true,
+          schoolIds: [],
+          programIds: [],
+          active: true
+        },
+        'read'
+      )
+    ).toBe(false)
   })
 
   it('fails closed for legacy multi-role actors without role-specific scopes', () => {

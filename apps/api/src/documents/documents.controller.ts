@@ -175,6 +175,30 @@ export class DocumentsController {
     )
   }
 
+  @RequirePermissions('documentTemplates.manage')
+  @Post('document-templates/:templateId/activate')
+  public activateTemplate(
+    @Req() request: AuthenticatedRequest,
+    @Param('templateId') templateId: string
+  ): Promise<unknown> {
+    return this.service.activateTemplate(
+      request.actor!,
+      objectIdSchema.parse(templateId)
+    )
+  }
+
+  @RequirePermissions('documentTemplates.manage')
+  @Post('document-templates/:templateId/deactivate')
+  public deactivateTemplate(
+    @Req() request: AuthenticatedRequest,
+    @Param('templateId') templateId: string
+  ): Promise<unknown> {
+    return this.service.deactivateTemplate(
+      request.actor!,
+      objectIdSchema.parse(templateId)
+    )
+  }
+
   @RequirePermissions('documentTemplates.read')
   @Get('document-templates/:templateId/versions')
   public listVersions(

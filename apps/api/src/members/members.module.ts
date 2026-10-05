@@ -71,6 +71,7 @@ import { StudentImportService } from './student-import.service.js'
     ])
   ],
   controllers: [MembersController],
-  providers: [MembersService, StudentImportService]
+  providers: [MembersService, StudentImportService],
+  exports: [MembersService]
 })
 export class MembersModule {}

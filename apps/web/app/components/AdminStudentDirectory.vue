@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import * as XLSX from 'xlsx'
-import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
+import type { PaginatedItems } from '~/utils/load-all-pages'
 import {
   buildStudentEvaluationResult,
   formatCategoryAverage,
@@ -8,7 +7,7 @@ import {
   type StudentEvaluationRecord
 } from '~/utils/student-evaluation-result'
 import { resolveAssignmentForCycle } from '~/utils/cycle-assignment'
-import { buildStudentDirectoryExportRows } from '~/utils/student-directory-export'
+import { resolveSafeDownloadUrl } from '~/utils/safe-download-url'
 
 interface LocalizedText {
   readonly th: string
@@ -18,9 +17,8 @@ interface LocalizedText {
 export interface StudentItem {
   readonly id: string
   readonly studentId: string
-  readonly name: LocalizedText
+  readonly name: string | LocalizedText
   readonly email: string
-  readonly personalEmail?: string
   readonly schoolId: string
   readonly programId: string
   readonly courseId?: string
@@ -34,6 +32,8 @@ export interface StudentItem {
   readonly admissionYear?: number
   readonly status: string
   readonly evaluationStatus?: string
+  readonly evaluatorName?: string
+  readonly evaluatorEmail?: string
   readonly advisor?: LocalizedText
   readonly directoryRelations?: {
     readonly school?: SchoolItem
@@ -123,19 +123,6 @@ export interface PlacementItem {
   readonly organization?: OrganizationItem
 }
 
-export interface EvaluationCycleItem {
-  readonly id: string
-  readonly code: string
-  readonly name: LocalizedText
-  readonly academicTermId: string
-  readonly academicTerm?: {
-    readonly id: string
-    readonly academicYear: number
-    readonly semester: string
-  }
-  readonly status: 'draft' | 'active' | 'closed'
-}
-
 interface StudentDirectoryData {
   readonly summary: {
     readonly all: number
@@ -161,13 +148,9 @@ interface StudentDirectoryResponse extends PaginatedItems<StudentItem> {
 
 const props = withDefaults(
   defineProps<{
-    cycles?: EvaluationCycleItem[]
-    cycleLoadError?: string
     refreshVersion?: number
   }>(),
   {
-    cycles: () => [],
-    cycleLoadError: '',
     refreshVersion: 0
   }
 )
@@ -188,6 +171,7 @@ const directoryData = ref<StudentDirectoryData | null>(null)
 const directoryLoading = ref(false)
 const directoryError = ref('')
 const exportLoading = ref(false)
+const studentDirectoryExportKeys = new Map<string, string>()
 let directoryRequestVersion = 0
 let directoryFacetKey = ''
 
@@ -195,43 +179,9 @@ let directoryFacetKey = ''
 const selectedYear = ref<string>('all')
 const selectedSemester = ref<string>('all')
 const selectedSchool = ref<string>('all')
-const selectedCycleId = ref<string>('all')
 const selectedStatus = ref<string>('all')
 const searchQuery = ref<string>('')
 const exportMenuOpen = ref<boolean>(false)
-let cycleSelectionChanged: boolean = false
-
-function markCycleSelectionChanged(): void {
-  cycleSelectionChanged = true
-}
-
-watch(
-  () => props.cycles,
-  (cycles) => {
-    if (
-      selectedCycleId.value !== 'all' &&
-      !cycles.some((cycle) => cycle.id === selectedCycleId.value)
-    ) {
-      selectedCycleId.value = 'all'
-    }
-    if (!cycleSelectionChanged && selectedCycleId.value === 'all') {
-      const activeCycles = cycles.filter((cycle) => cycle.status === 'active')
-      if (activeCycles.length === 1 && !props.cycleLoadError) {
-        selectedCycleId.value = activeCycles[0]!.id
-      }
-    }
-  },
-  { immediate: true }
-)
-
-function cycleOptionLabel(cycle: EvaluationCycleItem): string {
-  const term = cycle.academicTerm
-  const termLabel = term
-    ? `${term.semester} ${term.academicYear}`
-    : cycle.academicTermId
-  const cycleName = cycle.name.th || cycle.name.en
-  return `${cycle.code} — ${cycleName} · ${termLabel} (${cycle.status})`
-}
 
 // Detail modal state
 const detailModalOpen = ref<boolean>(false)
@@ -250,6 +200,12 @@ interface EvaluationReadResponse {
   })[]
 }
 
+function hasCategoryAverage(
+  score: EvaluationCategoryScore | undefined
+): boolean {
+  return typeof score?.average === 'number' && Number.isFinite(score.average)
+}
+
 export interface EnrichedStudentRow {
   student: StudentItem
   assignment?: EvaluationAssignmentItem
@@ -258,10 +214,10 @@ export interface EnrichedStudentRow {
   program?: ProgramItem
   placement?: PlacementItem
   studentId: string
+  name: string
   nameTh: string
   nameEn: string
   email: string
-  personalEmail: string
   schoolTh: string
   schoolEn: string
   schoolCode: string
@@ -275,6 +231,7 @@ export interface EnrichedStudentRow {
   academicYear: number | string
   academicYearEn: number | string
   semester: string
+  semesterEn: string
   company: string
   companyAddress: string
   province: string
@@ -292,7 +249,6 @@ export interface EnrichedStudentRow {
     | 'expired'
     | 'reopened'
     | 'email_error'
-    | 'cycle_unselected'
     | 'assignment_ambiguous'
     | 'assignment_load_error'
   statusTh: string
@@ -307,10 +263,6 @@ export interface EnrichedStudentRow {
 function enrichStudents(
   studentsList: readonly StudentItem[]
 ): EnrichedStudentRow[] {
-  const selectedCycle = props.cycles.find(
-    (cycle) => cycle.id === selectedCycleId.value
-  )
-  const selectedTerm = selectedCycle?.academicTerm
   return studentsList.map((student) => {
     const school = student.directoryRelations?.school
     const program = student.directoryRelations?.program
@@ -318,15 +270,10 @@ function enrichStudents(
 
     const studentAssignments = student.directoryRelations?.assignments ?? []
     const studentPlacements = student.directoryRelations?.placements ?? []
-    const termPlacementId =
-      selectedCycle?.academicTermId ?? student.academicTermId
-    const termPlacement = termPlacementId
-      ? studentPlacements.find((p) => p.academicTermId === termPlacementId)
+    const termPlacement = student.academicTermId
+      ? studentPlacements.find((p) => p.academicTermId === student.academicTermId)
       : undefined
-    const assignmentResolution = resolveAssignmentForCycle(
-      studentAssignments,
-      selectedCycleId.value
-    )
+    const assignmentResolution = resolveAssignmentForCycle(studentAssignments)
     const assignment = assignmentResolution.assignment
 
     // Match evaluator
@@ -335,9 +282,7 @@ function enrichStudents(
     const placement = assignment?.placementId
       ? studentPlacements.find((p) => p.id === assignment.placementId)
       : termPlacement ||
-        (!selectedCycle && studentPlacements.length === 1
-          ? studentPlacements[0]
-          : undefined)
+        (studentPlacements.length === 1 ? studentPlacements[0] : undefined)
     const directoryTerm = student.directoryRelations?.term
     const studentTerm =
       directoryTerm?.id === student.academicTermId
@@ -356,36 +301,24 @@ function enrichStudents(
 
     const org = placement ? placement.organization : undefined
 
-    const company = selectedCycle
-      ? org?.name?.th || org?.name?.en || '-'
-      : student.company || org?.name?.th || org?.name?.en || '-'
+    const company = student.company || org?.name?.th || org?.name?.en || '-'
     const orgAddress =
       org?.address?.street ||
       org?.address?.location ||
       org?.address?.fullAddress ||
       ''
-    const companyAddress = selectedCycle
-      ? orgAddress || '-'
-      : student.companyAddress || orgAddress || '-'
-    const province = selectedCycle
-      ? org?.address?.province || '-'
-      : student.province || org?.address?.province || '-'
+    const companyAddress = student.companyAddress || orgAddress || '-'
+    const province = student.province || org?.address?.province || '-'
 
     let yearTh: number | string = '-'
     let yearEn: number | string = '-'
-    const academicYear = selectedCycle
-      ? selectedTerm?.academicYear
-      : (studentTerm?.academicYear ?? student.academicYear)
+    const academicYear = studentTerm?.academicYear ?? student.academicYear
     if (typeof academicYear === 'number' && Number.isFinite(academicYear)) {
       yearTh = academicYear > 2400 ? academicYear : academicYear + 543
       yearEn = academicYear > 2400 ? academicYear - 543 : academicYear
     }
 
-    const rawSem =
-      (selectedCycle
-        ? selectedTerm?.semester
-        : (studentTerm?.semester ?? student.semester)
-      )?.trim() || ''
+    const rawSem = (studentTerm?.semester ?? student.semester)?.trim() || ''
     let semester = '-'
     if (rawSem) {
       const semLower = rawSem.toLowerCase()
@@ -412,15 +345,32 @@ function enrichStudents(
         semester = rawSem
       }
     }
+    const normalizedSemester = rawSem.toLowerCase()
+    const semesterEn =
+      normalizedSemester === 'first' ||
+      normalizedSemester === '1' ||
+      normalizedSemester === 'ภาคการศึกษาต้น'
+        ? 'Semester 1'
+        : normalizedSemester === 'second' ||
+            normalizedSemester === '2' ||
+            normalizedSemester === 'ภาคการศึกษาปลาย'
+          ? 'Semester 2'
+          : normalizedSemester === 'third' ||
+              normalizedSemester === '3' ||
+              normalizedSemester === 'summer' ||
+              normalizedSemester.includes('ฤดูร้อน')
+            ? 'Summer Session'
+            : rawSem || '-'
 
     // Status translations
-    const rawEvalStatus = assignmentResolution.requiresCycleSelection
-      ? 'cycle_unselected'
-      : assignmentResolution.unavailable
-        ? 'assignment_load_error'
-        : assignmentResolution.ambiguous
-          ? 'assignment_ambiguous'
-          : assignment?.status || 'awaiting_evaluator'
+    const rawEvalStatus = assignmentResolution.unavailable
+      ? 'assignment_load_error'
+      : assignmentResolution.ambiguous
+        ? 'assignment_ambiguous'
+        : assignment?.status ||
+          (student as unknown as { evaluationStatus?: string })
+            .evaluationStatus ||
+          'pending'
     let status:
       | 'pending'
       | 'inProgress'
@@ -428,7 +378,6 @@ function enrichStudents(
       | 'expired'
       | 'reopened'
       | 'email_error'
-      | 'cycle_unselected'
       | 'assignment_ambiguous'
       | 'assignment_load_error' = 'pending'
     let statusTh = 'รอระบุผู้ประเมิน'
@@ -436,14 +385,10 @@ function enrichStudents(
     const commentsTh = '-'
     const commentsEn = '-'
 
-    if (rawEvalStatus === 'cycle_unselected') {
-      status = 'cycle_unselected'
-      statusTh = 'เลือกรอบฝึกงานเพื่อดูสถานะ'
-      statusEn = 'Select an internship cycle'
-    } else if (rawEvalStatus === 'assignment_ambiguous') {
+    if (rawEvalStatus === 'assignment_ambiguous') {
       status = 'assignment_ambiguous'
-      statusTh = 'พบ assignment ซ้ำในรอบนี้'
-      statusEn = 'Duplicate assignments in this cycle'
+      statusTh = 'พบ assignment ซ้ำ'
+      statusEn = 'Duplicate assignments'
     } else if (rawEvalStatus === 'assignment_load_error') {
       status = 'assignment_load_error'
       statusTh = 'โหลดสถานะประเมินไม่สำเร็จ'
@@ -456,7 +401,12 @@ function enrichStudents(
       status = 'email_error'
       statusTh = 'ส่งอีเมลผิดพลาด'
       statusEn = 'Email Error'
-    } else if (rawEvalStatus === 'inProgress') {
+    } else if (
+      rawEvalStatus === 'inProgress' ||
+      rawEvalStatus === 'awaiting_response' ||
+      rawEvalStatus === 'pending' ||
+      rawEvalStatus === 'reopened'
+    ) {
       status = 'inProgress'
       statusTh = 'ส่งคำขอประเมินแล้ว'
       statusEn = 'Awaiting Response'
@@ -464,6 +414,13 @@ function enrichStudents(
       status = 'expired'
       statusTh = 'หมดอายุ'
       statusEn = 'Expired'
+    } else if (
+      rawEvalStatus === 'evaluator_assigned' ||
+      Boolean(student.evaluatorName?.trim() || student.evaluatorEmail?.trim())
+    ) {
+      status = 'pending'
+      statusTh = 'ระบุผู้ประเมินแล้ว'
+      statusEn = 'Evaluator Assigned'
     } else {
       status = 'pending'
       statusTh = 'รอระบุผู้ประเมิน'
@@ -518,6 +475,11 @@ function enrichStudents(
       }
     }
 
+    const resolvedStudentName =
+      typeof student.name === 'string'
+        ? student.name
+        : student.name?.th || student.name?.en || student.studentId
+
     return {
       student,
       assignment,
@@ -526,10 +488,16 @@ function enrichStudents(
       program,
       placement,
       studentId: student.studentId,
-      nameTh: student.name?.th || student.studentId,
-      nameEn: student.name?.en || student.studentId,
+      name: resolvedStudentName,
+      nameTh:
+        typeof student.name === 'object' && student.name !== null
+          ? student.name.th || student.name.en || student.studentId
+          : resolvedStudentName,
+      nameEn:
+        typeof student.name === 'object' && student.name !== null
+          ? student.name.en || student.name.th || student.studentId
+          : resolvedStudentName,
       email: student.email,
-      personalEmail: student.personalEmail || '-',
       schoolTh: school?.name?.th || '-',
       schoolEn: school?.name?.en || '-',
       schoolCode: school?.schoolCode || '-',
@@ -543,6 +511,7 @@ function enrichStudents(
       academicYear: yearTh,
       academicYearEn: yearEn,
       semester,
+      semesterEn,
       company,
       companyAddress,
       province,
@@ -622,16 +591,60 @@ const statusLabels: Record<string, { labelTh: string; icon: string }> = {
   submitted: { labelTh: 'ส่งผลประเมินแล้ว', icon: '🟢' },
   expired: { labelTh: 'หมดอายุ', icon: '🔴' },
   email_error: { labelTh: 'ส่งอีเมลผิดพลาด', icon: '❌' },
-  assignment_ambiguous: { labelTh: 'พบ assignment ซ้ำในรอบนี้', icon: '⚠️' },
-  cycle_unselected: { labelTh: 'เลือกรอบฝึกงานเพื่อดูสถานะ', icon: '🗓️' }
+  assignment_ambiguous: { labelTh: 'พบ assignment ซ้ำ', icon: '⚠️' }
 }
+
+const defaultStatusesList = [
+  { value: 'pending', labelTh: 'รอระบุผู้ประเมิน', icon: '⚪' },
+  { value: 'inProgress', labelTh: 'ส่งคำขอประเมินแล้ว', icon: '🟡' },
+  { value: 'submitted', labelTh: 'ส่งผลประเมินแล้ว', icon: '🟢' },
+  { value: 'email_error', labelTh: 'ส่งอีเมลผิดพลาด', icon: '❌' },
+  { value: 'expired', labelTh: 'หมดอายุ', icon: '🔴' }
+]
 
 const availableStatuses = computed(() =>
   (directoryData.value?.facets.statuses ?? []).flatMap((value) => {
+    if (value === 'cycle_unselected') return []
     const label = statusLabels[value]
     return label ? [{ value, ...label }] : []
   })
 )
+
+const yearSelectOptions = computed(() => [
+  { value: 'all', label: 'ทุกปีการศึกษา (All Years)' },
+  ...availableYears.value.map((yr) => ({
+    value: yr,
+    label: `ปีการศึกษา ${yr} (${Number(yr) - 543})`
+  }))
+])
+
+const semesterSelectOptions = computed(() => [
+  { value: 'all', label: 'ทุกภาคการศึกษา (All Semesters)' },
+  ...availableSemesters.value.map((sem) => ({
+    value: sem,
+    label: sem
+  }))
+])
+
+const schoolSelectOptions = computed(() => [
+  { value: 'all', label: 'ทุกสำนักวิชา (All Schools)' },
+  ...availableSchools.value.map((sch) => ({
+    value: sch.id,
+    label: `${sch.nameTh} ${sch.schoolCode ? `(${sch.schoolCode})` : ''}`.trim()
+  }))
+])
+
+const statusSelectOptions = computed(() => {
+  const dynamic = availableStatuses.value
+  const list = dynamic.length > 0 ? dynamic : defaultStatusesList
+  return [
+    { value: 'all', label: 'ทุกสถานะ (All Statuses)' },
+    ...list.map((st) => ({
+      value: st.value,
+      label: `${st.icon} ${st.labelTh}`
+    }))
+  ]
+})
 
 // Auto-reset filters if current value is invalid or not in available options
 watch(
@@ -720,7 +733,6 @@ function directoryQuery(
   const search = searchQuery.value.trim().slice(0, 100)
   if (search) query.search = search
   if (selectedSchool.value !== 'all') query.schoolId = selectedSchool.value
-  if (selectedCycleId.value !== 'all') query.cycleId = selectedCycleId.value
   if (
     selectedYear.value !== 'all' &&
     Number.isInteger(Number(selectedYear.value))
@@ -730,11 +742,7 @@ function directoryQuery(
   if (selectedSemester.value !== 'all') {
     query.semester = selectedSemester.value
   }
-  if (
-    selectedCycleId.value !== 'all' &&
-    selectedStatus.value !== 'all' &&
-    selectedStatus.value !== 'cycle_unselected'
-  ) {
+  if (selectedStatus.value !== 'all') {
     query.evaluationStatus = selectedStatus.value
   }
   return query
@@ -786,7 +794,6 @@ watch(
     selectedYear,
     selectedSemester,
     selectedSchool,
-    selectedCycleId,
     selectedStatus,
     searchQuery
   ],
@@ -809,8 +816,6 @@ function resetFilters(): void {
   selectedYear.value = 'all'
   selectedSemester.value = 'all'
   selectedSchool.value = 'all'
-  selectedCycleId.value = 'all'
-  cycleSelectionChanged = true
   selectedStatus.value = 'all'
   searchQuery.value = ''
   page.value = 1
@@ -897,10 +902,8 @@ const editingStudentId = ref<string>('')
 
 const editForm = ref({
   studentId: '',
-  nameTh: '',
-  nameEn: '',
+  name: '',
   email: '',
-  personalEmail: '',
   schoolId: '',
   programId: '',
   courseId: '',
@@ -920,15 +923,34 @@ function setEditSchool(value: string): void {
   editForm.value.schoolId = value
 }
 
+const editSemesterSelectOptions = computed(() => {
+  const opts = [
+    { value: '', label: '-- เลือกภาคการศึกษา --' },
+    { value: 'ภาคการศึกษาต้น', label: 'ภาคการศึกษาที่ 1 (ภาคการศึกษาต้น)' },
+    { value: 'ภาคการศึกษาปลาย', label: 'ภาคการศึกษาที่ 2 (ภาคการศึกษาปลาย)' },
+    { value: 'ภาคการศึกษาฤดูร้อน', label: 'ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)' }
+  ]
+  if (
+    editForm.value.semester &&
+    !['ภาคการศึกษาต้น', 'ภาคการศึกษาปลาย', 'ภาคการศึกษาฤดูร้อน'].includes(
+      editForm.value.semester
+    )
+  ) {
+    opts.splice(1, 0, {
+      value: editForm.value.semester,
+      label: editForm.value.semester
+    })
+  }
+  return opts
+})
+
 function openEditModal(row: EnrichedStudentRow): void {
   const s = row.student
   editingStudentId.value = s.id
   editForm.value = {
     studentId: s.studentId,
-    nameTh: s.name?.th || '',
-    nameEn: s.name?.en || '',
+    name: row.name,
     email: s.email || '',
-    personalEmail: s.personalEmail || '',
     schoolId: s.schoolId || '',
     programId: s.programId || '',
     courseId: s.courseId || '',
@@ -952,14 +974,8 @@ async function handleEditSubmit() {
     await api(`/students/${editingStudentId.value}`, {
       method: 'PATCH',
       body: {
-        name: {
-          th: editForm.value.nameTh.trim(),
-          en: editForm.value.nameEn.trim()
-        },
+        name: editForm.value.name.trim(),
         email: editForm.value.email.trim().toLowerCase(),
-        personalEmail: editForm.value.personalEmail.trim()
-          ? editForm.value.personalEmail.trim().toLowerCase()
-          : undefined,
         schoolId: editForm.value.schoolId,
         programId: editForm.value.programId,
         courseId: editForm.value.courseId || undefined,
@@ -974,7 +990,7 @@ async function handleEditSubmit() {
 
     toast.add({
       title: 'อัปเดตข้อมูลนักศึกษาสำเร็จ',
-      description: `อัปเดตข้อมูล ${editForm.value.nameTh} (${editForm.value.studentId}) เรียบร้อยแล้ว`,
+      description: `อัปเดตข้อมูล ${editForm.value.name} (${editForm.value.studentId}) เรียบร้อยแล้ว`,
       color: 'success'
     })
 
@@ -1005,26 +1021,42 @@ function optionalYear(value: number | string): number | undefined {
 async function handleDeleteStudent(row: EnrichedStudentRow) {
   if (
     !confirm(
-      `คุณต้องการลบข้อมูลนักศึกษา "${row.nameTh}" (${row.studentId}) หรือไม่?`
+      `คุณต้องการลบข้อมูลนักศึกษา "${row.name}" (${row.studentId}) หรือไม่?`
     )
   ) {
     return
   }
+  const studentIdentifier =
+    row.student?.id ||
+    (row as unknown as { id?: string }).id ||
+    row.studentId
   try {
-    await api(`/students/${row.student.id}`, {
+    await api(`/students/${studentIdentifier}`, {
       method: 'DELETE'
     })
     toast.add({
       title: 'ลบข้อมูลสำเร็จ',
-      description: `ลบข้อมูลนักศึกษา ${row.nameTh} เรียบร้อยแล้ว`,
+      description: `ลบข้อมูลนักศึกษา ${row.name} เรียบร้อยแล้ว`,
       color: 'success'
     })
     void loadDirectoryPage(true)
     emit('refresh')
-  } catch {
+  } catch (error: any) {
+    const errorCode =
+      error?.data?.code ||
+      error?.response?._data?.code ||
+      error?.data?.message?.code ||
+      error?.message
+    let description = 'ไม่สามารถลบข้อมูลนักศึกษาได้'
+    if (errorCode === 'STUDENT_HAS_OPEN_PLACEMENT') {
+      description =
+        'ไม่สามารถลบได้ เนื่องจากนักศึกษามีข้อมูลการฝึกงานหรือการประเมินที่กำลังดำเนินการอยู่'
+    } else if (errorCode === 'STUDENT_STATUS_CHANGED') {
+      description = 'สถานะนักศึกษาเปลี่ยนแปลงไปแล้ว กรุณารีเฟรชหน้าจอ'
+    }
     toast.add({
       title: 'ดำเนินการไม่สำเร็จ',
-      description: 'ไม่สามารถลบข้อมูลนักศึกษาได้',
+      description,
       color: 'error'
     })
   }
@@ -1079,25 +1111,41 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
   if (!import.meta.client) return
 
   exportLoading.value = true
-  const firstQuery = directoryQuery(1, 500)
-  const stableFilters = { ...firstQuery }
-  delete stableFilters.page
-  delete stableFilters.pageSize
-  try {
-    const exportResult = await loadAllPages(
-      (requestedPage, requestedPageSize) =>
-        api<PaginatedItems<StudentItem>>('/students', {
-          query: {
-            ...stableFilters,
-            page: requestedPage,
-            pageSize: requestedPageSize,
-            includeDirectoryData: false
-          }
-        })
+  const query = directoryQuery(1, 1)
+  const allowedFilterKeys = [
+    'search',
+    'schoolId',
+    'cycleId',
+    'academicYear',
+    'semester',
+    'evaluationStatus'
+  ] as const
+  const filters = Object.fromEntries(
+    allowedFilterKeys.flatMap((key) =>
+      query[key] === undefined ? [] : [[key, query[key]]]
     )
-    const rowsToExport = enrichStudents(exportResult.items)
-    if (rowsToExport.length === 0) {
-      exportLoading.value = false
+  )
+  const keyScope = JSON.stringify({ locale, filters })
+  const idempotencyKey =
+    studentDirectoryExportKeys.get(keyScope) ?? crypto.randomUUID()
+  studentDirectoryExportKeys.set(keyScope, idempotencyKey)
+  try {
+    let report = await api<{
+      id: string
+      status: 'queued' | 'processing' | 'ready' | 'failed' | 'expired'
+      rowCount: number
+    }>('/reports/exports', {
+      method: 'POST',
+      headers: { 'idempotency-key': idempotencyKey },
+      body: {
+        reportType: 'studentDirectory',
+        filters,
+        locale,
+        format: 'xlsx'
+      }
+    })
+    if (report.rowCount === 0) {
+      studentDirectoryExportKeys.delete(keyScope)
       toast.add({
         title: 'ไม่มีข้อมูลสำหรับส่งออก',
         description: 'กรุณาปรับเปลี่ยนตัวกรองเพื่อเลือกข้อมูลนักศึกษา',
@@ -1106,101 +1154,65 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
       })
       return
     }
-
-    const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-
-    if (locale === 'th') {
-      // 1. Export ภาษาไทย
-      const excelData = buildStudentDirectoryExportRows(rowsToExport, 'th')
-
-      const ws = XLSX.utils.json_to_sheet(excelData)
-
-      // Set column widths
-      ws['!cols'] = [
-        { wch: 6 }, // ลำดับ
-        { wch: 14 }, // รหัสนักศึกษา
-        { wch: 26 }, // ชื่อ-นามสกุล (ไทย)
-        { wch: 26 }, // ชื่อ-นามสกุล (อังกฤษ)
-        { wch: 30 }, // อีเมลนักศึกษา
-        { wch: 24 }, // อีเมลส่วนตัว
-        { wch: 32 }, // สำนักวิชา
-        { wch: 28 }, // สาขาวิชา
-        { wch: 24 }, // รายวิชา
-        { wch: 12 }, // ปีการศึกษา
-        { wch: 16 }, // ภาคการศึกษา
-        { wch: 35 }, // สถานประกอบการ
-        { wch: 28 }, // ที่ตั้งบริษัท
-        { wch: 16 }, // จังหวัด
-        { wch: 30 }, // อาจารย์ที่ปรึกษา
-        { wch: 30 }, // ผู้ประเมิน
-        { wch: 28 }, // ตำแหน่งผู้ประเมิน
-        { wch: 28 }, // อีเมลผู้ประเมิน
-        { wch: 20 }, // สถานะ
-        { wch: 24 }, // คะแนน Hard Skill
-        { wch: 24 } // คะแนน Soft Skill
-      ]
-
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, 'รายงานนักศึกษาฝึกงาน_TH')
-      const filename = `MFU_Internship_Report_TH_${timestamp}.xlsx`
-      XLSX.writeFile(wb, filename)
-
-      toast.add({
-        title: 'ส่งออกรายงาน Excel (ภาษาไทย) สำเร็จ',
-        description: `ดาวน์โหลด ${filename} จำนวน ${rowsToExport.length} รายการ เรียบร้อยแล้ว`,
-        color: 'success',
-        icon: 'i-lucide-file-spreadsheet'
-      })
-    } else {
-      // 2. Export English (ภาษาอังกฤษ)
-      const excelData = buildStudentDirectoryExportRows(rowsToExport, 'en')
-
-      const ws = XLSX.utils.json_to_sheet(excelData)
-
-      // Set column widths
-      ws['!cols'] = [
-        { wch: 6 }, // No.
-        { wch: 14 }, // Student ID
-        { wch: 28 }, // Full Name (English)
-        { wch: 26 }, // Full Name (Thai)
-        { wch: 30 }, // Student Email
-        { wch: 24 }, // Personal Email
-        { wch: 34 }, // School
-        { wch: 30 }, // Program / Major
-        { wch: 24 }, // Course
-        { wch: 14 }, // Academic Year
-        { wch: 16 }, // Semester
-        { wch: 35 }, // Company / Placement
-        { wch: 28 }, // Company Location
-        { wch: 16 }, // Province
-        { wch: 30 }, // Academic Advisor
-        { wch: 30 }, // Workplace Evaluator
-        { wch: 28 }, // Evaluator Position
-        { wch: 28 }, // Evaluator Email
-        { wch: 20 }, // Evaluation Status
-        { wch: 24 }, // Hard Skill Average
-        { wch: 24 } // Soft Skill Average
-      ]
-
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, 'Internship_Report_EN')
-      const filename = `MFU_Internship_Report_EN_${timestamp}.xlsx`
-      XLSX.writeFile(wb, filename)
-
-      toast.add({
-        title: 'Excel Report Exported (English)',
-        description: `Successfully downloaded ${filename} with ${rowsToExport.length} student records`,
-        color: 'success',
-        icon: 'i-lucide-file-spreadsheet'
-      })
+    const pollUntil = Date.now() + 120_000
+    while (
+      (report.status === 'queued' || report.status === 'processing') &&
+      Date.now() < pollUntil
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1200))
+      report = await api<typeof report>(
+        `/reports/exports/${encodeURIComponent(report.id)}`
+      )
     }
+
+    if (report.status === 'queued' || report.status === 'processing') {
+      toast.add({
+        title: 'กำลังเตรียมรายงาน',
+        description: 'คำขอยังอยู่ในคิว กดส่งออกอีกครั้งเพื่อตรวจสอบงานเดิม',
+        color: 'warning',
+        icon: 'i-lucide-clock'
+      })
+      return
+    }
+    if (report.status !== 'ready') {
+      studentDirectoryExportKeys.delete(keyScope)
+      toast.add({
+        title: 'สร้างรายงานไม่สำเร็จ',
+        description: 'งานส่งออกหมดอายุหรือล้มเหลว กรุณาลองใหม่',
+        color: 'error',
+        icon: 'i-lucide-circle-alert'
+      })
+      return
+    }
+
+    const download = await api<{ url: string }>(
+      `/reports/exports/${encodeURIComponent(report.id)}/download-url`
+    )
+    const safeDownloadUrl = resolveSafeDownloadUrl(
+      download.url,
+      window.location.protocol
+    )
+    if (!safeDownloadUrl) {
+      throw new Error('Received an invalid download URL')
+    }
+    studentDirectoryExportKeys.delete(keyScope)
+    window.location.assign(safeDownloadUrl)
+    toast.add({
+      title:
+        locale === 'th'
+          ? 'ส่งออกรายงาน Excel (ภาษาไทย) สำเร็จ'
+          : 'Excel Report Exported (English)',
+      description: `จัดเตรียมข้อมูล ${report.rowCount} รายการเรียบร้อยแล้ว`,
+      color: 'success',
+      icon: 'i-lucide-file-spreadsheet'
+    })
 
     exportMenuOpen.value = false
   } catch (error) {
     console.error('Failed to export Student directory:', error)
     toast.add({
       title: 'ส่งออกข้อมูลไม่สำเร็จ',
-      description: 'โหลดข้อมูลครบทุกหน้าไม่ได้ กรุณาลองใหม่',
+      description: 'ส่งคำขอหรือดาวน์โหลดรายงานไม่สำเร็จ กรุณาลองใหม่',
       color: 'error',
       icon: 'i-lucide-circle-alert'
     })
@@ -1380,48 +1392,12 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
     </div>
 
     <!-- ========================================================================= -->
-    <!-- 3. แถบตัวกรอง (Multi-dimensional Filter Bar)                             -->
-    <!-- ========================================================================= -->
     <div
       class="rounded-xl border border-default bg-default p-4 shadow-sm space-y-3"
     >
-      <p
-        v-if="props.cycleLoadError"
-        role="alert"
-        class="rounded-lg border border-error/30 bg-error/5 px-3 py-2 text-xs text-error"
-      >
-        โหลดรอบฝึกงานไม่สำเร็จ จึงยังเลือกบริบทการประเมินไม่ได้
-        กรุณารีเฟรชหรือติดต่อผู้ดูแลระบบ
-      </p>
       <div
-        class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3"
+        class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
       >
-        <div class="space-y-1">
-          <label
-            class="text-xs font-semibold text-muted flex items-center gap-1.5"
-          >
-            <UIcon
-              name="i-lucide-calendar-days"
-              class="size-3.5 text-primary"
-            />
-            รอบฝึกงาน (Internship Cycle)
-          </label>
-          <select
-            v-model="selectedCycleId"
-            :disabled="!props.cycles.length"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary"
-            @change="markCycleSelectionChanged"
-          >
-            <option value="all">เลือกรอบเพื่อดูสถานะประเมิน</option>
-            <option
-              v-for="cycle in props.cycles"
-              :key="cycle.id"
-              :value="cycle.id"
-            >
-              {{ cycleOptionLabel(cycle) }}
-            </option>
-          </select>
-        </div>
 
         <!-- 3.1 ตัวกรองปีการศึกษา -->
         <div class="space-y-1">
@@ -1431,15 +1407,12 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
             <UIcon name="i-lucide-calendar" class="size-3.5 text-primary" />
             ปีการศึกษา (Academic Year)
           </label>
-          <select
+          <SearchableSelect
             v-model="selectedYear"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="all">ทุกปีการศึกษา (All Years)</option>
-            <option v-for="yr in availableYears" :key="yr" :value="yr">
-              ปีการศึกษา {{ yr }} ({{ Number(yr) - 543 }})
-            </option>
-          </select>
+            :options="yearSelectOptions"
+            search-placeholder="ค้นหาปีการศึกษา…"
+            aria-label="ปีการศึกษา"
+          />
         </div>
 
         <!-- 3.2 ตัวกรองภาคเรียน -->
@@ -1450,15 +1423,12 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
             <UIcon name="i-lucide-layers" class="size-3.5 text-primary" />
             ภาคการศึกษา (Semester)
           </label>
-          <select
+          <SearchableSelect
             v-model="selectedSemester"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="all">ทุกภาคการศึกษา (All Semesters)</option>
-            <option v-for="sem in availableSemesters" :key="sem" :value="sem">
-              {{ sem }}
-            </option>
-          </select>
+            :options="semesterSelectOptions"
+            search-placeholder="ค้นหาภาคการศึกษา…"
+            aria-label="ภาคการศึกษา"
+          />
         </div>
 
         <!-- 3.3 ตัวกรองสำนักวิชา -->
@@ -1469,19 +1439,12 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
             <UIcon name="i-lucide-school" class="size-3.5 text-primary" />
             สำนักวิชา (School)
           </label>
-          <select
+          <SearchableSelect
             v-model="selectedSchool"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary truncate"
-          >
-            <option value="all">ทุกสำนักวิชา (All Schools)</option>
-            <option
-              v-for="sch in availableSchools"
-              :key="sch.id"
-              :value="sch.id"
-            >
-              {{ sch.nameTh }} {{ sch.schoolCode ? `(${sch.schoolCode})` : '' }}
-            </option>
-          </select>
+            :options="schoolSelectOptions"
+            search-placeholder="ค้นหาสำนักวิชา…"
+            aria-label="สำนักวิชา"
+          />
         </div>
 
         <!-- 3.4 ตัวกรองสถานะแบบประเมิน -->
@@ -1492,19 +1455,12 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
             <UIcon name="i-lucide-activity" class="size-3.5 text-primary" />
             สถานะแบบประเมิน (Status)
           </label>
-          <select
+          <SearchableSelect
             v-model="selectedStatus"
-            class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="all">ทุกสถานะ (All Statuses)</option>
-            <option
-              v-for="st in availableStatuses"
-              :key="st.value"
-              :value="st.value"
-            >
-              {{ st.icon }} {{ st.labelTh }}
-            </option>
-          </select>
+            :options="statusSelectOptions"
+            search-placeholder="ค้นหาสถานะ…"
+            aria-label="สถานะแบบประเมิน"
+          />
         </div>
 
         <!-- 3.5 ช่องค้นหา -->
@@ -1545,7 +1501,6 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
           selectedYear !== 'all' ||
           selectedSemester !== 'all' ||
           selectedSchool !== 'all' ||
-          selectedCycleId !== 'all' ||
           selectedStatus !== 'all' ||
           searchQuery
         "
@@ -1673,10 +1628,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                     </button>
                   </div>
                   <p class="font-semibold text-highlighted text-xs">
-                    {{ row.nameTh }}
-                  </p>
-                  <p class="text-[11px] text-muted truncate">
-                    {{ row.nameEn }}
+                    {{ row.name }}
                   </p>
                   <p class="text-[10px] text-muted/80 font-mono">
                     {{ row.email }}
@@ -1697,27 +1649,16 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                       {{ row.programTh }}
                     </p>
                   </div>
-                  <div class="pt-0.5">
-                    <UBadge
-                      :color="
+                  <div class="pt-0.5 flex items-center gap-1 text-[11px] text-muted">
+                    <UIcon
+                      :name="
                         row.courseDisplay === 'Cooperative Education'
-                          ? 'primary'
-                          : 'neutral'
+                          ? 'i-lucide-briefcase'
+                          : 'i-lucide-graduation-cap'
                       "
-                      size="xs"
-                      variant="subtle"
-                      class="text-[10px] font-medium inline-flex items-center gap-1"
-                    >
-                      <UIcon
-                        :name="
-                          row.courseDisplay === 'Cooperative Education'
-                            ? 'i-lucide-briefcase'
-                            : 'i-lucide-graduation-cap'
-                        "
-                        class="size-3"
-                      />
-                      <span>{{ row.courseDisplay }}</span>
-                    </UBadge>
+                      class="size-3 text-muted shrink-0"
+                    />
+                    <span>{{ row.courseDisplay }}</span>
                   </div>
                 </div>
               </td>
@@ -1725,14 +1666,9 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
               <!-- 4. ปี / ภาคเรียน -->
               <td class="py-3 px-4">
                 <div class="space-y-1">
-                  <UBadge
-                    color="primary"
-                    size="xs"
-                    variant="subtle"
-                    class="font-mono font-semibold"
-                  >
+                  <span class="font-mono text-xs font-medium text-highlighted block">
                     ปี {{ row.academicYear }}
-                  </UBadge>
+                  </span>
                   <p class="text-[11px] text-muted">
                     {{
                       row.semester.includes('ภาค')
@@ -1789,16 +1725,6 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                     ส่งคำขอประเมินแล้ว
                   </UBadge>
                   <UBadge
-                    v-else-if="row.status === 'cycle_unselected'"
-                    color="warning"
-                    size="xs"
-                    variant="subtle"
-                    class="font-semibold flex items-center gap-1 w-fit"
-                  >
-                    <UIcon name="i-lucide-calendar-days" class="size-3" />
-                    เลือกรอบเพื่อดูสถานะ
-                  </UBadge>
-                  <UBadge
                     v-else-if="row.status === 'assignment_ambiguous'"
                     color="error"
                     size="xs"
@@ -1829,17 +1755,41 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                     รอระบุผู้ประเมิน
                   </UBadge>
 
-                  <!-- แสดงคะแนนถ้ามีผลประเมินจริง -->
+                  <!-- แสดงคะแนนแยกหมวดเมื่อมีผลประเมินจริง -->
                   <div
                     v-if="
-                      row.status === 'submitted' && row.scoreDisplay !== '-'
+                      row.status === 'submitted' &&
+                      (hasCategoryAverage(row.hardSkillScore) ||
+                        hasCategoryAverage(row.softSkillScore))
                     "
                     class="text-[11px] text-emerald-700 dark:text-emerald-400 font-bold"
                   >
-                    คะแนน: {{ row.scoreDisplay }} / 5.0
-                    <span v-if="row.gradeDisplay !== '-'">
-                      (เกรด {{ row.gradeDisplay }})</span
+                    <span v-if="hasCategoryAverage(row.hardSkillScore)">
+                      Hard Skill:
+                      {{ formatCategoryAverage(row.hardSkillScore) }}
+                      <template
+                        v-if="typeof row.hardSkillScore?.scaleMax === 'number'"
+                      >
+                        / {{ row.hardSkillScore?.scaleMax }}
+                      </template>
+                    </span>
+                    <span
+                      v-if="
+                        hasCategoryAverage(row.hardSkillScore) &&
+                        hasCategoryAverage(row.softSkillScore)
+                      "
                     >
+                      ·
+                    </span>
+                    <span v-if="hasCategoryAverage(row.softSkillScore)">
+                      Soft Skill:
+                      {{ formatCategoryAverage(row.softSkillScore) }}
+                      <template
+                        v-if="typeof row.softSkillScore?.scaleMax === 'number'"
+                      >
+                        / {{ row.softSkillScore?.scaleMax }}
+                      </template>
+                    </span>
                   </div>
                 </div>
               </td>
@@ -1900,7 +1850,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
               <div>
                 <div class="flex items-center gap-2">
                   <h3 class="text-lg font-bold text-highlighted">
-                    {{ activeStudentRow.nameTh }}
+                    {{ activeStudentRow.name }}
                   </h3>
                   <UBadge
                     color="primary"
@@ -1912,7 +1862,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                   </UBadge>
                 </div>
                 <p class="text-xs text-muted">
-                  {{ activeStudentRow.nameEn }} · {{ activeStudentRow.email }}
+                  {{ activeStudentRow.email }}
                 </p>
               </div>
             </div>
@@ -2370,7 +2320,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
         <form class="space-y-6" @submit.prevent="handleEditSubmit">
           <!-- 2 Columns Grid -->
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <!-- คอลัมน์ที่ 1: ข้อมูลสถานประกอบการและหลักสูตร -->
+            <!-- คอลัมน์ที่ 1: ข้อมูลสถานประกอบการ -->
             <div
               class="rounded-2xl border border-default/70 bg-muted/15 dark:bg-muted/10 p-5 sm:p-6 space-y-4 shadow-sm"
             >
@@ -2382,8 +2332,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                   class="size-4.5 text-primary"
                 />
                 <span
-                  >ข้อมูลสถานประกอบการและหลักสูตร (Internship & Course
-                  Info)</span
+                  >ข้อมูลสถานประกอบการ (Internship & Workplace Info)</span
                 >
               </div>
 
@@ -2431,102 +2380,6 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                   placeholder="เช่น เชียงราย, กรุงเทพมหานคร"
                   class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors"
                 />
-              </div>
-
-              <!-- 4. สำนักวิชา -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  สำนักวิชา (School) <span class="text-rose-500">*</span>
-                </label>
-                <PaginatedLookupSelect
-                  :model-value="editForm.schoolId"
-                  api-path="/academic/schools"
-                  id-query-param="schoolIds"
-                  label="สำนักวิชา"
-                  required
-                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
-                  @update:model-value="setEditSchool"
-                />
-              </div>
-
-              <!-- 5. สาขาวิชา / หลักสูตร -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  สาขาวิชา / หลักสูตร (Program)
-                  <span class="text-rose-500">*</span>
-                </label>
-                <PaginatedLookupSelect
-                  v-model="editForm.programId"
-                  api-path="/academic/programs"
-                  id-query-param="programIds"
-                  label="สาขาวิชา / หลักสูตร"
-                  :query="
-                    editForm.schoolId ? { schoolId: editForm.schoolId } : {}
-                  "
-                  required
-                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-
-              <!-- 6. รายวิชาที่ฝึกงาน -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  รายวิชาที่ฝึกงาน (Course)
-                </label>
-                <PaginatedLookupSelect
-                  v-model="editForm.courseId"
-                  api-path="/academic/courses"
-                  id-query-param="courseIds"
-                  label="รายวิชาที่ฝึกงาน"
-                  empty-label="-- ไม่ระบุรายวิชา --"
-                  :query="
-                    editForm.programId ? { programId: editForm.programId } : {}
-                  "
-                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-
-              <!-- 7. ภาคการศึกษา -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  ภาคการศึกษา (Semester)
-                </label>
-                <select
-                  v-model="editForm.semester"
-                  class="w-full h-11 rounded-xl border border-default bg-default px-3 text-sm text-highlighted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-colors truncate"
-                >
-                  <option value="" disabled>-- เลือกภาคการศึกษา --</option>
-                  <option
-                    v-if="
-                      editForm.semester &&
-                      ![
-                        'ภาคการศึกษาต้น',
-                        'ภาคการศึกษาปลาย',
-                        'ภาคการศึกษาฤดูร้อน'
-                      ].includes(editForm.semester)
-                    "
-                    :value="editForm.semester"
-                  >
-                    {{ editForm.semester }}
-                  </option>
-                  <option value="ภาคการศึกษาต้น">
-                    ภาคการศึกษาที่ 1 (ภาคการศึกษาต้น)
-                  </option>
-                  <option value="ภาคการศึกษาปลาย">
-                    ภาคการศึกษาที่ 2 (ภาคการศึกษาปลาย)
-                  </option>
-                  <option value="ภาคการศึกษาฤดูร้อน">
-                    ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)
-                  </option>
-                </select>
               </div>
             </div>
 
@@ -2591,15 +2444,15 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                 </div>
               </div>
 
-              <!-- 3. Thai Name -->
+              <!-- 3. ชื่อ-นามสกุล (Full Name) -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
                 >
-                  ชื่อ-นามสกุล (ภาษาไทย) <span class="text-rose-500">*</span>
+                  ชื่อ-นามสกุล (Full Name) <span class="text-rose-500">*</span>
                 </label>
                 <UInput
-                  v-model="editForm.nameTh"
+                  v-model="editForm.name"
                   placeholder="เช่น นายนิติพงษ์ สิทธิวงค์"
                   size="lg"
                   class="w-full"
@@ -2607,23 +2460,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                 />
               </div>
 
-              <!-- 4. English Name -->
-              <div>
-                <label
-                  class="block text-xs font-semibold text-highlighted mb-1.5"
-                >
-                  Full Name (English) <span class="text-rose-500">*</span>
-                </label>
-                <UInput
-                  v-model="editForm.nameEn"
-                  placeholder="เช่น Mr. Nitipong Sittiwong"
-                  size="lg"
-                  class="w-full"
-                  required
-                />
-              </div>
-
-              <!-- 5. Email: เมลนักศึกษา -->
+              <!-- 4. Email: เมลนักศึกษา -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
@@ -2645,24 +2482,79 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                 </p>
               </div>
 
-              <!-- 6. Email: เมลส่วนตัว -->
+              <!-- 5. สำนักวิชา -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
                 >
-                  อีเมลส่วนตัว (Personal Email)
+                  สำนักวิชา (School) <span class="text-rose-500">*</span>
                 </label>
-                <UInput
-                  v-model="editForm.personalEmail"
-                  type="email"
-                  placeholder="เช่น somchai.dev@gmail.com"
-                  size="lg"
-                  class="w-full font-mono"
-                  icon="i-lucide-mail"
+                <PaginatedLookupSelect
+                  :model-value="editForm.schoolId"
+                  api-path="/academic/schools"
+                  id-query-param="schoolIds"
+                  label="สำนักวิชา"
+                  required
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  @update:model-value="setEditSchool"
                 />
-                <p class="text-[11px] text-muted mt-1">
-                  อีเมลส่วนตัวหรืออีเมลสำรองสำหรับติดต่อ (เช่น Gmail, Outlook)
-                </p>
+              </div>
+
+              <!-- 6. สาขาวิชา / หลักสูตร -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  สาขาวิชา / หลักสูตร (Program)
+                  <span class="text-rose-500">*</span>
+                </label>
+                <PaginatedLookupSelect
+                  v-model="editForm.programId"
+                  api-path="/academic/programs"
+                  id-query-param="programIds"
+                  label="สาขาวิชา / หลักสูตร"
+                  :query="
+                    editForm.schoolId ? { schoolId: editForm.schoolId } : {}
+                  "
+                  required
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <!-- 7. รายวิชาที่ฝึกงาน -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  รายวิชาที่ฝึกงาน (Course)
+                </label>
+                <PaginatedLookupSelect
+                  v-model="editForm.courseId"
+                  api-path="/academic/courses"
+                  id-query-param="courseIds"
+                  label="รายวิชาที่ฝึกงาน"
+                  empty-label="-- ไม่ระบุรายวิชา --"
+                  :query="
+                    editForm.programId ? { programId: editForm.programId } : {}
+                  "
+                  control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <!-- 8. ภาคการศึกษา -->
+              <div>
+                <label
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                >
+                  ภาคการศึกษา (Semester)
+                </label>
+                <SearchableSelect
+                  v-model="editForm.semester"
+                  :options="editSemesterSelectOptions"
+                  control-class="h-11 rounded-xl text-sm"
+                  search-placeholder="ค้นหาภาคการศึกษา…"
+                  placeholder="-- เลือกภาคการศึกษา --"
+                />
               </div>
             </div>
           </div>

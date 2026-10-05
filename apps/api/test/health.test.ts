@@ -1,9 +1,11 @@
 import type { INestApplication } from '@nestjs/common'
+import type { Express } from 'express'
 import { Test } from '@nestjs/testing'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { HealthController } from '../src/health.controller.js'
+import { disableExpressFingerprinting } from '../src/common/express-security.js'
 import { HealthService } from '../src/health.service.js'
 
 interface LivenessResponse {
@@ -24,6 +26,7 @@ interface ReadinessResponse {
 
 describe('health endpoint', () => {
   let app: INestApplication
+  let readiness: ReadinessResponse
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -38,12 +41,7 @@ describe('health endpoint', () => {
               timestamp: new Date().toISOString(),
               version: '0.1.0'
             }),
-            getReadiness: () =>
-              Promise.resolve({
-                ready: true,
-                dependencies: { mongodb: 'ok', redis: 'ok' },
-                timestamp: new Date().toISOString()
-              })
+            getReadiness: () => Promise.resolve(readiness)
           }
         }
       ]
@@ -51,6 +49,7 @@ describe('health endpoint', () => {
 
     app = moduleRef.createNestApplication()
     app.setGlobalPrefix('api/v2')
+    disableExpressFingerprinting(app.getHttpAdapter().getInstance() as Express)
     await app.init()
   })
 
@@ -68,6 +67,7 @@ describe('health endpoint', () => {
       version: string
     }
 
+    expect(response.headers['x-powered-by']).toBeUndefined()
     expect(body).toMatchObject({
       service: 'api',
       status: 'ok',
@@ -92,6 +92,11 @@ describe('health endpoint', () => {
   })
 
   it('returns the OpenAPI readiness contract', async () => {
+    readiness = {
+      ready: true,
+      dependencies: { mongodb: 'ok', redis: 'ok' },
+      timestamp: new Date().toISOString()
+    }
     const server = app.getHttpServer() as Parameters<typeof request>[0]
     const response = await request(server)
       .get('/api/v2/health/ready')
@@ -103,5 +108,22 @@ describe('health endpoint', () => {
       dependencies: { mongodb: 'ok', redis: 'ok' }
     })
     expect(body.timestamp).toEqual(expect.any(String))
+  })
+
+  it('returns 503 when a mandatory dependency is unavailable', async () => {
+    readiness = {
+      ready: false,
+      dependencies: { mongodb: 'ok', redis: 'unavailable' },
+      timestamp: new Date().toISOString()
+    }
+    const server = app.getHttpServer() as Parameters<typeof request>[0]
+    const response = await request(server)
+      .get('/api/v2/health/ready')
+      .expect(503)
+
+    expect(response.body).toMatchObject({
+      ready: false,
+      dependencies: { mongodb: 'ok', redis: 'unavailable' }
+    })
   })
 })

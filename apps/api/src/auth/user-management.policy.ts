@@ -34,6 +34,28 @@ export function isSystemAdministrator(actor: AuthenticatedActor): boolean {
   return actor.roles.includes('systemAdmin')
 }
 
+export function isTenantStaff(
+  actor: AuthenticatedActor,
+  mode: 'read' | 'manage' = 'read'
+): boolean {
+  if (actor.roleScopes) {
+    return actor.roleScopes.some(
+      (scope) =>
+        actor.roles.includes(scope.role) &&
+        (scope.role === 'internshipStaff' ||
+          (mode === 'read' && scope.role === 'auditor')) &&
+        Boolean(scope.tenant)
+    )
+  }
+  const allowedRoles: readonly RoleKey[] =
+    mode === 'manage' ? ['internshipStaff'] : ['internshipStaff', 'auditor']
+  return (
+    actor.roles.length === 1 &&
+    actor.roles.some((role) => allowedRoles.includes(role)) &&
+    Boolean(actor.scope.tenant)
+  )
+}
+
 function authorizedScopes(
   actor: AuthenticatedActor,
   mode: 'read' | 'manage'
@@ -136,6 +158,35 @@ export function userManagementScope(
 ): QueryFilter<UserRecord> {
   if (isSystemAdministrator(actor)) return {}
 
+  if (isTenantStaff(actor, mode)) {
+    if (filters.role && !STAFF_ASSIGNABLE_ROLES.includes(filters.role)) {
+      return { _id: null }
+    }
+    const roleMatch = filters.role ?? { $in: [...STAFF_ASSIGNABLE_ROLES] }
+    return {
+      $and: [
+        {
+          roleAssignments: {
+            $elemMatch: {
+              active: true,
+              role: roleMatch,
+              ...(filters.schoolId ? { schoolIds: filters.schoolId } : {})
+            }
+          }
+        },
+        {
+          $nor: [
+            {
+              roleAssignments: {
+                $elemMatch: { active: true, role: 'systemAdmin' }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+
   const scopedAssignments = authorizedScopes(actor, mode).filter(
     (scope) => scope.schoolIds.length > 0 || scope.programIds.length > 0
   )
@@ -190,11 +241,14 @@ export function roleAssignmentWithinScope(
   if (isSystemAdministrator(actor)) return true
   if (
     !assignment.active ||
-    assignment.tenant ||
     !STAFF_ASSIGNABLE_ROLES.includes(assignment.role)
   ) {
     return false
   }
+  if (isTenantStaff(actor, mode)) {
+    return true
+  }
+  if (assignment.tenant) return false
   return authorizedScopes(actor, mode).some((scope) => {
     const schoolMatches =
       scope.schoolIds.length === 0 ||
@@ -218,6 +272,17 @@ export function assertCanAssignRole(
 ): void {
   if (isSystemAdministrator(actor)) {
     if (tenant && role !== 'systemAdmin' && role !== 'internshipStaff') {
+      throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
+    }
+    return
+  }
+
+  if (isTenantStaff(actor, 'manage')) {
+    if (!STAFF_ASSIGNABLE_ROLES.includes(role) || tenant) {
+      throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
+    }
+    const requestedAnyScope = schoolIds.length > 0 || programIds.length > 0
+    if (studentScope && !requestedAnyScope) {
       throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
     }
     return
