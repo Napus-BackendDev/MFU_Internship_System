@@ -227,7 +227,12 @@ export class MembersController {
       }
       try {
         const fixed = Buffer.from(file.originalname, 'latin1').toString('utf8')
-        if (fixed && !fixed.includes('\ufffd') && !/[\u00C0-\u00FF]/.test(fixed)) return fixed
+        if (
+          fixed &&
+          !fixed.includes('\ufffd') &&
+          !/[\u00C0-\u00FF]/.test(fixed)
+        )
+          return fixed
       } catch {
         // ignore
       }

@@ -10,9 +10,9 @@ function contentSecurityPolicy(
 ): string {
   const isDev = Boolean(
     isDevOverride ??
-      (process.env['NODE_ENV'] === 'development' ||
-        process.env.NODE_ENV === 'development' ||
-        process.env.NODE_ENV !== 'production')
+    (process.env['NODE_ENV'] === 'development' ||
+      process.env.NODE_ENV === 'development' ||
+      process.env.NODE_ENV !== 'production')
   )
   const connectSources = ["'self'"]
   const rawApiUrl =

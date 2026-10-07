@@ -311,6 +311,28 @@ describe('campaign outbox on an isolated MongoDB replica set', () => {
     }
   })
 
+  it('uses the sender saved by the SMTP settings contract for direct fallback', async () => {
+    await connection.collection('smtpSettings').insertOne({
+      key: 'smtp',
+      enabled: true,
+      host: '127.0.0.1',
+      port: 1025,
+      secure: false,
+      username: 'login@example.test',
+      from: 'Saved Sender <sender@example.test>'
+    })
+    try {
+      await expect(service['resolveSmtpSettings']()).resolves.toMatchObject({
+        host: '127.0.0.1',
+        port: 1025,
+        secure: false,
+        from: 'Saved Sender <sender@example.test>'
+      })
+    } finally {
+      await connection.collection('smtpSettings').deleteMany({ key: 'smtp' })
+    }
+  })
+
   it('filters scoped deliveries and returns only masked recipient metadata', async () => {
     await deliveries.create({
       campaignId: 'campaign-delivery-list',
@@ -349,11 +371,13 @@ describe('campaign outbox on an isolated MongoDB replica set', () => {
     })
     expect(page.items[0]).toHaveProperty('assignmentId', assignmentId)
     expect(page.items[0]).toHaveProperty('assignment')
-    expect((page.items[0] as Record<string, unknown>).assignment).toMatchObject({
-      studentId: 'student-outbox',
-      studentName: 'นักศึกษาทดสอบ',
-      evaluatorName: 'ผู้ประเมิน'
-    })
+    expect((page.items[0] as Record<string, unknown>).assignment).toMatchObject(
+      {
+        studentId: 'student-outbox',
+        studentName: 'นักศึกษาทดสอบ',
+        evaluatorName: 'ผู้ประเมิน'
+      }
+    )
     expect(page.items[0]).not.toHaveProperty('recipientEmail')
     expect(page.items[0]).not.toHaveProperty('providerMessageId')
     expect(page.items[0]).not.toHaveProperty('processingToken')

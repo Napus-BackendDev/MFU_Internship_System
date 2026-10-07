@@ -560,7 +560,7 @@ function ratingValues(question: Question): readonly number[] {
               icon="i-lucide-arrow-left"
               label="กลับหน้าล็อกอิน"
               size="xs"
-              to="/login"
+              :to="$localePath('/login')"
               variant="ghost"
             />
           </div>

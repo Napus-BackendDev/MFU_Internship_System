@@ -23,7 +23,7 @@ test('shows and recovers from a failed Student lookup on Evaluations', async ({
   await expect(
     page.getByRole('button', { name: 'ลองโหลดข้อมูลประกอบใหม่' })
   ).toBeVisible()
-  await expect(page.getByText('Example Student')).toHaveCount(0)
+  await expect(page.getByText('นักศึกษาทดสอบ')).toHaveCount(0)
   await page.waitForLoadState('networkidle')
 
   await page.getByRole('button', { name: 'ลองโหลดข้อมูลประกอบใหม่' }).click()
@@ -37,5 +37,5 @@ test('shows and recovers from a failed Student lookup on Evaluations', async ({
   expect(retryState.requests).toBeGreaterThan(initialFailureState.requests)
 
   await expect(page.getByText('โหลดข้อมูลประกอบไม่ครบ')).toHaveCount(0)
-  await expect(page.getByText('Example Student')).toBeVisible()
+  await expect(page.getByText('นักศึกษาทดสอบ')).toBeVisible()
 })

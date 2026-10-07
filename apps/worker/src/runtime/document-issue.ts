@@ -23,11 +23,13 @@ interface MongoErrorLike {
   readonly code?: number | string | undefined
   readonly codeName?: string | undefined
   readonly message?: string | undefined
-  readonly originalError?: {
-    readonly code?: number | string | undefined
-    readonly codeName?: string | undefined
-    readonly message?: string | undefined
-  } | undefined
+  readonly originalError?:
+    | {
+        readonly code?: number | string | undefined
+        readonly codeName?: string | undefined
+        readonly message?: string | undefined
+      }
+    | undefined
 }
 
 function isUnsupportedTransactionError(error: unknown): boolean {
@@ -134,4 +136,3 @@ export async function persistDocumentIssue(
     throw error
   }
 }
-

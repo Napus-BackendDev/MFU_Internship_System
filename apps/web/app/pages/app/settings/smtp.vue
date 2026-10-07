@@ -71,7 +71,8 @@ const testing = ref(false)
 const {
   data: settings,
   error: loadError,
-  pending
+  pending,
+  refresh: refreshSettings
 } = await useAsyncData('smtp-settings', async () => {
   if (!canManage.value) return null
   return api<SmtpSettings>('/system-settings/smtp')
@@ -207,7 +208,52 @@ function resetForm(): void {
   actionError.value = undefined
 }
 
+function applyPreset(preset: 'gmail' | 'office365' | 'mailpit'): void {
+  if (preset === 'gmail') {
+    form.host = 'smtp.gmail.com'
+    form.port = 587
+    form.secure = false
+    form.enabled = true
+    if (!form.sender || form.sender.includes('@localhost')) {
+      form.sender = form.username
+        ? `Internship <${form.username}>`
+        : 'Internship Transcript <no-reply@gmail.com>'
+    }
+    toast.add({
+      title: 'ใช้แม่แบบ Gmail แล้ว',
+      description:
+        'โฮสต์: smtp.gmail.com:587 (อย่าลืมกรอก App Password 16 หลักจาก Google และกดบันทึก)',
+      color: 'info',
+      icon: 'i-lucide-mail'
+    })
+  } else if (preset === 'office365') {
+    form.host = 'smtp.office365.com'
+    form.port = 587
+    form.secure = false
+    form.enabled = true
+    toast.add({
+      title: 'ใช้แม่แบบ Microsoft 365 แล้ว',
+      description: 'โฮสต์: smtp.office365.com:587',
+      color: 'info',
+      icon: 'i-lucide-mail'
+    })
+  } else if (preset === 'mailpit') {
+    form.host = 'localhost'
+    form.port = 1025
+    form.secure = false
+    form.enabled = true
+    toast.add({
+      title: 'ใช้แม่แบบ Local Mailpit แล้ว',
+      description: 'โฮสต์: localhost:1025',
+      color: 'info',
+      icon: 'i-lucide-mail'
+    })
+  }
+}
+
 async function save(event: FormSubmitEvent<SmtpForm>): Promise<void> {
+  if (!canManage.value || pending.value || loadError.value || !settings.value)
+    return
   actionError.value = undefined
 
   try {
@@ -242,6 +288,8 @@ async function save(event: FormSubmitEvent<SmtpForm>): Promise<void> {
 }
 
 async function sendTest(event: FormSubmitEvent<TestForm>): Promise<void> {
+  if (!canManage.value || pending.value || loadError.value || !settings.value)
+    return
   actionError.value = undefined
   testing.value = true
   testResult.value = undefined
@@ -447,7 +495,11 @@ function readApiError(error: unknown): string {
         icon="i-lucide-circle-alert"
         title="ดำเนินการไม่สำเร็จ"
         variant="soft"
-      />
+      >
+        <template v-if="loadError" #actions
+          ><UButton label="ลองโหลด SMTP ใหม่" @click="refreshSettings()"
+        /></template>
+      </UAlert>
 
       <div v-if="pending" class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <USkeleton class="h-[44rem] rounded-lg" />
@@ -458,7 +510,7 @@ function readApiError(error: unknown): string {
       </div>
 
       <div
-        v-else
+        v-else-if="!loadError && settings"
         class="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]"
       >
         <UCard :ui="{ body: 'p-0 sm:p-0' }">
@@ -562,6 +614,57 @@ function readApiError(error: unknown): string {
                   </p>
                 </div>
               </div>
+
+              <div class="mb-4 flex flex-wrap items-center gap-2">
+                <span class="text-xs font-medium text-muted">แม่แบบด่วน:</span>
+                <UButton
+                  color="neutral"
+                  icon="i-lucide-mail"
+                  label="Gmail (smtp.gmail.com)"
+                  size="xs"
+                  type="button"
+                  variant="subtle"
+                  @click="applyPreset('gmail')"
+                />
+                <UButton
+                  color="neutral"
+                  icon="i-lucide-mail"
+                  label="Microsoft 365 (smtp.office365.com)"
+                  size="xs"
+                  type="button"
+                  variant="subtle"
+                  @click="applyPreset('office365')"
+                />
+                <UButton
+                  color="neutral"
+                  icon="i-lucide-laptop"
+                  label="Mailpit (localhost:1025)"
+                  size="xs"
+                  type="button"
+                  variant="subtle"
+                  @click="applyPreset('mailpit')"
+                />
+              </div>
+
+              <UAlert
+                v-if="form.username.toLowerCase().includes('@gmail.com') && (form.host === 'localhost' || form.host === '127.0.0.1')"
+                class="mb-4"
+                color="warning"
+                description="ตรวจพบว่าใช้บัญชี Gmail แต่ SMTP Host ยังเป็น localhost แนะนำให้คลิกเปลี่ยนเป็น smtp.gmail.com (พอร์ต 587) ด้านล่าง"
+                icon="i-lucide-alert-triangle"
+                title="แนะนำการตั้งค่า Gmail"
+                variant="soft"
+              >
+                <template #actions>
+                  <UButton
+                    color="warning"
+                    label="เปลี่ยนเป็น smtp.gmail.com ทันที"
+                    size="xs"
+                    type="button"
+                    @click="applyPreset('gmail')"
+                  />
+                </template>
+              </UAlert>
 
               <fieldset class="space-y-5">
                 <legend class="sr-only">ข้อมูล SMTP server</legend>

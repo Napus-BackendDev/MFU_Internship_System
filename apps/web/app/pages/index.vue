@@ -43,7 +43,7 @@ const features = [
           icon="i-lucide-log-in"
           label="เข้าสู่ระบบ"
           size="xl"
-          to="/login"
+          :to="$localePath('/login')"
         />
         <UButton
           class="justify-center"

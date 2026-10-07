@@ -3,6 +3,7 @@ import type { RoleKey } from '@internship/shared-types'
 const ROUTE_ROLE_PERMISSIONS: Readonly<Record<string, readonly RoleKey[]>> = {
   '/app/users': ['systemAdmin', 'internshipStaff'],
   '/app/evaluations/forms': ['systemAdmin', 'internshipStaff'],
+  '/app/correspondence': ['systemAdmin', 'internshipStaff', 'auditor'],
   '/app/audit': ['systemAdmin', 'auditor'],
   '/app/settings/smtp': ['systemAdmin'],
   '/app/settings/academic': ['systemAdmin', 'internshipStaff'],
@@ -27,19 +28,20 @@ const ROUTE_ROLE_PERMISSIONS: Readonly<Record<string, readonly RoleKey[]>> = {
 
 export default defineNuxtRouteMiddleware(async (to) => {
   const auth = useAuthStore()
+  const localePath = useLocalePath()
   if (!auth.loaded) {
     try {
       await auth.load()
     } catch {
-      return navigateTo('/login')
+      return navigateTo(localePath('/login'))
     }
   }
-  if (!auth.actor) return navigateTo('/login')
+  if (!auth.actor) return navigateTo(localePath('/login'))
 
   const actorRoles = (auth.actor.roles ?? []) as RoleKey[]
 
   // Route role protection
-  const targetPath = to.path
+  const targetPath = to.path.replace(/^\/en(?=\/|$)/, '')
   for (const [routePrefix, allowedRoles] of Object.entries(
     ROUTE_ROLE_PERMISSIONS
   )) {
@@ -49,7 +51,7 @@ export default defineNuxtRouteMiddleware(async (to) => {
     ) {
       const hasPermission = allowedRoles.some((r) => actorRoles.includes(r))
       if (!hasPermission) {
-        return navigateTo('/app')
+        return navigateTo(localePath('/app'))
       }
       break
     }

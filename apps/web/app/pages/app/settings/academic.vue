@@ -133,7 +133,7 @@ const {
 // Fetch Courses
 const {
   data: coursesData,
-  error: _coursesError,
+  error: coursesError,
   pending: coursesPending,
   refresh: refreshCourses
 } = await useAsyncData('settings-courses', () =>
@@ -1194,7 +1194,11 @@ async function handleToggleTermStatus(term: AcademicTerm) {
         title="โหลดข้อมูลสำนักวิชาไม่สำเร็จ"
         description="กรุณาตรวจสอบการเชื่อมต่อ API หรือสิทธิ์การใช้งาน"
         variant="soft"
-      />
+      >
+        <template #actions
+          ><UButton label="ลองโหลดสำนักวิชาใหม่" @click="refreshSchools()"
+        /></template>
+      </UAlert>
 
       <!-- Schools Table -->
       <UCard :ui="{ body: 'p-0 sm:p-0' }">
@@ -1210,7 +1214,13 @@ async function handleToggleTermStatus(term: AcademicTerm) {
               </tr>
             </thead>
             <tbody>
-              <tr v-if="filteredSchools.length === 0">
+              <tr
+                v-if="
+                  !schoolsPending &&
+                  !schoolsError &&
+                  filteredSchools.length === 0
+                "
+              >
                 <td
                   :colspan="canManage ? 5 : 4"
                   class="py-12 text-center text-muted"
@@ -1376,7 +1386,11 @@ async function handleToggleTermStatus(term: AcademicTerm) {
         title="โหลดข้อมูลหลักสูตรไม่สำเร็จ"
         description="กรุณาตรวจสอบการเชื่อมต่อ API หรือสิทธิ์การใช้งาน"
         variant="soft"
-      />
+      >
+        <template #actions
+          ><UButton label="ลองโหลดหลักสูตรใหม่" @click="refreshPrograms()"
+        /></template>
+      </UAlert>
 
       <!-- Programs Table -->
       <UCard :ui="{ body: 'p-0 sm:p-0' }">
@@ -1392,7 +1406,13 @@ async function handleToggleTermStatus(term: AcademicTerm) {
               </tr>
             </thead>
             <tbody>
-              <tr v-if="filteredPrograms.length === 0">
+              <tr
+                v-if="
+                  !programsPending &&
+                  !programsError &&
+                  filteredPrograms.length === 0
+                "
+              >
                 <td
                   :colspan="canManage ? 5 : 4"
                   class="py-12 text-center text-muted"
@@ -1539,6 +1559,16 @@ async function handleToggleTermStatus(term: AcademicTerm) {
         </div>
       </div>
 
+      <UAlert
+        v-if="coursesError"
+        color="error"
+        title="โหลดรายวิชาไม่สำเร็จ"
+        description="ลองโหลดข้อมูลใหม่"
+      >
+        <template #actions
+          ><UButton label="ลองโหลดรายวิชาใหม่" @click="refreshCourses()"
+        /></template>
+      </UAlert>
       <!-- Courses Table -->
       <UCard :ui="{ body: 'p-0 sm:p-0' }">
         <div class="overflow-x-auto">
@@ -1553,7 +1583,13 @@ async function handleToggleTermStatus(term: AcademicTerm) {
               </tr>
             </thead>
             <tbody>
-              <tr v-if="filteredCourses.length === 0">
+              <tr
+                v-if="
+                  !coursesPending &&
+                  !coursesError &&
+                  filteredCourses.length === 0
+                "
+              >
                 <td
                   :colspan="canManage ? 5 : 4"
                   class="py-12 text-center text-muted"
@@ -1581,7 +1617,11 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                 </td>
                 <td>
                   <span
-                    v-if="!course.programIds?.length || course.programIds.length >= (programsData?.items.length ?? 0)"
+                    v-if="
+                      !course.programIds?.length ||
+                      course.programIds.length >=
+                        (programsData?.items.length ?? 0)
+                    "
                     class="inline-flex items-center gap-1.5 text-sm text-highlighted"
                   >
                     <UBadge
@@ -1592,7 +1632,9 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                     />
                   </span>
                   <span
-                    v-else-if="course.programIds.length === 1 && getSingleProgram(course)"
+                    v-else-if="
+                      course.programIds.length === 1 && getSingleProgram(course)
+                    "
                     class="inline-flex items-center gap-1.5 text-sm text-highlighted"
                   >
                     <span class="font-mono text-xs font-semibold text-primary">
@@ -2023,9 +2065,21 @@ async function handleToggleTermStatus(term: AcademicTerm) {
     </div>
 
     <!-- MODAL: สร้าง/แก้ไข สำนักวิชา -->
-    <div
+    <AppModal
       v-if="isSchoolModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isSchoolModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-lg rounded-xl border border-default bg-default p-6 shadow-xl"
@@ -2039,6 +2093,7 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             }}
           </h2>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="xs"
@@ -2115,12 +2170,24 @@ async function handleToggleTermStatus(term: AcademicTerm) {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
 
     <!-- MODAL: สร้าง/แก้ไข หลักสูตร -->
-    <div
+    <AppModal
       v-if="isProgramModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isProgramModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-lg rounded-xl border border-default bg-default p-6 shadow-xl"
@@ -2132,6 +2199,7 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             {{ editingProgramId ? 'แก้ไขข้อมูลหลักสูตร' : 'เพิ่มหลักสูตรใหม่' }}
           </h2>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="xs"
@@ -2234,12 +2302,24 @@ async function handleToggleTermStatus(term: AcademicTerm) {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
 
     <!-- MODAL: สร้าง/แก้ไข รายวิชา -->
-    <div
+    <AppModal
       v-if="isCourseModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isCourseModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-lg rounded-xl border border-default bg-default p-6 shadow-xl"
@@ -2251,6 +2331,7 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             {{ editingCourseId ? 'แก้ไขข้อมูลรายวิชา' : 'เพิ่มรายวิชาใหม่' }}
           </h2>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="xs"
@@ -2308,12 +2389,24 @@ async function handleToggleTermStatus(term: AcademicTerm) {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
 
     <!-- MODAL: สร้าง/แก้ไข ภาคการศึกษา -->
-    <div
+    <AppModal
       v-if="isTermModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isTermModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-lg rounded-xl border border-default bg-default p-6 shadow-xl"
@@ -2327,6 +2420,7 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             }}
           </h2>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="xs"
@@ -2464,15 +2558,26 @@ async function handleToggleTermStatus(term: AcademicTerm) {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
 
     <!-- ================================================================= -->
     <!-- MODAL: เพิ่ม/แก้ไขรอบภาคการศึกษา (Master Term Slot)                 -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="isSlotModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      @click="isSlotModalOpen = false"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isSlotModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-lg rounded-2xl border border-default bg-default p-6 shadow-2xl space-y-5"
@@ -2501,6 +2606,7 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             </div>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -2634,6 +2740,6 @@ async function handleToggleTermStatus(term: AcademicTerm) {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
   </div>
 </template>

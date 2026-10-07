@@ -423,133 +423,133 @@ export class MembersService {
           effectiveAssignmentScope
         ]
       }
-        const allReferences = await bindSession(
-          this.assignments.distinct('studentId', assignmentFilter),
-          session
-        ).exec()
-        const normalizedAllReferences = allReferences.filter(
-          (reference): reference is string => typeof reference === 'string'
-        )
-        const exactStatus = [
-          'submitted',
-          'email_error',
-          'inProgress',
-          'expired'
-        ].includes(input.evaluationStatus)
-          ? (input.evaluationStatus as EvaluationAssignmentRecord['status'])
-          : undefined
-        const selectedReferences = exactStatus
+      const allReferences = await bindSession(
+        this.assignments.distinct('studentId', assignmentFilter),
+        session
+      ).exec()
+      const normalizedAllReferences = allReferences.filter(
+        (reference): reference is string => typeof reference === 'string'
+      )
+      const exactStatus = [
+        'submitted',
+        'email_error',
+        'inProgress',
+        'expired'
+      ].includes(input.evaluationStatus)
+        ? (input.evaluationStatus as EvaluationAssignmentRecord['status'])
+        : undefined
+      const selectedReferences = exactStatus
+        ? await bindSession(
+            this.assignments.distinct('studentId', {
+              $and: [assignmentFilter, { status: exactStatus }]
+            }),
+            session
+          ).exec()
+        : input.evaluationStatus === 'awaiting_response'
           ? await bindSession(
               this.assignments.distinct('studentId', {
-                $and: [assignmentFilter, { status: exactStatus }]
+                $and: [
+                  assignmentFilter,
+                  { status: { $nin: ['submitted', 'email_error'] } }
+                ]
               }),
               session
             ).exec()
-          : input.evaluationStatus === 'awaiting_response'
+          : input.evaluationStatus === 'pending'
             ? await bindSession(
                 this.assignments.distinct('studentId', {
                   $and: [
                     assignmentFilter,
-                    { status: { $nin: ['submitted', 'email_error'] } }
+                    { status: { $in: ['pending', 'reopened'] } }
                   ]
                 }),
                 session
               ).exec()
-            : input.evaluationStatus === 'pending'
-              ? await bindSession(
-                  this.assignments.distinct('studentId', {
-                    $and: [
-                      assignmentFilter,
-                      { status: { $in: ['pending', 'reopened'] } }
-                    ]
-                  }),
-                  session
-                ).exec()
-              : input.evaluationStatus === 'assignment_ambiguous'
-                ? (
-                    await bindSession(
-                      this.assignments.aggregate<{ _id: string }>([
-                        { $match: assignmentFilter },
-                        { $group: { _id: '$studentId', count: { $sum: 1 } } },
-                        { $match: { count: { $gt: 1 } } },
-                        { $project: { _id: 1 } }
-                      ]),
-                      session
-                    ).exec()
-                  ).map((row) => row._id)
-                : normalizedAllReferences
-        const normalizedReferences = selectedReferences.filter(
-          (reference): reference is string => typeof reference === 'string'
-        )
-        const selectedObjectIds = normalizedReferences
+            : input.evaluationStatus === 'assignment_ambiguous'
+              ? (
+                  await bindSession(
+                    this.assignments.aggregate<{ _id: string }>([
+                      { $match: assignmentFilter },
+                      { $group: { _id: '$studentId', count: { $sum: 1 } } },
+                      { $match: { count: { $gt: 1 } } },
+                      { $project: { _id: 1 } }
+                    ]),
+                    session
+                  ).exec()
+                ).map((row) => row._id)
+              : normalizedAllReferences
+      const normalizedReferences = selectedReferences.filter(
+        (reference): reference is string => typeof reference === 'string'
+      )
+      const selectedObjectIds = normalizedReferences
+        .filter((reference) => Types.ObjectId.isValid(reference))
+        .map((reference) => new Types.ObjectId(reference))
+
+      if (input.evaluationStatus === 'evaluator_assigned') {
+        requestedFilters.push({
+          $or: [
+            { evaluatorEmail: { $exists: true, $nin: ['', null] } },
+            { evaluatorName: { $exists: true, $nin: ['', null] } }
+          ]
+        })
+      } else if (input.evaluationStatus === 'awaiting_evaluator') {
+        const allObjectIds = normalizedAllReferences
           .filter((reference) => Types.ObjectId.isValid(reference))
           .map((reference) => new Types.ObjectId(reference))
-
-        if (input.evaluationStatus === 'evaluator_assigned') {
-          requestedFilters.push({
-            $or: [
-              { evaluatorEmail: { $exists: true, $nin: ['', null] } },
-              { evaluatorName: { $exists: true, $nin: ['', null] } }
-            ]
-          })
-        } else if (input.evaluationStatus === 'awaiting_evaluator') {
-          const allObjectIds = normalizedAllReferences
-            .filter((reference) => Types.ObjectId.isValid(reference))
-            .map((reference) => new Types.ObjectId(reference))
-          requestedFilters.push({
-            _id: { $nin: allObjectIds },
-            studentId: { $nin: normalizedAllReferences }
-          })
-        } else if (input.evaluationStatus === 'pending') {
-          const ambiguousReferences = (
-            await bindSession(
-              this.assignments.aggregate<{ _id: string }>([
-                { $match: assignmentFilter },
-                { $group: { _id: '$studentId', count: { $sum: 1 } } },
-                { $match: { count: { $gt: 1 } } },
-                { $project: { _id: 1 } }
-              ]),
-              session
-            ).exec()
-          ).map((row) => row._id)
-          const ambiguousObjectIds = ambiguousReferences
-            .filter((reference) => Types.ObjectId.isValid(reference))
-            .map((reference) => new Types.ObjectId(reference))
-          requestedFilters.push({
-            $or: [
-              {
-                $and: [
-                  {
-                    $or: [
-                      { _id: { $in: selectedObjectIds } },
-                      { studentId: { $in: normalizedReferences } }
-                    ]
-                  },
-                  {
-                    _id: { $nin: ambiguousObjectIds },
-                    studentId: { $nin: ambiguousReferences }
-                  }
-                ]
-              },
-              {
-                _id: {
-                  $nin: normalizedAllReferences
-                    .filter((reference) => Types.ObjectId.isValid(reference))
-                    .map((reference) => new Types.ObjectId(reference))
+        requestedFilters.push({
+          _id: { $nin: allObjectIds },
+          studentId: { $nin: normalizedAllReferences }
+        })
+      } else if (input.evaluationStatus === 'pending') {
+        const ambiguousReferences = (
+          await bindSession(
+            this.assignments.aggregate<{ _id: string }>([
+              { $match: assignmentFilter },
+              { $group: { _id: '$studentId', count: { $sum: 1 } } },
+              { $match: { count: { $gt: 1 } } },
+              { $project: { _id: 1 } }
+            ]),
+            session
+          ).exec()
+        ).map((row) => row._id)
+        const ambiguousObjectIds = ambiguousReferences
+          .filter((reference) => Types.ObjectId.isValid(reference))
+          .map((reference) => new Types.ObjectId(reference))
+        requestedFilters.push({
+          $or: [
+            {
+              $and: [
+                {
+                  $or: [
+                    { _id: { $in: selectedObjectIds } },
+                    { studentId: { $in: normalizedReferences } }
+                  ]
                 },
-                studentId: { $nin: normalizedAllReferences }
-              }
-            ]
-          })
-        } else {
-          requestedFilters.push({
-            $or: [
-              { _id: { $in: selectedObjectIds } },
-              { studentId: { $in: normalizedReferences } }
-            ]
-          })
-        }
+                {
+                  _id: { $nin: ambiguousObjectIds },
+                  studentId: { $nin: ambiguousReferences }
+                }
+              ]
+            },
+            {
+              _id: {
+                $nin: normalizedAllReferences
+                  .filter((reference) => Types.ObjectId.isValid(reference))
+                  .map((reference) => new Types.ObjectId(reference))
+              },
+              studentId: { $nin: normalizedAllReferences }
+            }
+          ]
+        })
+      } else {
+        requestedFilters.push({
+          $or: [
+            { _id: { $in: selectedObjectIds } },
+            { studentId: { $in: normalizedReferences } }
+          ]
+        })
       }
+    }
     if (input.search) {
       const search = boundedSearch(input.search)
       const searchBranches: QueryFilter<StudentRecord>[] = [
@@ -1045,9 +1045,7 @@ export class MembersService {
                   ? 'expired'
                   : assignment
                     ? 'pending'
-                    : Boolean(
-                          projected.evaluatorName || projected.evaluatorEmail
-                        )
+                    : projected.evaluatorName || projected.evaluatorEmail
                       ? 'evaluator_assigned'
                       : 'awaiting_evaluator'
       const evaluator = assignment
@@ -1331,12 +1329,7 @@ export class MembersService {
                   then: 'assignment_ambiguous'
                 },
                 ...(
-                  [
-                    'submitted',
-                    'email_error',
-                    'inProgress',
-                    'expired'
-                  ] as const
+                  ['submitted', 'email_error', 'inProgress', 'expired'] as const
                 ).map((status) => ({
                   case: {
                     $eq: [

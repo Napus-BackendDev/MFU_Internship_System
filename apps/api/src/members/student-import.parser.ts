@@ -205,7 +205,7 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
 
       const rawEmailCell = toText(pick(record, HEADER_ALIASES.email))
       let email = rawEmailCell.toLowerCase()
-      let schoolReference = toText(pick(record, HEADER_ALIASES.school))
+      const schoolReference = toText(pick(record, HEADER_ALIASES.school))
       let programReference = toText(pick(record, HEADER_ALIASES.program))
       const courseReference = toText(pick(record, HEADER_ALIASES.course))
       let semester = toText(pick(record, HEADER_ALIASES.semester))
@@ -431,13 +431,4 @@ function toText(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
   if (value instanceof Date) return value.toISOString()
   return ''
-}
-
-function optionalCell(
-  record: Readonly<Record<string, unknown>>,
-  aliases: readonly string[],
-  field: 'company' | 'province'
-): Partial<Record<'company' | 'province', string>> {
-  const value = toText(pick(record, aliases))
-  return value ? { [field]: value } : {}
 }

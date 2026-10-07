@@ -370,14 +370,11 @@ export class ReportExportService {
     if (hasTransactionSupport) {
       const session = await this.connection.startSession()
       try {
-        await session.withTransaction(
-          () => executeExportCreation(session),
-          {
-            readConcern: { level: 'snapshot' },
-            readPreference: 'primary',
-            writeConcern: { w: 'majority' }
-          }
-        )
+        await session.withTransaction(() => executeExportCreation(session), {
+          readConcern: { level: 'snapshot' },
+          readPreference: 'primary',
+          writeConcern: { w: 'majority' }
+        })
       } catch (error: unknown) {
         if (this.isDuplicateKey(error)) {
           const racedExport = await this.exports.findById(exportId).exec()
@@ -607,9 +604,11 @@ export class ReportExportService {
       })
       .select('_id academicTermId')
     if (session) query.session(session)
-    const cycles = await query.lean<
-      Array<{ readonly _id: Types.ObjectId; readonly academicTermId: string }>
-    >().exec()
+    const cycles = await query
+      .lean<
+        Array<{ readonly _id: Types.ObjectId; readonly academicTermId: string }>
+      >()
+      .exec()
     return new Map(
       cycles.map((cycle) => [cycle._id.toString(), cycle.academicTermId])
     )

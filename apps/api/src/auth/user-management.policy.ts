@@ -239,10 +239,7 @@ export function roleAssignmentWithinScope(
   mode: 'read' | 'manage'
 ): boolean {
   if (isSystemAdministrator(actor)) return true
-  if (
-    !assignment.active ||
-    !STAFF_ASSIGNABLE_ROLES.includes(assignment.role)
-  ) {
+  if (!assignment.active || !STAFF_ASSIGNABLE_ROLES.includes(assignment.role)) {
     return false
   }
   if (isTenantStaff(actor, mode)) {

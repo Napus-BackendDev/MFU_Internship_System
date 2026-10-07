@@ -39,22 +39,27 @@ const corsHeaders = {
 }
 
 function actorForRequest(request) {
-  if (request.headers.cookie?.includes('e2e-actor=staff')) return staffActor
-  if (request.headers.cookie?.includes('e2e-actor=coordinator')) {
-    return coordinatorActor
+  const role = /(?:^|;\s*)e2e-actor=([^;]+)/.exec(
+    request.headers.cookie ?? ''
+  )?.[1]
+  if (role === 'staff') return staffActor
+  if (role === 'coordinator') return coordinatorActor
+  if (['student', 'evaluator', 'auditor'].includes(role)) {
+    return {
+      ...actor,
+      id: `${role}-e2e`,
+      roles: [role],
+      scope: {
+        tenant: role === 'auditor',
+        schoolIds: [],
+        programIds: [],
+        ...(role === 'student' ? { studentId: '6631503001' } : {}),
+        ...(role === 'evaluator' ? { assignmentIds: ['assignment-e2e'] } : {})
+      }
+    }
   }
   return actor
 }
-
-const page = (items) => ({
-  items,
-  meta: {
-    total: items.length,
-    page: 1,
-    pageSize: 500,
-    totalPages: items.length > 0 ? 1 : 0
-  }
-})
 
 function queryPage(items, requestUrl) {
   const url = new URL(requestUrl ?? '/', 'http://localhost')
@@ -142,7 +147,9 @@ const server = createServer((request, response) => {
     ).searchParams.get('path')
     if (
       target !== '/api/v2/students' &&
-      target !== '/api/v2/academic/schools'
+      target !== '/api/v2/academic/schools' &&
+      target !== '/api/v2/system-settings/provinces' &&
+      target !== '/api/v2/system-settings/general'
     ) {
       response.writeHead(400).end()
       return
@@ -252,31 +259,34 @@ const server = createServer((request, response) => {
     request.method === 'GET' &&
     path === '/api/v2/document-templates'
   ) {
-    payload = page([
-      {
-        id: 'document-template-e2e',
-        code: 'E2E-TRANSCRIPT',
-        name: 'แบบบันทึกผลการฝึกงานทดสอบ',
-        documentType: 'transcript',
-        status: 'active',
-        createdAt: '2026-09-01T00:00:00.000Z',
-        latestVersion: {
-          id: 'document-template-version-e2e',
-          versionNumber: 1,
-          status: canManageDocumentTemplates ? 'draft' : 'published',
-          schemaVersion: 2,
-          revision: 1,
-          editorMetadata: {
-            nameTh: 'แบบบันทึกผลการฝึกงานทดสอบ',
-            nameEn: 'E2E Internship Transcript',
-            description: 'Playwright test fixture',
-            backgroundType: 'none',
-            bgOpacity: 10
-          },
-          ...(canManageDocumentTemplates ? { fontAssetKeys: [] } : {})
+    payload = queryPage(
+      [
+        {
+          id: 'document-template-e2e',
+          code: 'E2E-TRANSCRIPT',
+          name: 'แบบบันทึกผลการฝึกงานทดสอบ',
+          documentType: 'transcript',
+          status: 'active',
+          createdAt: '2026-09-01T00:00:00.000Z',
+          latestVersion: {
+            id: 'document-template-version-e2e',
+            versionNumber: 1,
+            status: canManageDocumentTemplates ? 'draft' : 'published',
+            schemaVersion: 2,
+            revision: 1,
+            editorMetadata: {
+              nameTh: 'แบบบันทึกผลการฝึกงานทดสอบ',
+              nameEn: 'E2E Internship Transcript',
+              description: 'Playwright test fixture',
+              backgroundType: 'none',
+              bgOpacity: 10
+            },
+            ...(canManageDocumentTemplates ? { fontAssetKeys: [] } : {})
+          }
         }
-      }
-    ])
+      ],
+      request.url
+    )
   } else if (
     request.method === 'GET' &&
     path === '/api/v2/document-template-versions/document-template-version-e2e'
@@ -333,7 +343,7 @@ const server = createServer((request, response) => {
       }
     }
   } else if (request.method === 'GET' && path === '/api/v2/document-assets') {
-    payload = page([])
+    payload = queryPage([], request.url)
   } else if (
     request.method === 'POST' &&
     path ===
@@ -524,16 +534,19 @@ const server = createServer((request, response) => {
       request.url
     )
   } else if (request.method === 'GET' && path === '/api/v2/academic/courses') {
-    payload = page([])
+    payload = queryPage([], request.url)
   } else if (request.method === 'GET' && path === '/api/v2/academic/programs') {
-    payload = page([
-      {
-        id: 'program-e2e',
-        schoolId: 'school-e2e',
-        programCode: 'SE',
-        name: { th: 'วิศวกรรมซอฟต์แวร์', en: 'Software Engineering' }
-      }
-    ])
+    payload = queryPage(
+      [
+        {
+          id: 'program-e2e',
+          schoolId: 'school-e2e',
+          programCode: 'SE',
+          name: { th: 'วิศวกรรมซอฟต์แวร์', en: 'Software Engineering' }
+        }
+      ],
+      request.url
+    )
   } else if (
     request.method === 'GET' &&
     path === '/api/v2/system-settings/provinces'
@@ -543,16 +556,24 @@ const server = createServer((request, response) => {
       total: 0,
       stats: { total: 0, active: 0, inactive: 0 }
     }
+  } else if (
+    request.method === 'GET' &&
+    path === '/api/v2/generated-documents'
+  ) {
+    payload = queryPage([], request.url)
   } else if (request.method === 'GET' && path === '/api/v2/placements') {
-    payload = page([
-      {
-        id: 'placement-e2e',
-        studentId: 'student-record-e2e',
-        organizationId: e2eOrganizationId,
-        academicTermId: 'term-e2e',
-        status: 'active'
-      }
-    ])
+    payload = queryPage(
+      [
+        {
+          id: 'placement-e2e',
+          studentId: 'student-record-e2e',
+          organizationId: e2eOrganizationId,
+          academicTermId: 'term-e2e',
+          status: 'active'
+        }
+      ],
+      request.url
+    )
   } else if (request.method === 'GET' && path === '/api/v2/competency-sets') {
     payload = queryPage(
       [
@@ -564,6 +585,64 @@ const server = createServer((request, response) => {
       ],
       request.url
     )
+  } else if (
+    request.method === 'GET' &&
+    path === '/api/v2/system-settings/general'
+  ) {
+    payload = {
+      institutionNameTh: 'มหาวิทยาลัยทดสอบ',
+      institutionNameEn: 'Test University',
+      departmentName: 'Internship',
+      defaultInternshipHours: 480,
+      currentAcademicYear: 2026,
+      currentSemester: '1',
+      contactEmail: 'support@example.test',
+      contactPhone: '',
+      companyTypes: ['บริษัทเอกชน']
+    }
+  } else if (
+    request.method === 'GET' &&
+    path === '/api/v2/system-settings/smtp'
+  ) {
+    payload = {
+      enabled: false,
+      source: 'environment',
+      host: 'localhost',
+      port: 1025,
+      secure: false,
+      username: '',
+      from: 'test@example.test',
+      passwordConfigured: false,
+      effectivePasswordConfigured: false,
+      version: 0,
+      updatedAt: null,
+      updatedBy: null
+    }
+  } else if (request.method === 'GET' && path === '/api/v2/users/summary') {
+    payload = {
+      total: 0,
+      systemAdmin: 0,
+      internshipStaff: 0,
+      coordinator: 0,
+      student: 0
+    }
+  } else if (
+    request.method === 'GET' &&
+    ['/api/v2/users', '/api/v2/audit-logs', '/api/v2/deliveries'].includes(path)
+  ) {
+    payload = queryPage([], request.url)
+  } else if (
+    request.method === 'GET' &&
+    path === '/api/v2/email-templates/system'
+  ) {
+    payload = ['evaluation_request', 'evaluation_reminder'].map((code) => ({
+      id: `${code}-e2e`,
+      code,
+      subject: 'ข้อความทดสอบ',
+      html: '<p>ข้อความทดสอบ {{student_name}}</p>',
+      text: 'ข้อความทดสอบ',
+      version: 1
+    }))
   } else if (request.method === 'GET' && path === '/api/v2/reports/overview') {
     payload = {
       students: 1,

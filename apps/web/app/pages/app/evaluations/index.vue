@@ -57,7 +57,6 @@ interface AssignmentPage {
 }
 
 const api = useApi()
-const auth = useAuthStore()
 const toast = useToast()
 const status = ref<string | undefined>()
 const page = ref(1)
@@ -481,9 +480,8 @@ const previewEmailSubject = computed(() => {
 
   const rawName = emailTargetStudent.value?.name
   const sName =
-    (typeof rawName === 'string'
-      ? rawName
-      : rawName?.th || rawName?.en) || 'นักศึกษา'
+    (typeof rawName === 'string' ? rawName : rawName?.th || rawName?.en) ||
+    'นักศึกษา'
   return sub.replaceAll('{{student_name}}', sName)
 })
 
@@ -493,9 +491,8 @@ const previewEmailHtml = computed(() => {
 
   const rawName = emailTargetStudent.value?.name
   const sName =
-    (typeof rawName === 'string'
-      ? rawName
-      : rawName?.th || rawName?.en) || 'นักศึกษา'
+    (typeof rawName === 'string' ? rawName : rawName?.th || rawName?.en) ||
+    'นักศึกษา'
   const sId = emailTargetStudent.value?.studentId || '[ไม่พบรหัสนักศึกษา]'
   const cName = getCompany(
     selectedAssignmentForEmail.value?.studentId || '',
@@ -646,14 +643,14 @@ async function refreshAfterEmailAction(): Promise<boolean> {
           color="neutral"
           icon="i-lucide-mails"
           label="ตั้งค่าแม่แบบจดหมาย"
-          to="/app/settings/email"
+          :to="$localePath('/app/settings/email')"
           variant="outline"
         />
         <UButton
           color="primary"
           icon="i-lucide-sliders"
           label="จัดการแบบฟอร์มประเมิน"
-          to="/app/evaluations/forms"
+          :to="$localePath('/app/evaluations/forms')"
         />
       </div>
     </header>
@@ -977,10 +974,21 @@ async function refreshAfterEmailAction(): Promise<boolean> {
     <!-- ================================================================= -->
     <!-- MODAL: SEND TARGETED EVALUATION EMAIL                              -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="sendEmailModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 sm:p-6 backdrop-blur-sm"
-      @click="closeSendEmailModal"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-5xl xl:max-w-6xl max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            closeSendEmailModal()
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-5xl xl:max-w-6xl rounded-2xl border border-default bg-elevated shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
@@ -1378,6 +1386,6 @@ async function refreshAfterEmailAction(): Promise<boolean> {
           </div>
         </div>
       </div>
-    </div>
+    </AppModal>
   </div>
 </template>

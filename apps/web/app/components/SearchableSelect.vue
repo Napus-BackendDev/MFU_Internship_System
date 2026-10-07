@@ -39,6 +39,14 @@ const isOpen = ref(false)
 const search = ref('')
 const containerRef = ref<HTMLElement | null>(null)
 const searchInputRef = ref<HTMLInputElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
+
+function handleInvalid(event: Event): void {
+  const control = event.target as HTMLInputElement
+  if (!control.form || control.form.querySelector(':invalid') === control) {
+    openDropdown()
+  }
+}
 
 const normalizedOptions = computed<readonly SelectOption[]>(() => {
   return props.options.map((opt) => {
@@ -111,6 +119,42 @@ function openDropdown(): void {
   })
 }
 
+function handleEscape(event: KeyboardEvent): void {
+  if (!isOpen.value) return
+  event.stopPropagation()
+  event.preventDefault()
+  closeDropdown(true)
+}
+
+function closeDropdown(restoreFocus = false): void {
+  isOpen.value = false
+  if (restoreFocus) triggerRef.value?.focus()
+}
+
+function moveOptionFocus(event: KeyboardEvent, direction: number): void {
+  if (!isOpen.value) return
+  const options = Array.from(
+    containerRef.value?.querySelectorAll<HTMLButtonElement>(
+      '[data-dropdown-option]:not(:disabled)'
+    ) ?? []
+  )
+  if (!options.length) return
+  event.preventDefault()
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  const next =
+    current < 0
+      ? direction > 0
+        ? 0
+        : options.length - 1
+      : (current + direction + options.length) % options.length
+  options[next]?.focus()
+}
+
+function clearSearch(): void {
+  search.value = ''
+  searchInputRef.value?.focus()
+}
+
 function toggleDropdown(): void {
   if (props.disabled) return
   if (isOpen.value) {
@@ -124,7 +168,7 @@ function selectOption(opt: SelectOption): void {
   if (opt.disabled) return
   emit('update:modelValue', opt.value)
   emit('change', opt.value)
-  isOpen.value = false
+  closeDropdown(true)
 }
 
 function handleClickOutside(event: MouseEvent | TouchEvent): void {
@@ -147,9 +191,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="relative w-full">
+  <div
+    ref="containerRef"
+    class="relative w-full"
+    @keydown.esc="handleEscape"
+    @keydown.down="moveOptionFocus($event, 1)"
+    @keydown.up="moveOptionFocus($event, -1)"
+  >
     <!-- Trigger Button -->
     <button
+      ref="triggerRef"
       type="button"
       :disabled="disabled"
       :aria-label="ariaLabel"
@@ -164,7 +215,7 @@ onBeforeUnmount(() => {
         }
       ]"
       @click="toggleDropdown"
-      @keydown.down.prevent="openDropdown"
+      @keydown.down.stop.prevent="openDropdown"
       @keydown.enter.prevent="toggleDropdown"
     >
       <div class="flex items-center gap-2 truncate">
@@ -195,9 +246,14 @@ onBeforeUnmount(() => {
 
     <!-- Hidden Input for Form Compatibility -->
     <input
-      type="hidden"
+      type="text"
+      class="sr-only"
+      tabindex="-1"
+      aria-hidden="true"
+      :disabled="disabled"
       :value="modelValue ?? ''"
-      :required="required && (!modelValue || modelValue === '')"
+      :required="required"
+      @invalid.prevent="handleInvalid"
     />
 
     <!-- Dropdown Popover -->
@@ -224,16 +280,17 @@ onBeforeUnmount(() => {
             <input
               ref="searchInputRef"
               v-model="search"
+              :aria-label="`${ariaLabel} ค้นหา`"
               type="search"
               :placeholder="searchPlaceholder"
               class="w-full rounded-lg border border-default bg-default pl-8 pr-7 py-1.5 text-xs text-highlighted placeholder:text-muted focus:outline-none focus:ring-1 focus:ring-primary"
-              @keydown.esc="isOpen = false"
             />
             <button
               v-if="search"
               type="button"
               class="absolute right-2 text-muted hover:text-highlighted p-0.5 rounded"
-              @click="search = ''"
+              :aria-label="`ล้างการค้นหา: ${ariaLabel}`"
+              @click="clearSearch"
             >
               <UIcon name="i-lucide-x" class="size-3.5" />
             </button>
@@ -255,6 +312,7 @@ onBeforeUnmount(() => {
             <button
               v-for="opt in groupedFilteredOptions.noGroup"
               :key="String(opt.value)"
+              data-dropdown-option
               type="button"
               :disabled="opt.disabled"
               class="w-full text-left px-3 py-2 rounded-lg transition-colors flex items-center justify-between gap-2"
@@ -296,6 +354,7 @@ onBeforeUnmount(() => {
               <button
                 v-for="opt in grp.items"
                 :key="String(opt.value)"
+                data-dropdown-option
                 type="button"
                 :disabled="opt.disabled"
                 class="w-full text-left px-3 py-2 rounded-lg transition-colors flex items-center justify-between gap-2"

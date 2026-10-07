@@ -658,7 +658,7 @@ async function closeCycle(cycle: EvaluationCycle): Promise<void> {
         color="neutral"
         icon="i-lucide-arrow-left"
         label="กลับไปหน้าการประเมิน"
-        to="/app/evaluations"
+        :to="$localePath('/app/evaluations')"
         variant="outline"
       />
     </header>

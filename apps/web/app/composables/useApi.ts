@@ -20,6 +20,7 @@ export async function retryAfterSessionRefresh<T>(
 
 export function useApi() {
   const config = useRuntimeConfig()
+  const localePath = useLocalePath()
   const forwardedHeaders = import.meta.server
     ? useRequestHeaders(['cookie', 'x-request-id'])
     : undefined
@@ -71,11 +72,15 @@ export function useApi() {
           })
             .then(() => true)
             .catch(() => {
+              const currentPath = window.location.pathname.replace(
+                /^\/en(?=\/|$)/,
+                ''
+              )
               if (
-                window.location.pathname !== '/login' &&
-                !window.location.pathname.startsWith('/evaluate')
+                currentPath !== '/login' &&
+                !currentPath.startsWith('/evaluate')
               ) {
-                window.location.href = '/login'
+                window.location.href = localePath('/login')
               }
               return false
             })

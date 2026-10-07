@@ -59,6 +59,7 @@ interface ProvinceResponse {
 const {
   data: provincesData,
   pending: provincesPending,
+  error: provincesError,
   refresh: refreshProvinces
 } = await useAsyncData(
   'settings-provinces',
@@ -71,14 +72,29 @@ const {
         status:
           selectedStatus.value !== 'all' ? selectedStatus.value : undefined
       }
-    }).catch((): ProvinceResponse => ({ items: [], total: 0 })),
+    }),
   { watch: [selectedRegion, selectedStatus] }
 )
 
 // Fetch general config
-const { data: configData, refresh: refreshConfig } = await useAsyncData(
-  'settings-general-config',
-  () => api<GeneralConfig>('/system-settings/general').catch(() => null)
+const {
+  data: configData,
+  pending: configPending,
+  error: configError,
+  refresh: refreshConfig
+} = await useAsyncData('settings-general-config', () =>
+  api<GeneralConfig>('/system-settings/general')
+)
+const auth = useAuthStore()
+const canManage = computed(
+  () => auth.actor?.roles.includes('systemAdmin') ?? false
+)
+const canEditCompanyTypes = computed(
+  () =>
+    canManage.value &&
+    !configPending.value &&
+    !configError.value &&
+    Boolean(configData.value)
 )
 
 // Province stats computed
@@ -178,6 +194,7 @@ function openEditProvinceModal(p: Province) {
 }
 
 async function handleSaveProvince() {
+  if (!canManage.value || provincesPending.value || provincesError.value) return
   if (
     !provinceForm.value.code.trim() ||
     !provinceForm.value.nameTh.trim() ||
@@ -230,6 +247,7 @@ async function handleSaveProvince() {
 }
 
 async function toggleProvinceStatus(province: Province) {
+  if (!canManage.value || provincesPending.value || provincesError.value) return
   const newStatus = province.status === 'active' ? 'inactive' : 'active'
   try {
     await api(`/system-settings/provinces/${province.id}`, {
@@ -253,6 +271,7 @@ async function toggleProvinceStatus(province: Province) {
 }
 
 async function handleDeleteProvince(province: Province) {
+  if (!canManage.value || provincesPending.value || provincesError.value) return
   if (
     !confirm(
       `คุณต้องการลบข้อมูลจังหวัด "${province.nameTh}" ออกจากระบบใช่หรือไม่?`
@@ -284,6 +303,7 @@ async function handleDeleteProvince(province: Province) {
 // Reset 77 Provinces
 const isResetting = ref(false)
 async function handleResetProvinces() {
+  if (!canManage.value || provincesPending.value || provincesError.value) return
   if (
     !confirm(
       'คุณต้องการรีเซ็ตข้อมูลจังหวัดทั้งหมดกลับเป็น 77 จังหวัดมาตรฐานของประเทศไทยใช่หรือไม่?'
@@ -324,6 +344,7 @@ watchEffect(() => {
 })
 
 function addCompanyType() {
+  if (!canEditCompanyTypes.value) return
   const val = newCompanyType.value.trim()
   if (!val) return
   if (companyTypesList.value.includes(val)) {
@@ -339,11 +360,13 @@ function addCompanyType() {
 }
 
 function removeCompanyType(idx: number) {
+  if (!canEditCompanyTypes.value) return
   companyTypesList.value.splice(idx, 1)
 }
 
 const isSavingCompanyTypes = ref(false)
 async function handleSaveCompanyTypes() {
+  if (!canEditCompanyTypes.value || isSavingCompanyTypes.value) return
   isSavingCompanyTypes.value = true
   try {
     await api('/system-settings/general', {
@@ -387,7 +410,8 @@ async function handleSaveCompanyTypes() {
 
       <div class="flex items-center gap-2">
         <UButton
-          v-if="activeTab === 'provinces'"
+          v-if="activeTab === 'provinces' && canManage"
+          :disabled="provincesPending || Boolean(provincesError)"
           color="neutral"
           icon="i-lucide-rotate-ccw"
           label="รีเซ็ต 77 จังหวัด"
@@ -397,7 +421,8 @@ async function handleSaveCompanyTypes() {
           @click="handleResetProvinces"
         />
         <UButton
-          v-if="activeTab === 'provinces'"
+          v-if="activeTab === 'provinces' && canManage"
+          :disabled="provincesPending || Boolean(provincesError)"
           color="primary"
           icon="i-lucide-plus"
           label="เพิ่มจังหวัดใหม่"
@@ -411,6 +436,7 @@ async function handleSaveCompanyTypes() {
           label="บันทึกประเภทสถานประกอบการ"
           size="md"
           :loading="isSavingCompanyTypes"
+          :disabled="!canEditCompanyTypes"
           @click="handleSaveCompanyTypes"
         />
       </div>
@@ -455,6 +481,16 @@ async function handleSaveCompanyTypes() {
     <!-- TAB 1: PROVINCES (จังหวัด)                                       -->
     <!-- ================================================================= -->
     <div v-if="activeTab === 'provinces'" class="space-y-6">
+      <UAlert
+        v-if="provincesError"
+        color="error"
+        title="โหลดข้อมูลจังหวัดไม่สำเร็จ"
+        description="ลองโหลดข้อมูลใหม่ ข้อมูลที่บันทึกไว้ยังไม่ถูกเปลี่ยนแปลง"
+      >
+        <template #actions
+          ><UButton label="ลองโหลดจังหวัดใหม่" @click="refreshProvinces()"
+        /></template>
+      </UAlert>
       <!-- Stats Overview Cards -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <UCard class="border-l-4 border-l-primary">
@@ -520,6 +556,7 @@ async function handleSaveCompanyTypes() {
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
           <UInput
             v-model="search"
+            aria-label="ค้นหาจังหวัด"
             class="flex-1"
             icon="i-lucide-search"
             placeholder="ค้นหาชื่อจังหวัด (ไทย, English) หรือรหัส..."
@@ -530,6 +567,7 @@ async function handleSaveCompanyTypes() {
           <div class="flex items-center gap-2">
             <select
               v-model="selectedRegion"
+              aria-label="กรองภูมิภาค"
               class="h-9 rounded-lg border border-default bg-default px-3 text-xs text-highlighted focus:border-primary focus:outline-none"
             >
               <option value="all">ทุกภูมิภาค (All Regions)</option>
@@ -540,6 +578,7 @@ async function handleSaveCompanyTypes() {
 
             <select
               v-model="selectedStatus"
+              aria-label="กรองสถานะจังหวัด"
               class="h-9 rounded-lg border border-default bg-default px-3 text-xs text-highlighted focus:border-primary focus:outline-none"
             >
               <option value="all">ทุกสถานะ (All Statuses)</option>
@@ -624,6 +663,7 @@ async function handleSaveCompanyTypes() {
                   <button
                     class="cursor-pointer transition-opacity hover:opacity-80"
                     title="คลิกเพื่อสลับสถานะ"
+                    :disabled="!canManage || Boolean(provincesError)"
                     @click="toggleProvinceStatus(province)"
                   >
                     <UBadge
@@ -646,6 +686,7 @@ async function handleSaveCompanyTypes() {
                       variant="ghost"
                       title="แก้ไขจังหวัด"
                       class="!rounded-full size-7 p-0 flex items-center justify-center cursor-pointer hover:bg-muted/60"
+                      :disabled="!canManage || Boolean(provincesError)"
                       @click="openEditProvinceModal(province)"
                     />
                     <UButton
@@ -656,13 +697,20 @@ async function handleSaveCompanyTypes() {
                       variant="ghost"
                       title="ลบจังหวัด"
                       class="!rounded-full size-7 p-0 flex items-center justify-center cursor-pointer hover:bg-red-500/10"
+                      :disabled="!canManage || Boolean(provincesError)"
                       @click="handleDeleteProvince(province)"
                     />
                   </div>
                 </td>
               </tr>
 
-              <tr v-if="!provincesPending && !provincesData?.items.length">
+              <tr
+                v-if="
+                  !provincesPending &&
+                  !provincesError &&
+                  !provincesData?.items.length
+                "
+              >
                 <td class="py-12 text-center text-muted" colspan="7">
                   <UIcon
                     name="i-lucide-map-pin"
@@ -692,6 +740,18 @@ async function handleSaveCompanyTypes() {
     <!-- TAB 2: COMPANY TYPES (ประเภทสถานประกอบการ)                         -->
     <!-- ================================================================= -->
     <div v-if="activeTab === 'companyTypes'" class="space-y-6">
+      <UAlert
+        v-if="configError"
+        color="error"
+        title="โหลดประเภทสถานประกอบการไม่สำเร็จ"
+        description="ลองโหลดข้อมูลใหม่ก่อนแก้ไขหรือบันทึก"
+      >
+        <template #actions
+          ><UButton
+            label="ลองโหลดประเภทสถานประกอบการใหม่"
+            @click="refreshConfig()"
+        /></template>
+      </UAlert>
       <UCard>
         <template #header>
           <div class="flex items-center justify-between">
@@ -716,6 +776,8 @@ async function handleSaveCompanyTypes() {
           <div class="flex gap-2">
             <UInput
               v-model="newCompanyType"
+              aria-label="ประเภทสถานประกอบการใหม่"
+              :disabled="!canEditCompanyTypes"
               class="flex-1"
               icon="i-lucide-tag"
               placeholder="ระบุประเภทสถานประกอบการ เช่น บริษัทเอกชน (Private Company)..."
@@ -726,6 +788,7 @@ async function handleSaveCompanyTypes() {
               color="primary"
               icon="i-lucide-plus"
               label="เพิ่มประเภท"
+              :disabled="!canEditCompanyTypes"
               size="md"
               @click="addCompanyType"
             />
@@ -760,6 +823,8 @@ async function handleSaveCompanyTypes() {
                   size="xs"
                   variant="ghost"
                   title="ลบประเภทนี้"
+                  :aria-label="`ลบประเภท ${type}`"
+                  :disabled="!canEditCompanyTypes"
                   class="!rounded-full size-7 p-0 flex items-center justify-center cursor-pointer hover:bg-red-500/10"
                   @click="removeCompanyType(idx)"
                 />
@@ -777,6 +842,7 @@ async function handleSaveCompanyTypes() {
               label="บันทึกประเภทสถานประกอบการ"
               size="md"
               :loading="isSavingCompanyTypes"
+              :disabled="!canEditCompanyTypes"
               @click="handleSaveCompanyTypes"
             />
           </div>
@@ -787,10 +853,21 @@ async function handleSaveCompanyTypes() {
     <!-- ================================================================= -->
     <!-- MODAL: ADD / EDIT PROVINCE                                        -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="isProvinceModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      @click="isProvinceModalOpen = false"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isProvinceModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-lg rounded-2xl border border-default bg-default p-6 shadow-2xl space-y-5"
@@ -817,6 +894,7 @@ async function handleSaveCompanyTypes() {
             </div>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -912,6 +990,6 @@ async function handleSaveCompanyTypes() {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
   </div>
 </template>

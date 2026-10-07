@@ -22,10 +22,10 @@ test('Student reference lookups stay page-bounded across filters and manual entr
     page.getByRole('heading', { name: 'เพิ่มข้อมูลนักศึกษาด้วยตัวเอง' })
   ).toBeVisible()
   await expect(
-    page.getByRole('combobox', { name: 'รายวิชาที่ฝึกงาน' })
+    page.getByRole('button', { name: 'รายวิชาที่ฝึกงาน' })
   ).toBeVisible()
   await expect(
-    page.getByRole('combobox', { name: 'รอบ/ภาคการศึกษาฝึกงาน' })
+    page.getByRole('button', { name: 'รอบ/ภาคการศึกษาฝึกงาน' })
   ).toBeVisible()
 
   const expectedPaths = [
@@ -33,7 +33,6 @@ test('Student reference lookups stay page-bounded across filters and manual entr
     '/academic/programs',
     '/academic/courses',
     '/academic/terms',
-    '/evaluation-cycles',
     '/competency-sets'
   ]
   await expect
@@ -58,6 +57,9 @@ test('Student reference lookups stay page-bounded across filters and manual entr
       path
     ).toBe(true)
   }
+  expect(queries.some((entry) => entry.path === '/evaluation-cycles')).toBe(
+    false
+  )
   for (const { path, query } of queries) {
     const pageSize = Number(query.pageSize)
     expect(

@@ -61,6 +61,7 @@ const isDev = computed(
 
 // State
 const loading = ref(false)
+const usersError = ref(false)
 const users = ref<UserItem[]>([])
 const totalUsers = ref(0)
 const page = ref(1)
@@ -192,7 +193,10 @@ const filteredProgramsForForm = computed(() => {
 
 const roleFilterOptions = [
   { value: 'all', label: 'ทุกบทบาท (All Roles)' },
-  { value: 'internshipStaff', label: '💼 เจ้าหน้าที่ฝึกงาน (Internship Staff)' },
+  {
+    value: 'internshipStaff',
+    label: '💼 เจ้าหน้าที่ฝึกงาน (Internship Staff)'
+  },
   { value: 'coordinator', label: '🧑‍🏫 อาจารย์ที่ปรึกษา (Advisor)' },
   { value: 'student', label: '🎓 นักศึกษา (Student)' },
   { value: 'systemAdmin', label: '🛡️ ผู้ดูแลระบบ (System Admin)' }
@@ -202,7 +206,8 @@ const schoolFilterOptions = computed(() => [
   { value: 'all', label: 'ทุกสำนักวิชา (All Schools)' },
   ...schools.value.map((s) => ({
     value: s.id,
-    label: `${s.name.th || s.name.en} ${s.schoolCode ? `(${s.schoolCode})` : ''}`.trim()
+    label:
+      `${s.name.th || s.name.en} ${s.schoolCode ? `(${s.schoolCode})` : ''}`.trim()
   }))
 ])
 
@@ -257,6 +262,7 @@ async function loadAcademic(): Promise<void> {
 
 async function loadUsers(): Promise<void> {
   loading.value = true
+  usersError.value = false
   try {
     const query: Record<string, string | number> = {
       page: page.value,
@@ -280,6 +286,7 @@ async function loadUsers(): Promise<void> {
     users.value = res.items || []
     totalUsers.value = res.meta?.total || 0
   } catch (err) {
+    usersError.value = true
     console.error('Failed to load users:', err)
     toast.add({
       title: 'ข้อผิดพลาด',
@@ -490,6 +497,12 @@ async function submitForm(): Promise<void> {
 async function toggleUserStatus(user: UserItem): Promise<void> {
   const nextStatus = user.status === 'active' ? 'suspended' : 'active'
   const actionLabel = nextStatus === 'active' ? 'เปิดใช้งาน' : 'ระงับการใช้งาน'
+  if (
+    !window.confirm(
+      `ยืนยัน${actionLabel}บัญชี ${user.displayName} (${user.email})?`
+    )
+  )
+    return
 
   try {
     await api(`/users/${user.id}`, {
@@ -927,6 +940,19 @@ onMounted(() => {
               </td>
             </tr>
 
+            <tr v-else-if="usersError">
+              <td colspan="6" class="p-6">
+                <UAlert
+                  color="error"
+                  title="โหลดรายชื่อผู้ใช้งานไม่สำเร็จ"
+                  description="ลองโหลดข้อมูลใหม่"
+                >
+                  <template #actions
+                    ><UButton label="ลองโหลดผู้ใช้งานใหม่" @click="loadUsers"
+                  /></template>
+                </UAlert>
+              </td>
+            </tr>
             <tr
               v-else-if="users.length === 0"
               class="text-center py-12 text-muted"

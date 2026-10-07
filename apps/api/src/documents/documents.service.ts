@@ -253,49 +253,52 @@ export class DocumentsService {
     }
 
     try {
-      const asset = await runWithTransaction(this.assets.db, async (session) => {
-        const [created] = await this.assets.create(
-          [
+      const asset = await runWithTransaction(
+        this.assets.db,
+        async (session) => {
+          const [created] = await this.assets.create(
+            [
+              {
+                key,
+                assetType: input.assetType,
+                originalName,
+                ...(fontFamily ? { fontFamily } : {}),
+                contentType: detected.contentType,
+                size: file.buffer.byteLength,
+                sha256,
+                rightsBasis,
+                rightsConfirmedBy: actor.id,
+                rightsConfirmedAt: new Date(),
+                status: 'active'
+              }
+            ],
+            session ? { session } : {}
+          )
+          if (!created) throw new Error('DOCUMENT_ASSET_RECORD_CREATE_FAILED')
+          await this.auditService.record(
             {
-              key,
-              assetType: input.assetType,
-              originalName,
-              ...(fontFamily ? { fontFamily } : {}),
-              contentType: detected.contentType,
-              size: file.buffer.byteLength,
-              sha256,
-              rightsBasis,
-              rightsConfirmedBy: actor.id,
-              rightsConfirmedAt: new Date(),
-              status: 'active'
-            }
-          ],
-          session ? { session } : {}
-        )
-        if (!created) throw new Error('DOCUMENT_ASSET_RECORD_CREATE_FAILED')
-        await this.auditService.record(
-          {
-            requestId,
-            actorId: actor.id,
-            actorEmail: actor.email,
-            action: 'documents.asset_uploaded',
-            route: 'POST /api/v2/document-assets',
-            method: 'POST',
-            resourceScopes: [{ tenant: true }],
-            metadata: {
-              assetId: created.id,
-              assetType: input.assetType,
-              ...(fontFamily ? { fontFamily } : {}),
-              contentType: detected.contentType,
-              size: file.buffer.byteLength,
-              sha256,
-              rightsBasis
-            }
-          },
-          session
-        )
-        return created
-      })
+              requestId,
+              actorId: actor.id,
+              actorEmail: actor.email,
+              action: 'documents.asset_uploaded',
+              route: 'POST /api/v2/document-assets',
+              method: 'POST',
+              resourceScopes: [{ tenant: true }],
+              metadata: {
+                assetId: created.id,
+                assetType: input.assetType,
+                ...(fontFamily ? { fontFamily } : {}),
+                contentType: detected.contentType,
+                size: file.buffer.byteLength,
+                sha256,
+                rightsBasis
+              }
+            },
+            session
+          )
+          return created
+        }
+      )
       if (!asset) throw new Error('DOCUMENT_ASSET_TRANSACTION_EMPTY')
       return asset.toJSON()
     } catch (error: unknown) {
@@ -452,39 +455,42 @@ export class DocumentsService {
       input.schemaVersion
     )
     try {
-      const result = await runWithTransaction(this.templates.db, async (session) => {
-        const [template] = await this.templates.create(
-          [
-            {
-              code: input.code,
-              name: input.name,
-              documentType: input.documentType,
-              status: 'active'
-            }
-          ],
-          session ? { session } : {}
-        )
-        if (!template)
-          throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
-        const [version] = await this.versions.create(
-          [
-            {
-              templateId: template.id,
-              versionNumber: 1,
-              schemaVersion: input.schemaVersion,
-              revision: 1,
-              status: 'draft',
-              canonicalJson: input.canonicalJson,
-              placeholders: [...input.placeholders],
-              fontAssetKeys: [...input.fontAssetKeys]
-            }
-          ],
-          session ? { session } : {}
-        )
-        if (!version)
-          throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        return { template, version }
-      })
+      const result = await runWithTransaction(
+        this.templates.db,
+        async (session) => {
+          const [template] = await this.templates.create(
+            [
+              {
+                code: input.code,
+                name: input.name,
+                documentType: input.documentType,
+                status: 'active'
+              }
+            ],
+            session ? { session } : {}
+          )
+          if (!template)
+            throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
+          const [version] = await this.versions.create(
+            [
+              {
+                templateId: template.id,
+                versionNumber: 1,
+                schemaVersion: input.schemaVersion,
+                revision: 1,
+                status: 'draft',
+                canonicalJson: input.canonicalJson,
+                placeholders: [...input.placeholders],
+                fontAssetKeys: [...input.fontAssetKeys]
+              }
+            ],
+            session ? { session } : {}
+          )
+          if (!version)
+            throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+          return { template, version }
+        }
+      )
       if (!result)
         throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
       return {
@@ -673,37 +679,40 @@ export class DocumentsService {
       input.schemaVersion
     )
     try {
-      const created = await runWithTransaction(this.templates.db, async (session) => {
-        const template = await this.templates
-          .findOne({ _id: templateId, status: 'active' })
-          .session(session ?? null)
-          .exec()
-        if (!template)
-          throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
-        const latest = await this.versions
-          .findOne({ templateId })
-          .sort({ versionNumber: -1 })
-          .session(session ?? null)
-          .exec()
-        const [version] = await this.versions.create(
-          [
-            {
-              templateId,
-              versionNumber: (latest?.versionNumber ?? 0) + 1,
-              schemaVersion: input.schemaVersion,
-              revision: 1,
-              status: 'draft',
-              canonicalJson: input.canonicalJson,
-              placeholders: [...input.placeholders],
-              fontAssetKeys: [...input.fontAssetKeys]
-            }
-          ],
-          session ? { session } : {}
-        )
-        if (!version)
-          throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        return version
-      })
+      const created = await runWithTransaction(
+        this.templates.db,
+        async (session) => {
+          const template = await this.templates
+            .findOne({ _id: templateId, status: 'active' })
+            .session(session ?? null)
+            .exec()
+          if (!template)
+            throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+          const latest = await this.versions
+            .findOne({ templateId })
+            .sort({ versionNumber: -1 })
+            .session(session ?? null)
+            .exec()
+          const [version] = await this.versions.create(
+            [
+              {
+                templateId,
+                versionNumber: (latest?.versionNumber ?? 0) + 1,
+                schemaVersion: input.schemaVersion,
+                revision: 1,
+                status: 'draft',
+                canonicalJson: input.canonicalJson,
+                placeholders: [...input.placeholders],
+                fontAssetKeys: [...input.fontAssetKeys]
+              }
+            ],
+            session ? { session } : {}
+          )
+          if (!version)
+            throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+          return version
+        }
+      )
       if (!created)
         throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
       return created.toJSON()

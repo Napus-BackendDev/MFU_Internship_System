@@ -16,10 +16,8 @@ test('Evaluation directory filters server-side and loads relations only for visi
 
   await page.goto('/app/evaluations')
   await page.waitForLoadState('networkidle')
-  await expect(page.getByText('Example Student')).toBeVisible()
-  const studentRow = page
-    .getByRole('row')
-    .filter({ hasText: 'Example Student' })
+  await expect(page.getByText('นักศึกษาทดสอบ')).toBeVisible()
+  const studentRow = page.getByRole('row').filter({ hasText: 'นักศึกษาทดสอบ' })
   await expect(studentRow.getByText('บริษัททดสอบ')).toBeVisible()
 
   const initialResponse = await request.get(
@@ -54,7 +52,7 @@ test('Evaluation directory filters server-side and loads relations only for visi
   )
   await search.fill('not-a-match')
   await expect(page.getByText('พบ 0 รายการตามตัวกรอง')).toBeVisible()
-  await expect(page.getByText('Example Student')).toHaveCount(0)
+  await expect(page.getByText('นักศึกษาทดสอบ')).toHaveCount(0)
 
   const noMatchResponse = await request.get(
     'http://127.0.0.1:18081/__test/evaluation-directory-queries'
@@ -69,11 +67,12 @@ test('Evaluation directory filters server-side and loads relations only for visi
   ).toBe(true)
 
   await search.fill('Example Student')
-  await expect(page.getByText('Example Student')).toBeVisible()
+  await expect(page.getByText('นักศึกษาทดสอบ')).toBeVisible()
+  await page.getByRole('button', { name: 'สถานประกอบการ', exact: true }).click()
   await page
-    .getByRole('combobox', { name: 'สถานประกอบการ' })
-    .selectOption('64f000000000000000000020')
-  await expect(page.getByText('Example Student')).toBeVisible()
+    .getByRole('button', { name: 'บริษัททดสอบ (Test Company)', exact: true })
+    .click()
+  await expect(page.getByText('นักศึกษาทดสอบ')).toBeVisible()
 
   const filteredResponse = await request.get(
     'http://127.0.0.1:18081/__test/evaluation-directory-queries'

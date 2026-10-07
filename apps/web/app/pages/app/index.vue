@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import type {
-  EnrichedStudentRow
-} from '~/components/AdminStudentDirectory.vue'
+import type { EnrichedStudentRow } from '~/components/AdminStudentDirectory.vue'
 import {
   buildStudentEvaluationResult,
   formatCategoryAverage,
@@ -9,7 +7,6 @@ import {
   type StudentEvaluationRecord
 } from '~/utils/student-evaluation-result'
 import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
-import { loadItemsOrEmpty } from '~/utils/load-items-or-empty'
 import { selectCurrentStudentAssignment } from '~/utils/student-assignment'
 import {
   createStudentDocumentIdempotencyKey,
@@ -791,11 +788,11 @@ const activeDocContext = computed<TargetStudentDocContext>(() => {
     nameTh:
       typeof profile?.name === 'string'
         ? profile.name
-        : profile?.name?.th ?? profile?.name?.en ?? '-',
+        : (profile?.name?.th ?? profile?.name?.en ?? '-'),
     nameEn:
       typeof profile?.name === 'string'
         ? profile.name
-        : profile?.name?.en ?? profile?.name?.th ?? '-',
+        : (profile?.name?.en ?? profile?.name?.th ?? '-'),
     email: profile?.email ?? '-',
     schoolTh: school?.name?.th ?? '-',
     schoolEn: school?.name?.en ?? '-',
@@ -1393,9 +1390,9 @@ const _adminCards = computed(() => [
                 {{
                   typeof studentProfile?.name === 'string'
                     ? studentProfile?.name
-                    : studentProfile?.name?.th ??
+                    : (studentProfile?.name?.th ??
                       studentProfile?.name?.en ??
-                      '-'
+                      '-')
                 }}
               </h1>
               <p class="text-sm text-muted">
@@ -1809,6 +1806,7 @@ const _adminCards = computed(() => [
             </div>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -2120,6 +2118,7 @@ const _adminCards = computed(() => [
               @click="triggerPrint"
             />
             <UButton
+              aria-label="ปิดหน้าต่าง"
               color="neutral"
               icon="i-lucide-x"
               size="xs"
@@ -2328,7 +2327,8 @@ const _adminCards = computed(() => [
               class="p-4 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1.5 ml-6"
             >
               <p>
-                <strong>ชื่อ-สกุล:</strong> {{ activeDocContext.nameTh || activeDocContext.nameEn }}
+                <strong>ชื่อ-สกุล:</strong>
+                {{ activeDocContext.nameTh || activeDocContext.nameEn }}
               </p>
               <p>
                 <strong>รหัสนักศึกษา:</strong> {{ activeDocContext.studentId }}

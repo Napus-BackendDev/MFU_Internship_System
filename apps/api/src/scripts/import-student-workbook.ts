@@ -188,7 +188,8 @@ async function resolveRows(
         const matchedProgram = programMatches[0]
         program = matchedProgram
         school = schools.find(
-          (candidate) => String(candidate._id) === String(matchedProgram.schoolId)
+          (candidate) =>
+            String(candidate._id) === String(matchedProgram.schoolId)
         )
       }
     }

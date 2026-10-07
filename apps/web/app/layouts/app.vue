@@ -8,6 +8,7 @@ interface AppNavigationItem extends NavigationMenuItem {
 
 const auth = useAuthStore()
 const route = useRoute()
+const localePath = useLocalePath()
 const runtimeConfig = useRuntimeConfig()
 
 const sidebarCollapsed = ref(false)
@@ -121,7 +122,10 @@ const links = computed<NavigationMenuItem[]>(() => {
   if (isStudent.value) {
     return allNavigationItems
       .filter((item) => item.allowedRoles?.includes('student'))
-      .map(({ allowedRoles: _a, ...item }) => item)
+      .map(({ allowedRoles: _a, ...item }) => ({
+        ...item,
+        to: typeof item.to === 'string' ? localePath(item.to) : item.to
+      }))
   }
 
   // Filter items based on actor's assigned roles
@@ -130,7 +134,10 @@ const links = computed<NavigationMenuItem[]>(() => {
       if (!item.allowedRoles || item.allowedRoles.length === 0) return true
       return item.allowedRoles.some((r) => currentRoles.includes(r))
     })
-    .map(({ allowedRoles: _a, ...item }) => item)
+    .map(({ allowedRoles: _a, ...item }) => ({
+      ...item,
+      to: typeof item.to === 'string' ? localePath(item.to) : item.to
+    }))
 })
 
 const canManageAcademic = computed(() =>
@@ -228,7 +235,7 @@ const pageTitle = computed(() => {
 })
 
 const currentPageInfo = computed<PageHeaderMeta>(() => {
-  const currentPath = route.path
+  const currentPath = route.path.replace(/^\/en(?=\/|$)/, '')
 
   if (isStudent.value && currentPath === '/app') {
     return {
@@ -281,7 +288,7 @@ async function signOut(): Promise<void> {
 
   try {
     await auth.logout()
-    await navigateTo('/login')
+    await navigateTo(localePath('/login'))
   } finally {
     signingOut.value = false
   }
@@ -341,7 +348,7 @@ async function signOut(): Promise<void> {
                 ? 'max-w-0 opacity-0 pointer-events-none'
                 : 'max-w-[190px] opacity-100 flex-1'
             "
-            to="/app"
+            :to="$localePath('/app')"
           >
             <MfuBrandMark alt="" class="transition-transform duration-300" />
             <span class="min-w-0 whitespace-nowrap">
@@ -418,7 +425,7 @@ async function signOut(): Promise<void> {
               icon="i-lucide-life-buoy"
               :label="collapsed ? undefined : 'ช่วยเหลือและสนับสนุน'"
               size="md"
-              to="/app/support"
+              :to="$localePath('/app/support')"
               variant="ghost"
             />
           </UTooltip>
@@ -445,7 +452,7 @@ async function signOut(): Promise<void> {
               icon="i-lucide-settings"
               :label="collapsed ? undefined : 'ตั้งค่าระบบ'"
               size="md"
-              to="/app/settings/general"
+              :to="$localePath('/app/settings/general')"
               variant="ghost"
             />
           </UTooltip>
@@ -546,11 +553,17 @@ async function signOut(): Promise<void> {
           left: 'min-w-0 flex-1'
         }"
       >
-        <template #title>
+        <template #toggle>
+          <UDashboardSidebarToggle
+            aria-label="เปิดเมนูหลัก"
+            class="lg:hidden"
+          />
+        </template>
+        <template #left>
           <div class="flex min-w-0 items-center gap-3">
-            <h1 class="shrink-0 text-base font-bold text-highlighted">
+            <span class="min-w-0 truncate text-base font-bold text-highlighted">
               {{ currentPageInfo.title }}
-            </h1>
+            </span>
             <span
               v-if="currentPageInfo.description"
               class="hidden truncate text-xs font-normal text-muted lg:inline-block border-l border-default pl-3"

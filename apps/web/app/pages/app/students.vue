@@ -209,17 +209,9 @@ watch(selectedSchool, () => {
   page.value = 1
 })
 
-watch(
-  [
-    search,
-    pageSize,
-    selectedProgram,
-    selectedEvaluationStatus
-  ],
-  () => {
-    page.value = 1
-  }
-)
+watch([search, pageSize, selectedProgram, selectedEvaluationStatus], () => {
+  page.value = 1
+})
 
 function resetFilters(): void {
   search.value = ''
@@ -875,7 +867,10 @@ const editSemesterSelectOptions = computed(() => {
     { value: '', label: '-- เลือกภาคการศึกษา --' },
     { value: 'ภาคการศึกษาต้น', label: 'ภาคการศึกษาที่ 1 (ภาคการศึกษาต้น)' },
     { value: 'ภาคการศึกษาปลาย', label: 'ภาคการศึกษาที่ 2 (ภาคการศึกษาปลาย)' },
-    { value: 'ภาคการศึกษาฤดูร้อน', label: 'ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)' }
+    {
+      value: 'ภาคการศึกษาฤดูร้อน',
+      label: 'ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)'
+    }
   ]
   if (
     editForm.value.semester &&
@@ -1582,12 +1577,17 @@ async function handleDeleteStudent(student: Student) {
       (id) => id !== student.id && id !== studentIdentifier
     )
     await refresh()
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const failure = error as {
+      data?: { code?: string; message?: { code?: string } }
+      response?: { _data?: { code?: string } }
+      message?: string
+    }
     const errorCode =
-      error?.data?.code ||
-      error?.response?._data?.code ||
-      error?.data?.message?.code ||
-      error?.message
+      failure?.data?.code ||
+      failure?.response?._data?.code ||
+      failure?.data?.message?.code ||
+      failure?.message
     let description = 'ไม่สามารถลบข้อมูลนักศึกษาได้'
     if (errorCode === 'STUDENT_HAS_OPEN_PLACEMENT') {
       description =
@@ -1623,7 +1623,7 @@ const sendEmailForm = ref({
 
 const sendEmailSuccessData = ref<{
   success: boolean
-  status: 'queued' | 'processing' | 'completed' | 'partial' | 'sent'
+  status: 'queued' | 'processing' | 'completed' | 'partial' | 'sent' | 'failed' | 'uncertain'
   assignmentId: string
   invitationId: string
   campaignId: string
@@ -1633,6 +1633,7 @@ const sendEmailSuccessData = ref<{
   studentName: string
   deadlineAt: string
   pin?: string
+  error?: string
 } | null>(null)
 
 // Modal Mode: 'single' | 'bulk'
@@ -1905,7 +1906,7 @@ async function handleSendEvaluationEmailSubmit() {
   try {
     const result = await api<{
       success: boolean
-      status: 'queued' | 'processing' | 'completed' | 'partial' | 'sent'
+      status: 'queued' | 'processing' | 'completed' | 'partial' | 'sent' | 'failed' | 'uncertain'
       assignmentId: string
       invitationId: string
       campaignId: string
@@ -1915,6 +1916,7 @@ async function handleSendEvaluationEmailSubmit() {
       studentName: string
       deadlineAt: string
       pin?: string
+      error?: string
     }>('/campaigns/send-student-invitation', {
       method: 'POST',
       headers: { 'idempotency-key': sendInvitationIdempotencyKey.value },
@@ -1930,8 +1932,10 @@ async function handleSendEvaluationEmailSubmit() {
 
     const safeInvitationPath = toSafeInvitationPath(result.invitationUrl)
     const fullInvitationUrl = safeInvitationPath
-      ? (import.meta.client ? `${window.location.origin}${safeInvitationPath}` : safeInvitationPath)
-      : (result.invitationUrl || '')
+      ? import.meta.client
+        ? `${window.location.origin}${safeInvitationPath}`
+        : safeInvitationPath
+      : result.invitationUrl || ''
 
     result.invitationUrl = fullInvitationUrl
 
@@ -1943,13 +1947,34 @@ async function handleSendEvaluationEmailSubmit() {
 
     sendEmailSuccessData.value = result
     const isSent = result.status === 'sent' || result.status === 'completed'
-    toast.add({
-      title: isSent ? 'ส่งคำเชิญเรียบร้อยแล้ว' : 'คิวส่งคำเชิญแล้ว',
-      description: isSent
-        ? `จัดส่งงานไปยัง ${result.recipientEmail} แล้ว`
-        : `คิวส่งงานไปยัง ${result.recipientEmail} แล้ว ติดตามผลได้จากสถานะ Delivery`,
-      color: isSent ? 'success' : 'info'
-    })
+    const isFailed =
+      result.status === 'failed' ||
+      (!result.success && result.status !== 'queued')
+
+    if (isSent) {
+      toast.add({
+        title: 'ส่งคำเชิญเรียบร้อยแล้ว',
+        description: `จัดส่งอีเมลไปยัง ${result.recipientEmail} แล้ว`,
+        color: 'success',
+        icon: 'i-lucide-check-circle-2'
+      })
+    } else if (isFailed) {
+      const errDetail =
+        result.error || 'เซิร์ฟเวอร์ SMTP ไม่ตอบสนองหรือยังไม่ได้ตั้งค่า'
+      toast.add({
+        title: 'สร้างคำเชิญแล้ว (ส่งอีเมลไม่สำเร็จ)',
+        description: `ไม่สามารถส่งอีเมลไปยัง ${result.recipientEmail} ได้ (${errDetail}) กรุณาคัดลอกลิงก์และรหัส PIN จากหน้าต่างนี้เพื่อส่งให้ผู้ประเมินด้วยตนเอง`,
+        color: 'warning',
+        icon: 'i-lucide-alert-triangle'
+      })
+    } else {
+      toast.add({
+        title: 'เข้าคิวส่งคำเชิญแล้ว',
+        description: `คิวส่งงานไปยัง ${result.recipientEmail} แล้ว ติดตามผลได้จากสถานะ Delivery`,
+        color: 'info',
+        icon: 'i-lucide-clock'
+      })
+    }
     if (!safeInvitationPath) {
       toast.add({
         title: 'ไม่แสดงลิงก์คำเชิญ',
@@ -2012,6 +2037,7 @@ async function handleBulkSendEvaluationEmailSubmit() {
       const idempotencyKey = crypto.randomUUID()
       const res = await api<{
         success: boolean
+        status: 'queued' | 'processing' | 'completed' | 'partial' | 'sent' | 'failed' | 'uncertain'
         assignmentId: string
         invitationId: string
         invitationUrl: string
@@ -2019,6 +2045,7 @@ async function handleBulkSendEvaluationEmailSubmit() {
         studentName: string
         deadlineAt: string
         pin?: string
+        error?: string
       }>('/campaigns/send-student-invitation', {
         method: 'POST',
         headers: { 'idempotency-key': idempotencyKey },
@@ -2038,7 +2065,12 @@ async function handleBulkSendEvaluationEmailSubmit() {
           ? `${window.location.origin}${finalUrl}`
           : finalUrl
 
-      bulkSendProgress.value.successCount++
+      const isDelivered = res.status !== 'failed' && (res.success || res.status === 'queued')
+      if (isDelivered) {
+        bulkSendProgress.value.successCount++
+      } else {
+        bulkSendProgress.value.failedCount++
+      }
       itemsResults.push({
         studentId: st.id,
         studentCode: st.studentId,
@@ -2046,9 +2078,10 @@ async function handleBulkSendEvaluationEmailSubmit() {
         email: ev.email.trim(),
         evaluatorName: ev.name.trim(),
         company: st.company || '-',
-        success: true,
+        success: isDelivered,
         invitationUrl: fullUrl,
-        pin: res.pin
+        pin: res.pin,
+        ...(!isDelivered ? { error: res.error || 'ส่งอีเมลไม่สำเร็จ' } : {})
       })
     } catch (err: unknown) {
       bulkSendProgress.value.failedCount++
@@ -2483,7 +2516,9 @@ function handleModalBackdropClick() {
                       {{ getProgramDisplay(student.programId, student) }}
                     </p>
                   </div>
-                  <div class="pt-0.5 flex items-center gap-1 text-[11px] text-muted">
+                  <div
+                    class="pt-0.5 flex items-center gap-1 text-[11px] text-muted"
+                  >
                     <UIcon
                       :name="getStudentCourseTrack(student).icon"
                       class="size-3 text-muted shrink-0"
@@ -2496,7 +2531,9 @@ function handleModalBackdropClick() {
               <!-- 4. ปี / ภาคเรียน -->
               <td class="py-3 px-4">
                 <div class="space-y-1">
-                  <span class="font-mono text-xs font-medium text-highlighted block">
+                  <span
+                    class="font-mono text-xs font-medium text-highlighted block"
+                  >
                     ปี {{ getAcademicYearDisplay(student) }}
                   </span>
                   <p class="text-[11px] text-muted">
@@ -2645,10 +2682,21 @@ function handleModalBackdropClick() {
     <!-- ================================================================= -->
     <!-- MODAL 1: MANUAL ADD STUDENT (เพิ่มข้อมูลด้วยตัวเอง)                -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="isManualModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      @click="isManualModalOpen = false"
+      :open="true"
+      title="เพิ่มข้อมูลนักศึกษาด้วยตัวเอง"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-5xl lg:max-w-6xl xl:max-w-7xl max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isManualModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-5xl lg:max-w-6xl xl:max-w-7xl rounded-2xl sm:rounded-3xl border border-default bg-default p-6 sm:p-8 shadow-2xl space-y-6 max-h-[92vh] overflow-y-auto"
@@ -2674,6 +2722,7 @@ function handleModalBackdropClick() {
             </div>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -2934,15 +2983,26 @@ function handleModalBackdropClick() {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
 
     <!-- ================================================================= -->
     <!-- MODAL 2: EXCEL IMPORT (นำเข้าข้อมูลผ่านไฟล์ Excel)                 -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="isExcelModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      @click="!isExcelImporting && (isExcelModalOpen = false)"
+      :open="true"
+      title="นำเข้าข้อมูลนักศึกษาผ่าน Excel (.xlsx / .csv)"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-5xl lg:max-w-6xl xl:max-w-7xl max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            !isExcelImporting && (isExcelModalOpen = false)
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-5xl lg:max-w-6xl xl:max-w-7xl rounded-2xl sm:rounded-3xl border border-default bg-default p-6 sm:p-8 shadow-2xl space-y-6 max-h-[92vh] overflow-y-auto"
@@ -2968,6 +3028,7 @@ function handleModalBackdropClick() {
             </div>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -3039,7 +3100,9 @@ function handleModalBackdropClick() {
                 name="i-lucide-file-check"
                 class="size-8 text-emerald-500 mb-1.5"
               />
-              <p class="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+              <p
+                class="text-xs font-bold text-emerald-600 dark:text-emerald-400"
+              >
                 พร้อมนำเข้าข้อมูล ({{ parsedRows.length }} รายการ)
               </p>
               <p class="text-[11px] text-muted mt-0.5">
@@ -3097,16 +3160,22 @@ function handleModalBackdropClick() {
             class="overflow-x-auto max-h-64 border border-default rounded-xl"
           >
             <table class="w-full text-left text-xs border-collapse">
-              <thead class="bg-default sticky top-0 z-10 border-b border-default font-semibold text-highlighted shadow-xs">
+              <thead
+                class="bg-default sticky top-0 z-10 border-b border-default font-semibold text-highlighted shadow-xs"
+              >
                 <tr>
                   <th class="p-2.5 w-10 text-center bg-default">เลือก</th>
                   <th class="p-2.5 w-10 text-center bg-default">#</th>
                   <th class="p-2.5 min-w-[100px] bg-default">รหัส</th>
                   <th class="p-2.5 min-w-[150px] bg-default">ชื่อ-นามสกุล</th>
                   <th class="p-2.5 min-w-[150px] bg-default">อีเมล</th>
-                  <th class="p-2.5 min-w-[160px] bg-default">สำนักวิชา/หลักสูตร</th>
+                  <th class="p-2.5 min-w-[160px] bg-default">
+                    สำนักวิชา/หลักสูตร
+                  </th>
                   <th class="p-2.5 min-w-[120px] bg-default">เทอม / วิชา</th>
-                  <th class="p-2.5 min-w-[160px] bg-default">สถานประกอบการ / จังหวัด</th>
+                  <th class="p-2.5 min-w-[160px] bg-default">
+                    สถานประกอบการ / จังหวัด
+                  </th>
                   <th class="p-2.5 text-center w-24 bg-default">สถานะ</th>
                 </tr>
               </thead>
@@ -3148,7 +3217,9 @@ function handleModalBackdropClick() {
                       <span class="block text-highlighted">{{
                         typeof row.student?.name === 'string'
                           ? row.student.name
-                          : row.student?.name?.th || row.student?.name?.en || '-'
+                          : row.student?.name?.th ||
+                            row.student?.name?.en ||
+                            '-'
                       }}</span>
                     </td>
                     <td class="p-2 font-mono text-muted">
@@ -3251,7 +3322,10 @@ function handleModalBackdropClick() {
                     :key="`${row.id}:details`"
                     class="border-b border-default bg-muted/10"
                   >
-                    <td colspan="9" class="px-4 pb-3 pt-1 text-[11px] text-muted">
+                    <td
+                      colspan="9"
+                      class="px-4 pb-3 pt-1 text-[11px] text-muted"
+                    >
                       <p
                         v-for="issue in row.issues"
                         :key="issue.code"
@@ -3315,15 +3389,26 @@ function handleModalBackdropClick() {
           />
         </div>
       </div>
-    </div>
+    </AppModal>
 
     <!-- ================================================================= -->
     <!-- MODAL 3: EDIT STUDENT (แก้ไขข้อมูลนักศึกษา)                        -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="isEditModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      @click="isEditModalOpen = false"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-5xl lg:max-w-6xl xl:max-w-7xl max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isEditModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-5xl lg:max-w-6xl xl:max-w-7xl rounded-2xl sm:rounded-3xl border border-default bg-default p-6 sm:p-8 shadow-2xl space-y-6 max-h-[92vh] overflow-y-auto"
@@ -3352,6 +3437,7 @@ function handleModalBackdropClick() {
             </div>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -3374,9 +3460,7 @@ function handleModalBackdropClick() {
                   name="i-lucide-building-2"
                   class="size-4.5 text-primary"
                 />
-                <span
-                  >ข้อมูลสถานประกอบการ (Internship & Workplace Info)</span
-                >
+                <span>ข้อมูลสถานประกอบการ (Internship & Workplace Info)</span>
               </div>
 
               <!-- 1. สถานประกอบการ -->
@@ -3662,15 +3746,33 @@ function handleModalBackdropClick() {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
 
     <!-- ================================================================= -->
     <!-- MODAL 4: SEND EVALUATION EMAIL (ส่งอีเมลแบบประเมินให้นักศึกษา)     -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="isSendEmailModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
-      @click="handleModalBackdropClick"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content: [
+          'w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto',
+          (isSendingEvaluationEmail && sendEmailModalMode === 'single') ||
+          sendEmailSuccessData
+            ? 'max-w-md sm:max-w-lg'
+            : bulkSendSuccessData
+              ? 'max-w-4xl'
+              : 'max-w-[1440px]'
+        ].join(' ')
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            handleModalBackdropClick()
+          }
+        }
+      "
     >
       <div
         class="w-full rounded-2xl border border-default bg-elevated shadow-2xl overflow-hidden flex flex-col max-h-[94vh] transition-all duration-300"
@@ -3739,6 +3841,7 @@ function handleModalBackdropClick() {
             </div>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -3798,6 +3901,7 @@ function handleModalBackdropClick() {
           <!-- Top 'X' Close Button -->
           <div class="flex justify-end -mt-2 -mr-2">
             <UButton
+              aria-label="ปิดหน้าต่าง"
               color="neutral"
               icon="i-lucide-x"
               size="sm"
@@ -3806,8 +3910,9 @@ function handleModalBackdropClick() {
             />
           </div>
 
-          <!-- Animated Green Checkmark Badge -->
+          <!-- Header Badge Icon: Green Check if sent, Amber Triangle if email failed but link ready, Blue Clock if queued -->
           <div
+            v-if="sendEmailSuccessData.status === 'sent' || sendEmailSuccessData.status === 'completed'"
             class="relative size-20 mx-auto flex items-center justify-center"
           >
             <div
@@ -3819,6 +3924,26 @@ function handleModalBackdropClick() {
               <UIcon name="i-lucide-check-circle-2" class="size-10" />
             </div>
           </div>
+          <div
+            v-else-if="sendEmailSuccessData.status === 'failed' || (!sendEmailSuccessData.success && sendEmailSuccessData.status !== 'queued')"
+            class="relative size-20 mx-auto flex items-center justify-center"
+          >
+            <div
+              class="relative grid size-20 place-items-center rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 shadow-lg shadow-amber-500/10"
+            >
+              <UIcon name="i-lucide-alert-triangle" class="size-10" />
+            </div>
+          </div>
+          <div
+            v-else
+            class="relative size-20 mx-auto flex items-center justify-center"
+          >
+            <div
+              class="relative grid size-20 place-items-center rounded-full bg-blue-500/20 text-blue-600 dark:text-blue-400 shadow-lg shadow-blue-500/10"
+            >
+              <UIcon name="i-lucide-clock" class="size-10" />
+            </div>
+          </div>
 
           <!-- Title and Description -->
           <div class="space-y-1.5">
@@ -3827,10 +3952,18 @@ function handleModalBackdropClick() {
                 sendEmailSuccessData.status === 'sent' ||
                 sendEmailSuccessData.status === 'completed'
                   ? 'ส่งคำเชิญเรียบร้อยแล้ว'
-                  : 'เข้าคิวส่งคำเชิญแล้ว'
+                  : sendEmailSuccessData.status === 'failed' || (!sendEmailSuccessData.success && sendEmailSuccessData.status !== 'queued')
+                    ? 'สร้างคำเชิญแล้ว (ส่งอีเมลไม่สำเร็จ)'
+                    : 'เข้าคิวส่งคำเชิญแล้ว'
               }}
             </h3>
-            <p class="text-xs text-muted max-w-md mx-auto leading-relaxed">
+            <p
+              v-if="sendEmailSuccessData.status === 'failed' || (!sendEmailSuccessData.success && sendEmailSuccessData.status !== 'queued')"
+              class="text-xs text-amber-600 dark:text-amber-400 max-w-md mx-auto leading-relaxed"
+            >
+              ระบบไม่สามารถส่งอีเมลไปยัง <strong class="font-mono">{{ sendEmailSuccessData.recipientEmail }}</strong> ได้เนื่องจากเซิร์ฟเวอร์ SMTP ไม่ตอบสนองหรือไม่ได้เชื่อมต่อ แต่คุณสามารถ<strong>คัดลอกลิงก์และรหัส PIN ด้านล่าง</strong>นี้เพื่อส่งให้ผู้ประเมินได้โดยตรง
+            </p>
+            <p v-else class="text-xs text-muted max-w-md mx-auto leading-relaxed">
               {{
                 sendEmailSuccessData.status === 'sent' ||
                 sendEmailSuccessData.status === 'completed'
@@ -3937,7 +4070,7 @@ function handleModalBackdropClick() {
                 size="xs"
                 icon="i-lucide-inbox"
                 label="ดูประวัติในหน้าการสื่อสาร"
-                to="/app/correspondence"
+                :to="$localePath('/app/correspondence')"
                 @click="finishAndCloseSendModal"
               />
             </div>
@@ -4099,7 +4232,7 @@ function handleModalBackdropClick() {
               label="ดูประวัติในหน้าการสื่อสาร"
               size="md"
               variant="outline"
-              to="/app/correspondence"
+              :to="$localePath('/app/correspondence')"
               @click="finishAndCloseSendModal"
             />
             <UButton
@@ -4200,7 +4333,7 @@ function handleModalBackdropClick() {
                 />
                 <p>ยังไม่มีแบบประเมินในระบบ</p>
                 <NuxtLink
-                  to="/app/evaluations/forms"
+                  :to="$localePath('/app/evaluations/forms')"
                   class="text-primary hover:underline block"
                 >
                   คลิกเพื่อไปสร้างแบบประเมิน
@@ -4676,7 +4809,7 @@ function handleModalBackdropClick() {
 
                 <!-- Quick link to Settings -->
                 <UButton
-                  to="/app/settings/email"
+                  :to="$localePath('/app/settings/email')"
                   target="_blank"
                   color="neutral"
                   variant="outline"
@@ -4853,7 +4986,7 @@ function handleModalBackdropClick() {
           </div>
         </div>
       </div>
-    </div>
+    </AppModal>
 
     <!-- Datalist for Province Auto-complete -->
     <datalist id="province-suggestions">

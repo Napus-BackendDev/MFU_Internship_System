@@ -222,10 +222,15 @@ function showTemplateApiError(error: unknown): void {
       : typeof error === 'object' && error !== null && 'status' in error
         ? Number(error.status)
         : undefined
-  const errorObj = error as { data?: { error?: { message?: string; code?: string } }; message?: string }
+  const errorObj = error as {
+    data?: { error?: { message?: string; code?: string } }
+    message?: string
+  }
   const detailMessage =
     errorObj?.data?.error?.message ||
-    (errorObj?.data?.error?.code ? `รหัสข้อผิดพลาด: ${errorObj.data.error.code}` : undefined)
+    (errorObj?.data?.error?.code
+      ? `รหัสข้อผิดพลาด: ${errorObj.data.error.code}`
+      : undefined)
 
   const description =
     statusCode === 403
@@ -303,7 +308,9 @@ function mapApiTemplate(
       metadata.bgOpacity >= 0 &&
       metadata.bgOpacity <= 100
         ? metadata.bgOpacity
-        : (inferredDocType === 'certificate' ? 15 : 10),
+        : inferredDocType === 'certificate'
+          ? 15
+          : 10,
     elements: []
   }
 }
@@ -1383,8 +1390,7 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
 
   if (!doc.versionId) {
     const isCert =
-      doc.docType === 'certificate' ||
-      doc.code?.toUpperCase().includes('CERT')
+      doc.docType === 'certificate' || doc.code?.toUpperCase().includes('CERT')
     activeEditingDoc.value = {
       ...doc,
       canvasWidth: isCert ? 1024 : 794,
@@ -2507,8 +2513,7 @@ function handleStudioBgUpload(event: Event) {
           </div>
 
           <div class="flex items-center gap-1.5">
-            <label
-              class="text-xs font-semibold text-muted whitespace-nowrap"
+            <label class="text-xs font-semibold text-muted whitespace-nowrap"
               >สถานะ:</label
             >
             <SearchableSelect
@@ -2571,22 +2576,26 @@ function handleStudioBgUpload(event: Event) {
           >
             <span class="size-1.5 rounded-full bg-rose-500"></span>
             PDF ที่เปิดใช้งาน:
-            <strong>{{
-              documents.filter(
-                (d) => d.docType === 'pdf' && d.status === 'active'
-              ).length
-            }}/1</strong>
+            <strong
+              >{{
+                documents.filter(
+                  (d) => d.docType === 'pdf' && d.status === 'active'
+                ).length
+              }}/1</strong
+            >
           </span>
           <span
             class="inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-400"
           >
             <span class="size-1.5 rounded-full bg-amber-500"></span>
             Certificate ที่เปิดใช้งาน:
-            <strong>{{
-              documents.filter(
-                (d) => d.docType === 'certificate' && d.status === 'active'
-              ).length
-            }}/1</strong>
+            <strong
+              >{{
+                documents.filter(
+                  (d) => d.docType === 'certificate' && d.status === 'active'
+                ).length
+              }}/1</strong
+            >
           </span>
         </div>
       </div>
@@ -2681,7 +2690,9 @@ function handleStudioBgUpload(event: Event) {
                   >
                     {{ doc.nameTh }}
                   </button>
-                  <p v-else class="font-medium text-highlighted">{{ doc.nameTh }}</p>
+                  <p v-else class="font-medium text-highlighted">
+                    {{ doc.nameTh }}
+                  </p>
                   <p v-if="doc.nameEn" class="text-xs text-muted">
                     {{ doc.nameEn }}
                   </p>
@@ -2814,10 +2825,21 @@ function handleStudioBgUpload(event: Event) {
     <!-- ================================================================= -->
     <!-- MODAL: SELECT DOCUMENT FORMAT (PDF VS CERTIFICATE)                -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="isFormatSelectModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      @click="isFormatSelectModalOpen = false"
+      :open="true"
+      title="เลือกประเภทเอกสารที่ต้องการสร้าง"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isFormatSelectModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-2xl rounded-2xl border border-default bg-default p-6 shadow-2xl space-y-6"
@@ -2835,6 +2857,7 @@ function handleStudioBgUpload(event: Event) {
             </p>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -2986,15 +3009,22 @@ function handleStudioBgUpload(event: Event) {
           </div>
         </div>
       </div>
-    </div>
+    </AppModal>
 
     <!-- ================================================================= -->
     <!-- CANVA-LIKE DOCUMENT DESIGNER STUDIO (FULL MODAL)                   -->
     <!-- ================================================================= -->
-    <div
+    <AppModal
       v-if="isCanvaStudioOpen && activeEditingDoc && canManageDocumentTemplates"
-      class="fixed inset-0 z-50 flex flex-col bg-slate-950 text-slate-100"
-      :aria-busy="isSavingTemplate || isPublishingTemplate"
+      :open="true"
+      title="ออกแบบแม่แบบเอกสาร"
+      fullscreen
+      :ui="{ content: 'flex flex-col bg-slate-950 text-slate-100' }"
+      @update:open="
+        ($event) => {
+          if (!$event) requestCloseStudio()
+        }
+      "
     >
       <div
         v-if="isSavingTemplate || isPublishingTemplate"
@@ -4632,7 +4662,7 @@ function handleStudioBgUpload(event: Event) {
           </div>
         </div>
       </div>
-    </div>
+    </AppModal>
   </div>
 </template>
 

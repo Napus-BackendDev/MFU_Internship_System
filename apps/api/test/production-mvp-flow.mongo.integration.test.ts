@@ -857,7 +857,9 @@ describe('production MVP flow across import, invitation, evaluation, and documen
       .select('+sourceSnapshot')
       .lean()
     expect(stableSnapshot?.sourceSnapshot).toMatchObject({
-      student: { name: { th: 'นางสาวตัวอย่าง ระบบ', en: 'นางสาวตัวอย่าง ระบบ' } }
+      student: {
+        name: { th: 'นางสาวตัวอย่าง ระบบ', en: 'นางสาวตัวอย่าง ระบบ' }
+      }
     })
     expect(documentQueueAdd).toHaveBeenCalledWith(
       'generate-pdf',

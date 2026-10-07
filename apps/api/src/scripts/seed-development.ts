@@ -1919,7 +1919,8 @@ try {
         editorMetadata: {
           nameTh: 'ใบประกาศนียบัตรรับรองการฝึกงาน (Certificate of Completion)',
           nameEn: 'Certificate of Professional Internship Completion',
-          description: 'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ (A4 แนวนอน)',
+          description:
+            'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ (A4 แนวนอน)',
           backgroundType: 'certificate_pattern',
           bgOpacity: 15
         },
@@ -2025,7 +2026,8 @@ try {
         width: 794,
         height: 1040,
         editorMetadata: {
-          nameTh: 'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน (Official Internship Referral Letter)',
+          nameTh:
+            'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน (Official Internship Referral Letter)',
           nameEn: 'Official Internship Referral Letter',
           description: 'เอกสารหนังสือส่งตัวนักศึกษาเข้าฝึกงาน (A4 แนวตั้ง)',
           backgroundType: 'watermark',

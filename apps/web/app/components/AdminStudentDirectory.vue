@@ -271,7 +271,9 @@ function enrichStudents(
     const studentAssignments = student.directoryRelations?.assignments ?? []
     const studentPlacements = student.directoryRelations?.placements ?? []
     const termPlacement = student.academicTermId
-      ? studentPlacements.find((p) => p.academicTermId === student.academicTermId)
+      ? studentPlacements.find(
+          (p) => p.academicTermId === student.academicTermId
+        )
       : undefined
     const assignmentResolution = resolveAssignmentForCycle(studentAssignments)
     const assignment = assignmentResolution.assignment
@@ -790,13 +792,7 @@ async function loadDirectoryPage(includeData: boolean): Promise<void> {
 
 let directorySearchTimer: ReturnType<typeof setTimeout> | undefined
 watch(
-  [
-    selectedYear,
-    selectedSemester,
-    selectedSchool,
-    selectedStatus,
-    searchQuery
-  ],
+  [selectedYear, selectedSemester, selectedSchool, selectedStatus, searchQuery],
   () => {
     page.value = 1
     clearTimeout(directorySearchTimer)
@@ -928,7 +924,10 @@ const editSemesterSelectOptions = computed(() => {
     { value: '', label: '-- เลือกภาคการศึกษา --' },
     { value: 'ภาคการศึกษาต้น', label: 'ภาคการศึกษาที่ 1 (ภาคการศึกษาต้น)' },
     { value: 'ภาคการศึกษาปลาย', label: 'ภาคการศึกษาที่ 2 (ภาคการศึกษาปลาย)' },
-    { value: 'ภาคการศึกษาฤดูร้อน', label: 'ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)' }
+    {
+      value: 'ภาคการศึกษาฤดูร้อน',
+      label: 'ภาคการศึกษาที่ 3 (ภาคการศึกษาฤดูร้อน)'
+    }
   ]
   if (
     editForm.value.semester &&
@@ -1027,9 +1026,7 @@ async function handleDeleteStudent(row: EnrichedStudentRow) {
     return
   }
   const studentIdentifier =
-    row.student?.id ||
-    (row as unknown as { id?: string }).id ||
-    row.studentId
+    row.student?.id || (row as unknown as { id?: string }).id || row.studentId
   try {
     await api(`/students/${studentIdentifier}`, {
       method: 'DELETE'
@@ -1041,12 +1038,17 @@ async function handleDeleteStudent(row: EnrichedStudentRow) {
     })
     void loadDirectoryPage(true)
     emit('refresh')
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const failure = error as {
+      data?: { code?: string; message?: { code?: string } }
+      response?: { _data?: { code?: string } }
+      message?: string
+    }
     const errorCode =
-      error?.data?.code ||
-      error?.response?._data?.code ||
-      error?.data?.message?.code ||
-      error?.message
+      failure?.data?.code ||
+      failure?.response?._data?.code ||
+      failure?.data?.message?.code ||
+      failure?.message
     let description = 'ไม่สามารถลบข้อมูลนักศึกษาได้'
     if (errorCode === 'STUDENT_HAS_OPEN_PLACEMENT') {
       description =
@@ -1398,7 +1400,6 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
       <div
         class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
       >
-
         <!-- 3.1 ตัวกรองปีการศึกษา -->
         <div class="space-y-1">
           <label
@@ -1649,7 +1650,9 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                       {{ row.programTh }}
                     </p>
                   </div>
-                  <div class="pt-0.5 flex items-center gap-1 text-[11px] text-muted">
+                  <div
+                    class="pt-0.5 flex items-center gap-1 text-[11px] text-muted"
+                  >
                     <UIcon
                       :name="
                         row.courseDisplay === 'Cooperative Education'
@@ -1666,7 +1669,9 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
               <!-- 4. ปี / ภาคเรียน -->
               <td class="py-3 px-4">
                 <div class="space-y-1">
-                  <span class="font-mono text-xs font-medium text-highlighted block">
+                  <span
+                    class="font-mono text-xs font-medium text-highlighted block"
+                  >
                     ปี {{ row.academicYear }}
                   </span>
                   <p class="text-[11px] text-muted">
@@ -1868,6 +1873,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
             </div>
 
             <UButton
+              aria-label="ปิดหน้าต่าง"
               color="neutral"
               icon="i-lucide-x"
               size="sm"
@@ -2277,10 +2283,21 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
     <!-- ========================================================================= -->
     <!-- 6. MODAL EDIT STUDENT (แก้ไขข้อมูลนักศึกษา)                                 -->
     <!-- ========================================================================= -->
-    <div
+    <AppModal
       v-if="isEditModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      @click="isEditModalOpen = false"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-5xl lg:max-w-6xl xl:max-w-7xl max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isEditModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-5xl lg:max-w-6xl xl:max-w-7xl rounded-2xl sm:rounded-3xl border border-default bg-default p-6 sm:p-8 shadow-2xl space-y-6 max-h-[92vh] overflow-y-auto"
@@ -2309,6 +2326,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
             </div>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -2331,9 +2349,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                   name="i-lucide-building-2"
                   class="size-4.5 text-primary"
                 />
-                <span
-                  >ข้อมูลสถานประกอบการ (Internship & Workplace Info)</span
-                >
+                <span>ข้อมูลสถานประกอบการ (Internship & Workplace Info)</span>
               </div>
 
               <!-- 1. สถานประกอบการ -->
@@ -2581,6 +2597,6 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
   </div>
 </template>

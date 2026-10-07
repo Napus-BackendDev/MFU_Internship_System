@@ -283,7 +283,8 @@ function openCreateForm() {
         },
         {
           labelTh: 'การคิดวิเคราะห์ การแก้ปัญหา และการประยุกต์ใช้งานจริง',
-          labelEn: 'Analytical Thinking, Problem Solving & Practical Application',
+          labelEn:
+            'Analytical Thinking, Problem Solving & Practical Application',
           type: 'rating' as const,
           weight: 2
         }
@@ -1019,7 +1020,8 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     ]
   },
   SCI: {
-    titleTh: 'ทักษะเฉพาะทาง: สำนักวิชาวิทยาศาสตร์ (การวิจัยและปฏิบัติการวิทยาศาสตร์)',
+    titleTh:
+      'ทักษะเฉพาะทาง: สำนักวิชาวิทยาศาสตร์ (การวิจัยและปฏิบัติการวิทยาศาสตร์)',
     titleEn: 'Specialized Skills: School of Science',
     questions: [
       {
@@ -1040,7 +1042,8 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
       {
         labelTh:
           'การค้นคว้าทางวิชาการและการจัดทำรายงานเชิงวิทยาศาสตร์ (Scientific Reporting)',
-        labelEn: 'Academic Literature Research & Technical Scientific Reporting',
+        labelEn:
+          'Academic Literature Research & Technical Scientific Reporting',
         type: 'rating',
         weight: 1
       },
@@ -1381,8 +1384,7 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
       {
         labelTh:
           'ทักษะการประสานงาน การมีส่วนร่วม และการสื่อสารกับผู้มีส่วนได้ส่วนเสีย (Stakeholder Engagement)',
-        labelEn:
-          'Stakeholder Engagement, Facilitation & Community Outreach',
+        labelEn: 'Stakeholder Engagement, Facilitation & Community Outreach',
         type: 'rating',
         weight: 1
       },
@@ -1803,7 +1805,7 @@ function handleExecuteCopyCriteria() {
           color="neutral"
           icon="i-lucide-arrow-down"
           label="รายการประเมิน"
-          to="/app/evaluations"
+          :to="$localePath('/app/evaluations')"
           variant="outline"
         />
         <UButton
@@ -2067,12 +2069,24 @@ function handleExecuteCopyCriteria() {
     </UCard>
 
     <!-- FORM BUILDER MODAL / DRAWER -->
-    <div
+    <AppModal
       v-if="isEditorOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-[1600px] max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isEditorOpen = false
+          }
+        }
+      "
     >
       <div
-        class="flex h-[94vh] w-[97vw] max-w-[1600px] flex-col rounded-2xl border border-default bg-default shadow-2xl overflow-hidden"
+        class="flex h-[94vh] w-full max-w-[1600px] flex-col rounded-2xl border border-default bg-default shadow-2xl overflow-hidden"
       >
         <!-- Builder Header (Fixed at top) -->
         <div
@@ -2097,6 +2111,7 @@ function handleExecuteCopyCriteria() {
 
           <div class="flex items-center gap-2">
             <UButton
+              aria-label="ปิดหน้าต่าง"
               color="neutral"
               icon="i-lucide-x"
               size="xs"
@@ -2108,10 +2123,10 @@ function handleExecuteCopyCriteria() {
 
         <!-- Stepped Tabs Navigation Header (Fixed in 1 single horizontal row!) -->
         <div
-          class="shrink-0 flex items-center justify-between border-b border-default bg-muted/25 px-6 py-2 gap-3"
+          class="shrink-0 flex flex-col items-stretch sm:flex-row sm:items-center justify-between border-b border-default bg-muted/25 px-4 sm:px-6 py-2 gap-3"
         >
           <div
-            class="flex items-center gap-2 overflow-x-auto whitespace-nowrap scrollbar-none"
+            class="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto whitespace-nowrap scrollbar-none"
           >
             <!-- Tab 1: ข้อมูลทั่วไป & หมวดกลาง -->
             <button
@@ -2324,7 +2339,7 @@ function handleExecuteCopyCriteria() {
                     </div>
                   </div>
 
-                  <div class="flex items-center gap-2 shrink-0">
+                  <div class="flex flex-wrap items-center gap-2 min-w-0">
                     <UButton
                       color="primary"
                       icon="i-lucide-plus"
@@ -2453,7 +2468,7 @@ function handleExecuteCopyCriteria() {
           >
             <!-- Compact Subtitle & Stats Bar -->
             <div
-              class="shrink-0 flex items-center justify-between gap-4 rounded-xl border border-secondary/20 bg-secondary/[0.04] px-4 py-2 text-xs"
+              class="shrink-0 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-secondary/20 bg-secondary/[0.04] px-4 py-2 text-xs"
             >
               <div class="flex items-center gap-2 min-w-0">
                 <UIcon
@@ -2468,7 +2483,7 @@ function handleExecuteCopyCriteria() {
                   ผู้ประเมินจะเห็นเฉพาะข้อสอบตรงสาย</span
                 >
               </div>
-              <div class="flex items-center gap-2 shrink-0">
+              <div class="flex flex-wrap items-center gap-2 min-w-0">
                 <UButton
                   color="secondary"
                   size="xs"
@@ -2484,7 +2499,10 @@ function handleExecuteCopyCriteria() {
                   variant="subtle"
                 />
                 <UBadge
-                  v-if="(schoolsData?.items.length || 14) - configuredSchoolsCount > 0"
+                  v-if="
+                    (schoolsData?.items.length || 14) - configuredSchoolsCount >
+                    0
+                  "
                   color="neutral"
                   :label="`ยังว่าง ${(schoolsData?.items.length || 14) - configuredSchoolsCount} สำนักวิชา`"
                   size="xs"
@@ -2516,7 +2534,7 @@ function handleExecuteCopyCriteria() {
                           ? 'bg-secondary text-inverted font-bold'
                           : 'bg-muted/20 text-muted hover:text-highlighted'
                       "
-                      @click="schoolStatusFilter === 'all'"
+                      @click="schoolStatusFilter = 'all'"
                     >
                       ทั้งหมด ({{ schoolsData?.items.length || 0 }})
                     </button>
@@ -2528,7 +2546,7 @@ function handleExecuteCopyCriteria() {
                           ? 'bg-emerald-600 text-inverted font-bold'
                           : 'bg-muted/20 text-muted hover:text-highlighted'
                       "
-                      @click="schoolStatusFilter === 'configured'"
+                      @click="schoolStatusFilter = 'configured'"
                     >
                       มีเกณฑ์ ({{ configuredSchoolsCount }})
                     </button>
@@ -2540,7 +2558,7 @@ function handleExecuteCopyCriteria() {
                           ? 'bg-neutral-600 text-inverted font-bold'
                           : 'bg-muted/20 text-muted hover:text-highlighted'
                       "
-                      @click="schoolStatusFilter === 'unconfigured'"
+                      @click="schoolStatusFilter = 'unconfigured'"
                     >
                       ยังไม่ตั้ง ({{
                         (schoolsData?.items.length || 0) -
@@ -2552,9 +2570,10 @@ function handleExecuteCopyCriteria() {
 
                 <!-- School List (Scrolls effortlessly with full height - nearly all 15 schools fit without scrolling!) -->
                 <div class="flex-1 min-h-0 overflow-y-auto space-y-1 pr-1">
-                  <div
+                  <button
                     v-for="school in filteredSchools"
                     :key="school.id"
+                    type="button"
                     class="group flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-all cursor-pointer"
                     :class="
                       selectedSchoolHubId === school.id
@@ -2618,7 +2637,7 @@ function handleExecuteCopyCriteria() {
                       />
                       <span v-else class="text-[10px] text-muted">ว่าง</span>
                     </div>
-                  </div>
+                  </button>
                 </div>
               </div>
 
@@ -3448,7 +3467,7 @@ function handleExecuteCopyCriteria() {
 
         <!-- Builder Footer -->
         <div
-          class="flex items-center justify-between border-t border-default px-6 py-3.5"
+          class="flex flex-wrap items-center justify-between gap-3 border-t border-default px-4 sm:px-6 py-3.5"
         >
           <div class="flex items-center gap-2">
             <!-- Previous Button (or Cancel on first tab) -->
@@ -3542,12 +3561,24 @@ function handleExecuteCopyCriteria() {
           </div>
         </div>
       </div>
-    </div>
+    </AppModal>
 
     <!-- LIVE PREVIEW MODAL -->
-    <div
+    <AppModal
       v-if="isPreviewOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      :open="true"
+      title="ตัวอย่างแบบฟอร์มการประเมินจริง (Live Simulator)"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-4xl max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isPreviewOpen = false
+          }
+        }
+      "
     >
       <div
         class="flex max-h-[92vh] w-full max-w-4xl flex-col rounded-2xl border border-default bg-default shadow-2xl"
@@ -3573,6 +3604,7 @@ function handleExecuteCopyCriteria() {
           </div>
 
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="sm"
@@ -3738,12 +3770,24 @@ function handleExecuteCopyCriteria() {
           />
         </div>
       </div>
-    </div>
+    </AppModal>
 
     <!-- COPY CRITERIA MODAL -->
-    <div
+    <AppModal
       v-if="isCopyModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      :open="true"
+      title="จัดการข้อมูล"
+      :ui="{
+        content:
+          'w-[calc(100%-2rem)] max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto'
+      }"
+      @update:open="
+        ($event) => {
+          if (!$event) {
+            isCopyModalOpen = false
+          }
+        }
+      "
     >
       <div
         class="w-full max-w-md rounded-2xl border border-default bg-default p-6 space-y-4 shadow-2xl"
@@ -3762,6 +3806,7 @@ function handleExecuteCopyCriteria() {
             </h3>
           </div>
           <UButton
+            aria-label="ปิดหน้าต่าง"
             color="neutral"
             icon="i-lucide-x"
             size="xs"
@@ -3821,6 +3866,6 @@ function handleExecuteCopyCriteria() {
           />
         </div>
       </div>
-    </div>
+    </AppModal>
   </div>
 </template>

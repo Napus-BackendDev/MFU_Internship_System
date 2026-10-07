@@ -390,7 +390,7 @@ export class EmailProcessor {
         student_name:
           typeof student.name === 'string'
             ? student.name
-            : student.name?.th ?? student.name?.en ?? student.studentId,
+            : (student.name?.th ?? student.name?.en ?? student.studentId),
         student_id: student.studentId ?? student.id,
         company_name:
           (student as unknown as { company?: string }).company ||

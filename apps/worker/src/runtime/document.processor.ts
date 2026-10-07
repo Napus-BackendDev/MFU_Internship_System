@@ -149,7 +149,10 @@ export class DocumentProcessor {
             throw new Error('FONT_NOT_IN_S3')
           }
         } catch {
-          const localFallback = new URL('../../../assets/tahoma.ttf', import.meta.url)
+          const localFallback = new URL(
+            '../../../assets/tahoma.ttf',
+            import.meta.url
+          )
           fontBytes = await fs.promises.readFile(localFallback)
         }
       } else {
@@ -185,7 +188,8 @@ export class DocumentProcessor {
                 throw new Error('DOCUMENT_IMAGE_ASSET_NOT_FOUND')
               const bytes = await response.Body.transformToByteArray()
               if (
-                createHash('sha256').update(bytes).digest('hex') !== asset.sha256
+                createHash('sha256').update(bytes).digest('hex') !==
+                asset.sha256
               ) {
                 throw new Error('DOCUMENT_IMAGE_ASSET_CHECKSUM_MISMATCH')
               }

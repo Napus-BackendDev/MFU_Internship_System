@@ -151,7 +151,7 @@ async function retry(id: string): Promise<void> {
       <div class="flex flex-col gap-3 md:flex-row md:items-center">
         <!-- Live Search Input with Clear Button -->
         <div class="relative flex-1">
-            <UInput
+          <UInput
             v-model="searchQuery"
             class="w-full"
             icon="i-lucide-search"
@@ -249,7 +249,9 @@ async function retry(id: string): Promise<void> {
 
                   <!-- สถานประกอบการ & ผู้ประเมิน -->
                   <div
-                    v-if="item.assignment.company || item.assignment.evaluatorName"
+                    v-if="
+                      item.assignment.company || item.assignment.evaluatorName
+                    "
                     class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted"
                   >
                     <span

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { Filter, Document } from 'mongodb'
 import { decryptSmtpSecret, type AppEnvironment } from '@internship/config'
 import { sanitizeEmailHtml } from '@internship/email-security'
 import {
@@ -43,6 +44,7 @@ import {
   PlacementRecord,
   StudentRecord
 } from '../members/members.schema.js'
+import type { SmtpSettingRecord } from '../system-settings/smtp-settings.schema.js'
 import { studentReferenceFilter } from '../members/student-reference.js'
 import {
   CampaignRecord,
@@ -170,7 +172,7 @@ export interface InvitationReissueInput {
 
 export interface DirectStudentInvitationResult {
   readonly success: boolean
-  readonly status: CampaignRecord['status']
+  readonly status: CampaignRecord['status'] | 'failed'
   readonly assignmentId: string
   readonly invitationId: string
   readonly campaignId: string
@@ -180,6 +182,7 @@ export interface DirectStudentInvitationResult {
   readonly studentName: string
   readonly deadlineAt: string
   readonly pin?: string
+  readonly error?: string
 }
 
 export interface InvitationReissueResult {
@@ -621,11 +624,10 @@ export class CampaignService {
       new Set(
         page.items
           .map((item) => {
-            const raw = (
+            const raw =
               typeof item === 'object' && item && 'toJSON' in item
                 ? (item as { toJSON: () => Record<string, unknown> }).toJSON()
                 : item
-            ) as Record<string, unknown>
             return deliveryIdentifier(raw.assignmentId)
           })
           .filter((id): id is string => Boolean(id))
@@ -743,11 +745,10 @@ export class CampaignService {
     }
 
     const items = page.items.map((delivery) => {
-      const raw = (
+      const raw =
         typeof delivery === 'object' && delivery && 'toJSON' in delivery
           ? (delivery as { toJSON: () => Record<string, unknown> }).toJSON()
           : delivery
-      ) as Record<string, unknown>
       const aId = deliveryIdentifier(raw.assignmentId)
       return deliveryResponse(raw, assignmentDetailsMap.get(aId))
     })
@@ -1089,11 +1090,8 @@ export class CampaignService {
     if (!evaluator) {
       const orgsCol = this.connection.collection('organizations')
       const targetOrgName = student.company?.trim() || 'สถานประกอบการ'
-      let org = await orgsCol.findOne({
-        $or: [
-          { 'name.th': targetOrgName },
-          { 'name.en': targetOrgName }
-        ]
+      const org = await orgsCol.findOne({
+        $or: [{ 'name.th': targetOrgName }, { 'name.en': targetOrgName }]
       })
       let orgId: string
       if (!org) {
@@ -1253,7 +1251,7 @@ export class CampaignService {
       return true
     })
     const finalQuestionSnapshot =
-      questionSnapshot.length > 0 ? questionSnapshot : (version.sections || [])
+      questionSnapshot.length > 0 ? questionSnapshot : version.sections || []
 
     const templateVersionId =
       await this.templatesService.ensureSystemTemplateVersion(
@@ -1282,7 +1280,11 @@ export class CampaignService {
               evaluationVersion: 1
             }
           },
-          { returnDocument: 'after', upsert: true, ...(session ? { session } : {}) }
+          {
+            returnDocument: 'after',
+            upsert: true,
+            ...(session ? { session } : {})
+          }
         )
         if (!assignment) {
           throw new ConflictException({ code: 'ASSIGNMENT_CREATE_FAILED' })
@@ -1357,7 +1359,14 @@ export class CampaignService {
           invitation.version
         )
 
-        return { assignment, invitation, campaign, delivery, invitationUrl, pin }
+        return {
+          assignment,
+          invitation,
+          campaign,
+          delivery,
+          invitationUrl,
+          pin
+        }
       })
     } catch (error) {
       const response =
@@ -1394,10 +1403,16 @@ export class CampaignService {
       // ignore
     }
 
-    let deliveryStatus: CampaignRecord['status'] = outbox.campaign.status
+    let deliveryStatus: CampaignRecord['status'] | 'failed' =
+      outbox.campaign.status
+    let deliveryError: string | undefined
     if (process.env.NODE_ENV !== 'test') {
       try {
-        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+        try {
+          await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+        } catch {
+          // Redis queue may be unavailable in dev/local
+        }
         if (this.config.get('NODE_ENV', { infer: true }) === 'development') {
           const directResult = await this.dispatchDeliveryDirect(
             outbox.delivery.id,
@@ -1408,19 +1423,10 @@ export class CampaignService {
             deliveryStatus = 'completed'
           }
         }
-      } catch {
-        try {
-          const directResult = await this.dispatchDeliveryDirect(
-            outbox.delivery.id,
-            outbox.invitation.id,
-            outbox.pin
-          )
-          if (directResult.success) {
-            deliveryStatus = 'completed'
-          }
-        } catch {
-          // Direct dispatch error is non-fatal for returning invitation URL and PIN
-        }
+      } catch (err: unknown) {
+        deliveryStatus = 'failed'
+        deliveryError =
+          err instanceof Error ? err.message : 'SMTP_SEND_FAILED'
       }
     } else {
       try {
@@ -1431,7 +1437,7 @@ export class CampaignService {
     }
 
     return {
-      success: true,
+      success: deliveryStatus === 'completed',
       status: deliveryStatus,
       assignmentId: outbox.assignment.id,
       invitationId: outbox.invitation.id,
@@ -1439,12 +1445,10 @@ export class CampaignService {
       deliveryId: outbox.delivery.id,
       invitationUrl: outbox.invitationUrl,
       recipientEmail: evaluator.email,
-      studentName: resolveStudentDisplayName(
-        student.name,
-        student.studentId
-      ),
+      studentName: resolveStudentDisplayName(student.name, student.studentId),
       deadlineAt: outbox.assignment.deadlineAt.toISOString(),
-      pin: outbox.pin
+      pin: outbox.pin,
+      ...(deliveryError ? { error: deliveryError } : {})
     }
   }
 
@@ -1527,11 +1531,6 @@ export class CampaignService {
           })
         }
         const previousVersion = currentInvitation.version ?? 1
-        const pepper = this.config.get('INVITATION_TOKEN_PEPPER', {
-          infer: true
-        })
-        const newPin = generatePin()
-        const accessPinHash = hashInvitationPin(newPin, pepper)
 
         const invitation = await this.invitations.findOneAndUpdate(
           {
@@ -2156,10 +2155,16 @@ export class CampaignService {
       return this.sendTargetedEmail(actor, input, idempotencyKey)
     }
 
-    let deliveryStatus: CampaignRecord['status'] = outbox.campaign.status
+    let deliveryStatus: CampaignRecord['status'] | 'failed' =
+      outbox.campaign.status
+    let deliveryError: string | undefined
     if (process.env.NODE_ENV !== 'test') {
       try {
-        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+        try {
+          await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+        } catch {
+          // Redis queue may be unavailable in dev/local
+        }
         if (this.config.get('NODE_ENV', { infer: true }) === 'development') {
           const directResult = await this.dispatchDeliveryDirect(
             outbox.delivery.id,
@@ -2170,19 +2175,10 @@ export class CampaignService {
             deliveryStatus = 'completed'
           }
         }
-      } catch {
-        try {
-          const directResult = await this.dispatchDeliveryDirect(
-            outbox.delivery.id,
-            outbox.invitation.id,
-            outbox.targetPin
-          )
-          if (directResult.success) {
-            deliveryStatus = 'completed'
-          }
-        } catch {
-          // Keep queued
-        }
+      } catch (err: unknown) {
+        deliveryStatus = 'failed'
+        deliveryError =
+          err instanceof Error ? err.message : 'SMTP_SEND_FAILED'
       }
     } else {
       try {
@@ -2259,7 +2255,7 @@ export class CampaignService {
               ]
             }
           : { _id: evaluator.organizationId }
-        const org = await orgsCol.findOne(orgQuery as any)
+        const org = await orgsCol.findOne(orgQuery as Filter<Document>)
         if (org?.name) {
           companyName =
             typeof org.name === 'string'
@@ -2287,7 +2283,7 @@ export class CampaignService {
                 ]
               }
             : { _id: placement.organizationId }
-          const org = await orgsCol.findOne(orgQuery as any)
+          const org = await orgsCol.findOne(orgQuery as Filter<Document>)
           if (org?.name) {
             companyName =
               typeof org.name === 'string'
@@ -2383,7 +2379,7 @@ export class CampaignService {
 
     const smtp = await this.resolveSmtpSettings()
 
-    let providerMessageId = ''
+    let providerMessageId: string
     try {
       const transporter = nodemailer.createTransport({
         host: smtp.host,
@@ -2408,23 +2404,14 @@ export class CampaignService {
         (sendResult as { messageId?: string })?.messageId ||
         `<sent-${Date.now()}@direct>`
     } catch (smtpErr: unknown) {
-      const isCapture =
-        this.config.get('MAIL_DELIVERY_MODE', { infer: true }) === 'capture'
-      const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(
-        smtp.host.toLowerCase()
-      )
-      if (isCapture && isLocalHost) {
-        providerMessageId = `<captured-${randomUUID()}@localhost>`
-      } else {
-        const errorMsg =
-          smtpErr instanceof Error ? smtpErr.message : 'SMTP_SEND_FAILED'
-        delivery.status = 'failed'
-        delivery.lastErrorCode = errorMsg
-        delivery.attempts = (delivery.attempts || 0) + 1
-        await delivery.save()
-        await this.reconcileCampaign(campaign.id, campaign.total)
-        throw smtpErr
-      }
+      const errorMsg =
+        smtpErr instanceof Error ? smtpErr.message : 'SMTP_SEND_FAILED'
+      delivery.status = 'failed'
+      delivery.lastErrorCode = errorMsg
+      delivery.attempts = (delivery.attempts || 0) + 1
+      await delivery.save()
+      await this.reconcileCampaign(campaign.id, campaign.total)
+      throw smtpErr
     }
 
     delivery.status = 'sent'
@@ -2452,12 +2439,12 @@ export class CampaignService {
     from: string
   }> {
     try {
-      const setting = await this.connection
+      const setting = (await this.connection
         .collection('smtpSettings')
         .findOne({
           key: 'smtp',
           enabled: true
-        })
+        })) as (SmtpSettingRecord & { fromEmail?: string }) | null
       if (setting && setting.host) {
         let password: string | undefined
         if (
@@ -2486,6 +2473,7 @@ export class CampaignService {
           username: setting.username,
           password,
           from:
+            setting.from ||
             setting.fromEmail ||
             setting.username ||
             'Internship Transcript <no-reply@localhost>'

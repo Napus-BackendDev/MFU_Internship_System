@@ -55,6 +55,7 @@ const editorMode = ref<'friendly' | 'preview' | 'html'>('friendly')
 const activeSubTab = ref<'content' | 'design'>('content')
 
 const loading = ref(true)
+const loadError = ref(false)
 const saving = ref(false)
 const resetting = ref(false)
 
@@ -525,6 +526,7 @@ function generateTextFromFriendly(form: FriendlyForm): string {
 
 async function loadTemplates(): Promise<void> {
   loading.value = true
+  loadError.value = false
   try {
     const res = await api<SystemTemplateItem[]>('/email-templates/system')
     if (Array.isArray(res)) {
@@ -545,6 +547,7 @@ async function loadTemplates(): Promise<void> {
       }
     }
   } catch (err: unknown) {
+    loadError.value = true
     console.error('Failed to load email templates:', err)
     toast.add({
       title: 'โหลดแม่แบบอีเมลไม่สำเร็จ',
@@ -630,6 +633,7 @@ const previewEmailDocument = computed(() =>
 )
 
 async function saveTemplate(): Promise<void> {
+  if (loading.value || loadError.value) return
   saving.value = true
   try {
     const code = activeTab.value
@@ -684,6 +688,7 @@ async function saveTemplate(): Promise<void> {
 }
 
 async function resetTemplate(): Promise<void> {
+  if (loading.value || loadError.value) return
   if (
     !confirm(
       `คุณต้องการคืนค่าเริ่มต้นของแม่แบบ "${currentTemplate.value.name}" หรือไม่?`
@@ -770,7 +775,7 @@ watch(editorMode, (newMode) => {
           color="neutral"
           icon="i-lucide-mail"
           label="ประวัติการส่งอีเมล"
-          to="/app/correspondence"
+          :to="$localePath('/app/correspondence')"
           variant="outline"
         />
       </div>
@@ -841,6 +846,17 @@ watch(editorMode, (newMode) => {
       </div>
 
       <!-- Tab Content Area -->
+      <UAlert
+        v-else-if="loadError"
+        class="m-6"
+        color="error"
+        title="โหลดแม่แบบอีเมลไม่สำเร็จ"
+        description="ลองโหลดใหม่ก่อนแก้ไขหรือบันทึก"
+      >
+        <template #actions
+          ><UButton label="ลองโหลดแม่แบบใหม่" @click="loadTemplates"
+        /></template>
+      </UAlert>
       <div v-else class="p-6 space-y-6">
         <!-- Mode Selector Bar (Top Bar) -->
         <div
@@ -1785,6 +1801,7 @@ watch(editorMode, (newMode) => {
               label="บันทึกการเปลี่ยนแปลงทั้งหมด"
               size="md"
               :loading="saving"
+              :disabled="loading || loadError"
               @click="saveTemplate"
             />
           </div>

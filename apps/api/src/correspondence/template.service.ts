@@ -175,39 +175,42 @@ export class TemplateService {
   }): Promise<unknown> {
     const html = sanitizeEmailTemplateHtml(input.html)
     try {
-      const result = await runWithTransaction(this.templates.db, async (session) => {
-        const [template] = await this.templates.create(
-          [
-            {
-              code: input.code,
-              audience: input.audience,
-              status: 'active'
-            }
-          ],
-          session ? { session } : {}
-        )
-        if (!template)
-          throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
-        const [version] = await this.versions.create(
-          [
-            {
-              templateId: template.id,
-              versionNumber: 1,
-              status: 'draft',
-              subject: input.subject,
-              html,
-              text: input.text,
-              placeholders: [
-                ...extractPlaceholders(input.subject, html, input.text)
-              ]
-            }
-          ],
-          session ? { session } : {}
-        )
-        if (!version)
-          throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        return { template, version }
-      })
+      const result = await runWithTransaction(
+        this.templates.db,
+        async (session) => {
+          const [template] = await this.templates.create(
+            [
+              {
+                code: input.code,
+                audience: input.audience,
+                status: 'active'
+              }
+            ],
+            session ? { session } : {}
+          )
+          if (!template)
+            throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
+          const [version] = await this.versions.create(
+            [
+              {
+                templateId: template.id,
+                versionNumber: 1,
+                status: 'draft',
+                subject: input.subject,
+                html,
+                text: input.text,
+                placeholders: [
+                  ...extractPlaceholders(input.subject, html, input.text)
+                ]
+              }
+            ],
+            session ? { session } : {}
+          )
+          if (!version)
+            throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+          return { template, version }
+        }
+      )
       if (!result)
         throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
       return {
@@ -312,58 +315,62 @@ export class TemplateService {
   ): Promise<string> {
     const def = DEFAULT_SYSTEM_TEMPLATES[code]
     try {
-      const versionId = await runWithTransaction(this.templates.db, async (session) => {
-        let template = await this.templates
-          .findOne({ code })
-          .session(session ?? null)
-          .exec()
-        if (!template) {
-          const [created] = await this.templates.create(
-            [{ code, audience: 'evaluator', status: 'active' }],
+      const versionId = await runWithTransaction(
+        this.templates.db,
+        async (session) => {
+          let template = await this.templates
+            .findOne({ code })
+            .session(session ?? null)
+            .exec()
+          if (!template) {
+            const [created] = await this.templates.create(
+              [{ code, audience: 'evaluator', status: 'active' }],
+              session ? { session } : {}
+            )
+            if (!created)
+              throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
+            template = created
+          }
+
+          const published = await this.versions
+            .findOne({ templateId: template.id, status: 'published' })
+            .sort({ versionNumber: -1 })
+            .session(session ?? null)
+            .exec()
+          if (published) {
+            return published.id
+          }
+
+          const latest = await this.versions
+            .findOne({ templateId: template.id })
+            .sort({ versionNumber: -1 })
+            .session(session ?? null)
+            .exec()
+          const subject = def.subject
+          const html = sanitizeEmailTemplateHtml(def.html)
+          const text = def.text
+          const [version] = await this.versions.create(
+            [
+              {
+                templateId: template.id,
+                versionNumber: (latest?.versionNumber ?? 0) + 1,
+                status: 'published',
+                subject,
+                html,
+                text,
+                placeholders: [...extractPlaceholders(subject, html, text)],
+                publishedAt: new Date()
+              }
+            ],
             session ? { session } : {}
           )
-          if (!created)
-            throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
-          template = created
+          if (!version)
+            throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+          return version.id
         }
-
-        const published = await this.versions
-          .findOne({ templateId: template.id, status: 'published' })
-          .sort({ versionNumber: -1 })
-          .session(session ?? null)
-          .exec()
-        if (published) {
-          return published.id
-        }
-
-        const latest = await this.versions
-          .findOne({ templateId: template.id })
-          .sort({ versionNumber: -1 })
-          .session(session ?? null)
-          .exec()
-        const subject = def.subject
-        const html = sanitizeEmailTemplateHtml(def.html)
-        const text = def.text
-        const [version] = await this.versions.create(
-          [
-            {
-              templateId: template.id,
-              versionNumber: (latest?.versionNumber ?? 0) + 1,
-              status: 'published',
-              subject,
-              html,
-              text,
-              placeholders: [...extractPlaceholders(subject, html, text)],
-              publishedAt: new Date()
-            }
-          ],
-          session ? { session } : {}
-        )
-        if (!version)
-          throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        return version.id
-      })
-      if (!versionId) throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+      )
+      if (!versionId)
+        throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
       return versionId
     } catch (error: unknown) {
       if (isDuplicateKeyError(error)) {
@@ -410,45 +417,48 @@ export class TemplateService {
     let templateId: string | undefined
     let newVersion: HydratedDocument<EmailTemplateVersionRecord> | undefined
     try {
-      const result = await runWithTransaction(this.templates.db, async (session) => {
-        let template = await this.templates
-          .findOne({ code })
-          .session(session ?? null)
-          .exec()
-        if (!template) {
-          const [created] = await this.templates.create(
-            [{ code, audience: 'evaluator', status: 'active' }],
+      const result = await runWithTransaction(
+        this.templates.db,
+        async (session) => {
+          let template = await this.templates
+            .findOne({ code })
+            .session(session ?? null)
+            .exec()
+          if (!template) {
+            const [created] = await this.templates.create(
+              [{ code, audience: 'evaluator', status: 'active' }],
+              session ? { session } : {}
+            )
+            if (!created)
+              throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
+            template = created
+          }
+          const latest = await this.versions
+            .findOne({ templateId: template.id })
+            .sort({ versionNumber: -1 })
+            .session(session ?? null)
+            .exec()
+          const [createdVersion] = await this.versions.create(
+            [
+              {
+                templateId: template.id,
+                versionNumber: (latest?.versionNumber ?? 0) + 1,
+                status: 'published',
+                subject: input.subject,
+                html,
+                text: input.text,
+                placeholders,
+                publishedAt: new Date()
+              }
+            ],
             session ? { session } : {}
           )
-          if (!created)
-            throw new ConflictException({ code: 'TEMPLATE_CREATE_FAILED' })
-          template = created
+          if (!createdVersion) {
+            throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
+          }
+          return { templateId: template.id, newVersion: createdVersion }
         }
-        const latest = await this.versions
-          .findOne({ templateId: template.id })
-          .sort({ versionNumber: -1 })
-          .session(session ?? null)
-          .exec()
-        const [createdVersion] = await this.versions.create(
-          [
-            {
-              templateId: template.id,
-              versionNumber: (latest?.versionNumber ?? 0) + 1,
-              status: 'published',
-              subject: input.subject,
-              html,
-              text: input.text,
-              placeholders,
-              publishedAt: new Date()
-            }
-          ],
-          session ? { session } : {}
-        )
-        if (!createdVersion) {
-          throw new ConflictException({ code: 'VERSION_CREATE_FAILED' })
-        }
-        return { templateId: template.id, newVersion: createdVersion }
-      })
+      )
       templateId = result.templateId
       newVersion = result.newVersion
     } catch (error: unknown) {

@@ -42,18 +42,12 @@ const handleSubmitFeedback = () => {
     return
   }
 
-  feedback.submitting = true
-  setTimeout(() => {
-    feedback.submitting = false
-    feedback.subject = ''
-    feedback.message = ''
-    toast.add({
-      title: 'ส่งคำขอสนับสนุนเรียบร้อยแล้ว',
-      description:
-        'เจ้าหน้าที่ผู้ดูแลระบบได้รับข้อความแล้ว และจะติดต่อกลับโดยเร็วที่สุด',
-      color: 'success'
-    })
-  }, 600)
+  toast.add({
+    title: 'ยังไม่สามารถส่งคำขอจากหน้านี้ได้',
+    description:
+      'ข้อความยังไม่ได้ส่ง โปรดใช้ช่องทางติดต่อฝ่ายสนับสนุนที่ได้รับการยืนยัน',
+    color: 'warning'
+  })
 }
 </script>
 
@@ -78,7 +72,7 @@ const handleSubmitFeedback = () => {
           color="neutral"
           icon="i-lucide-arrow-left"
           label="กลับหน้าหลัก"
-          to="/app"
+          :to="$localePath('/app')"
           variant="outline"
         />
       </div>
@@ -192,6 +186,11 @@ const handleSubmitFeedback = () => {
 
         <UCard>
           <form class="space-y-4" @submit.prevent="handleSubmitFeedback">
+            <UAlert
+              color="warning"
+              title="ช่องทางส่งคำขอยังไม่พร้อมใช้งาน"
+              description="ข้อความในฟอร์มนี้ยังไม่ถูกส่งถึงเจ้าหน้าที่ โปรดใช้ช่องทางติดต่อที่ได้รับการยืนยัน"
+            />
             <div>
               <label class="block text-xs font-semibold text-highlighted mb-1">
                 หมวดหมู่เรื่องที่ติดต่อ
@@ -241,7 +240,7 @@ const handleSubmitFeedback = () => {
               color="primary"
               icon="i-lucide-send"
               label="ส่งข้อความถึงฝ่ายสนับสนุน"
-              :loading="feedback.submitting"
+              :disabled="true"
               type="submit"
             />
           </form>

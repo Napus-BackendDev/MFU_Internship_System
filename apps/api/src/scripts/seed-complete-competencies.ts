@@ -1,5 +1,5 @@
 import { loadEnvironment } from '@internship/config'
-import { MongoClient, ObjectId, type Db } from 'mongodb'
+import { MongoClient } from 'mongodb'
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development'
 try {
@@ -21,16 +21,24 @@ try {
   const now = new Date()
 
   // 1. Fetch all schools to map schoolCode -> schoolId
-  const schools = await database.collection('schools').find().toArray()
+  const schools = await database
+    .collection<{ schoolCode: string }>('schools')
+    .find()
+    .toArray()
   const schoolMap = new Map<string, string>()
   for (const s of schools) {
     schoolMap.set(s.schoolCode, s._id.toString())
   }
 
-  console.log(`Found ${schoolMap.size} schools in database:`, Array.from(schoolMap.keys()).join(', '))
+  console.log(
+    `Found ${schoolMap.size} schools in database:`,
+    Array.from(schoolMap.keys()).join(', ')
+  )
 
   // 2. Ensure DEV-COMP competency set exists
-  const existingSet = await database.collection('competencySets').findOne({ code: 'DEV-COMP' })
+  const existingSet = await database
+    .collection('competencySets')
+    .findOne({ code: 'DEV-COMP' })
   let competencySetId: string
   if (existingSet) {
     competencySetId = existingSet._id.toString()
@@ -1001,10 +1009,12 @@ try {
   ]
 
   // Update existing version 1 (or insert if not exists)
-  const existingVersion = await database.collection('competencySetVersions').findOne({
-    competencySetId,
-    versionNumber: 1
-  })
+  const existingVersion = await database
+    .collection('competencySetVersions')
+    .findOne({
+      competencySetId,
+      versionNumber: 1
+    })
 
   if (existingVersion) {
     await database.collection('competencySetVersions').updateOne(
@@ -1014,12 +1024,15 @@ try {
           sections,
           status: 'published',
           publishedAt: existingVersion.publishedAt || now,
-          publishedBy: existingVersion.publishedBy || 'seed-complete-competencies',
+          publishedBy:
+            existingVersion.publishedBy || 'seed-complete-competencies',
           updatedAt: now
         }
       }
     )
-    console.log(`Updated competencySetVersion ${existingVersion._id.toString()} with ${sections.length} sections.`)
+    console.log(
+      `Updated competencySetVersion ${existingVersion._id.toString()} with ${sections.length} sections.`
+    )
   } else {
     const res = await database.collection('competencySetVersions').insertOne({
       competencySetId,
@@ -1031,10 +1044,14 @@ try {
       createdAt: now,
       updatedAt: now
     })
-    console.log(`Created new competencySetVersion ${res.insertedId.toString()} with ${sections.length} sections.`)
+    console.log(
+      `Created new competencySetVersion ${res.insertedId.toString()} with ${sections.length} sections.`
+    )
   }
 
-  console.log('Successfully seeded all 14 school competencies + general + suggestion sections!')
+  console.log(
+    'Successfully seeded all 14 school competencies + general + suggestion sections!'
+  )
 } finally {
   await client.close()
 }

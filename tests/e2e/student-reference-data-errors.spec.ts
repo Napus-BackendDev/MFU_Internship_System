@@ -19,6 +19,10 @@ test('shows and recovers from a failed Student reference-data lookup', async ({
     }
     await route.continue()
   })
+  await page
+    .getByRole('button', { name: 'สำนักวิชา', exact: true })
+    .first()
+    .click()
   await page.getByRole('searchbox', { name: 'สำนักวิชา ค้นหา' }).fill('SCI')
 
   const lookupError = page.getByRole('alert').filter({

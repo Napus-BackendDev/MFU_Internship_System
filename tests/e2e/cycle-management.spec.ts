@@ -384,6 +384,7 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
       )
     )
     .toBe(true)
+  await page.getByRole('button', { name: 'หลักสูตร', exact: true }).click()
   await page.getByRole('searchbox', { name: 'หลักสูตร ค้นหา' }).fill('SE')
   await expect
     .poll(() =>
@@ -392,7 +393,12 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
       )
     )
     .toBe(true)
-  await page.getByLabel('หลักสูตร', { exact: true }).selectOption('program-e2e')
+  await page
+    .getByRole('button', {
+      name: 'SE — วิศวกรรมซอฟต์แวร์ (Software Engineering)',
+      exact: true
+    })
+    .click()
   await page.waitForLoadState('networkidle')
 
   await page

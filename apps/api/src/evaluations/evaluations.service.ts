@@ -1847,54 +1847,57 @@ export class EvaluationsService {
   ): Promise<unknown> {
     await this.findAssignment(actor, assignmentId, true)
     try {
-      const savedDraft = await runWithTransaction(this.connection, async (session) => {
-        const scope = await this.assignmentScope(actor, true)
-        const now = new Date()
-        const assignmentQuery = assignmentIdWithinScope(assignmentId, scope)
-        const assignment = await this.assignments
-          .findOne({
-            ...assignmentQuery,
-            status: { $in: ['pending', 'inProgress'] },
-            deadlineAt: { $gt: now }
-          })
-          .session(session ?? null)
-          .exec()
-        if (!assignment) {
-          throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
-        }
-        await this.assertCycleWritable(assignment.cycleId, now, session)
-        validateDraftAnswers(assignment, input.answers)
-        const draft = await this.drafts
-          .findOneAndUpdate(
-            { assignmentId, revision: input.revision },
+      const savedDraft = await runWithTransaction(
+        this.connection,
+        async (session) => {
+          const scope = await this.assignmentScope(actor, true)
+          const now = new Date()
+          const assignmentQuery = assignmentIdWithinScope(assignmentId, scope)
+          const assignment = await this.assignments
+            .findOne({
+              ...assignmentQuery,
+              status: { $in: ['pending', 'inProgress'] },
+              deadlineAt: { $gt: now }
+            })
+            .session(session ?? null)
+            .exec()
+          if (!assignment) {
+            throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
+          }
+          await this.assertCycleWritable(assignment.cycleId, now, session)
+          validateDraftAnswers(assignment, input.answers)
+          const draft = await this.drafts
+            .findOneAndUpdate(
+              { assignmentId, revision: input.revision },
+              {
+                $set: { answers: input.answers, updatedBy: actor.id },
+                $setOnInsert: { assignmentId },
+                $inc: { revision: 1 }
+              },
+              {
+                returnDocument: 'after',
+                runValidators: true,
+                upsert: true,
+                session: session ?? undefined
+              }
+            )
+            .exec()
+          if (!draft) throw new ConflictException({ code: 'VERSION_CONFLICT' })
+          const updated = await this.assignments.updateOne(
             {
-              $set: { answers: input.answers, updatedBy: actor.id },
-              $setOnInsert: { assignmentId },
-              $inc: { revision: 1 }
+              ...assignmentQuery,
+              status: { $in: ['pending', 'inProgress'] },
+              deadlineAt: { $gt: now }
             },
-            {
-              returnDocument: 'after',
-              runValidators: true,
-              upsert: true,
-              session: session ?? undefined
-            }
+            { $set: { status: 'inProgress' } },
+            session ? { session } : {}
           )
-          .exec()
-        if (!draft) throw new ConflictException({ code: 'VERSION_CONFLICT' })
-        const updated = await this.assignments.updateOne(
-          {
-            ...assignmentQuery,
-            status: { $in: ['pending', 'inProgress'] },
-            deadlineAt: { $gt: now }
-          },
-          { $set: { status: 'inProgress' } },
-          session ? { session } : {}
-        )
-        if (updated.matchedCount !== 1) {
-          throw new ConflictException({ code: 'VERSION_CONFLICT' })
+          if (updated.matchedCount !== 1) {
+            throw new ConflictException({ code: 'VERSION_CONFLICT' })
+          }
+          return draft
         }
-        return draft
-      })
+      )
       if (!savedDraft)
         throw new ConflictException({ code: 'DRAFT_SAVE_FAILED' })
       return savedDraft.toJSON()
@@ -2002,7 +2005,10 @@ export class EvaluationsService {
             })
           }
         }
-        await this.drafts.deleteOne({ assignmentId }, session ? { session } : {})
+        await this.drafts.deleteOne(
+          { assignmentId },
+          session ? { session } : {}
+        )
         await this.auditService.record(
           {
             requestId,

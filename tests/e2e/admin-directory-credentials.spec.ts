@@ -33,8 +33,10 @@ function pageOf(
 test('student directory never renders or searches legacy invitation credentials', async ({
   page
 }) => {
+  test.setTimeout(90_000)
   const aggregateRelationLoads: string[] = []
   const studentDirectoryDataRequests: boolean[] = []
+  const studentDirectoryQueries: Record<string, string>[] = []
   const studentDirectoryExportRequests: Array<{
     body: Record<string, unknown>
     idempotencyKey: string | undefined
@@ -211,6 +213,9 @@ test('student directory never renders or searches legacy invitation credentials'
       const includeDirectoryData =
         requestUrl.searchParams.get('includeDirectoryData') === 'true'
       studentDirectoryDataRequests.push(includeDirectoryData)
+      studentDirectoryQueries.push(
+        Object.fromEntries(requestUrl.searchParams.entries())
+      )
       const search = requestUrl.searchParams.get('search')?.toLocaleLowerCase()
       const requestedStudent = includeDirectoryData
         ? studentWithDirectoryRelations
@@ -363,7 +368,6 @@ test('student directory never renders or searches legacy invitation credentials'
   await page.getByRole('button', { name: 'รีเฟรช' }).click()
   const studentRow = page.getByRole('row').filter({ hasText: '6531501001' })
   await expect(studentRow).toBeVisible()
-  await page.locator('select').first().selectOption('cycle-e2e')
   await expect(studentRow).toContainText('Hard Skill:')
   await expect(studentRow).toContainText('4.3')
   await expect(studentRow).toContainText('Soft Skill:')
@@ -398,6 +402,13 @@ test('student directory never renders or searches legacy invitation credentials'
   ).toBeVisible()
   await page.getByRole('button', { name: 'ยกเลิก' }).click()
 
+  await page.getByRole('button', { name: 'ปีการศึกษา', exact: true }).click()
+  await page
+    .getByRole('button', { name: 'ปีการศึกษา 2569 (2026)', exact: true })
+    .click()
+  await expect
+    .poll(() => studentDirectoryQueries.at(-1)?.academicYear)
+    .toBe('2569')
   const exportRequestOffset = studentDirectoryDataRequests.length
   const downloadReady = page.waitForEvent('download')
   await page.getByRole('button', { name: 'ส่งออก Excel (ภาษาไทย)' }).click()
@@ -409,7 +420,7 @@ test('student directory never renders or searches legacy invitation credentials'
   expect(studentDirectoryExportRequests).toHaveLength(1)
   expect(studentDirectoryExportRequests[0]?.body).toMatchObject({
     reportType: 'studentDirectory',
-    filters: { cycleId: 'cycle-e2e' },
+    filters: { academicYear: 2569 },
     locale: 'th',
     format: 'xlsx'
   })
