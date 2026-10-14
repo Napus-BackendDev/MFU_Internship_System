@@ -750,8 +750,8 @@ export class MembersService {
       filter,
       input,
       {
-        studentId: 1,
-        _id: 1
+        studentId: -1,
+        _id: -1
       },
       session
     )
