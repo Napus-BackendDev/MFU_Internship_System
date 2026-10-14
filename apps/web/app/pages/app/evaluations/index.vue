@@ -901,11 +901,7 @@ async function refreshAfterEmailAction(): Promise<boolean> {
               <td class="py-3 px-4">
                 <div class="space-y-1">
                   <!-- ส่วนบน: อีเมลผู้ประเมิน -->
-                  <div class="flex items-center gap-1.5 text-xs">
-                    <UIcon
-                      name="i-lucide-mail"
-                      class="size-3.5 text-primary shrink-0"
-                    />
+                  <div class="text-xs">
                     <span class="font-mono font-semibold text-primary">
                       {{
                         getEvaluator(item.evaluatorId)?.email ||
@@ -915,11 +911,7 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                   </div>
 
                   <!-- ส่วนกลาง: สถานประกอบการ -->
-                  <div class="flex items-center gap-1.5 text-xs text-muted">
-                    <UIcon
-                      name="i-lucide-building-2"
-                      class="size-3.5 text-muted/80 shrink-0"
-                    />
+                  <div class="text-xs text-muted">
                     <span class="font-medium text-highlighted">
                       {{ getCompany(item.studentId, item.evaluatorId) }}
                     </span>
@@ -932,12 +924,8 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                       (getProvince(item.studentId, item.evaluatorId) &&
                         getProvince(item.studentId, item.evaluatorId) !== '-')
                     "
-                    class="flex items-start gap-1 text-[11px] text-muted pl-5"
+                    class="text-[11px] text-muted"
                   >
-                    <UIcon
-                      name="i-lucide-map-pin"
-                      class="size-3 text-muted/70 shrink-0 mt-0.5"
-                    />
                     <span class="break-words leading-tight">
                       {{
                         getCompanyAddress(item.studentId, item.evaluatorId) ||
