@@ -589,7 +589,7 @@ async function signOut(): Promise<void> {
         id="main-content"
         class="min-h-0 flex-1 overflow-y-auto bg-[var(--semantic-bg-canvas)]"
       >
-        <UContainer class="py-6 sm:py-8">
+        <UContainer class="max-w-none w-full px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
           <slot />
         </UContainer>
       </main>

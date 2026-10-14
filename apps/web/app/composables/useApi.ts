@@ -14,7 +14,10 @@ export async function retryAfterSessionRefresh<T>(
   refresh: () => Promise<boolean>,
   retryRequest: () => Promise<T>
 ): Promise<T> {
-  if (!(await refresh())) throw originalError
+  const refreshed = await refresh()
+  if (!refreshed) {
+    throw new Error('เซสชันการใช้งานหมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง')
+  }
   return retryRequest()
 }
 

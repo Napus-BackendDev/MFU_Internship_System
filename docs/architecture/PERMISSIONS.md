@@ -8,6 +8,14 @@ Frontend route middleware may hide unavailable actions, but only NestJS policy c
 
 ## 2. Core policy
 
+Student contact import (`POST /students/import-preview?mode=contacts`) uses the same
+`students.import` permission and School/Program scope as Student import. It updates
+only active Students in the selected term, with actor-owned previews and explicit
+per-row update confirmation. Unknown and out-of-scope IDs receive the same safe row
+error without exposing their profiles. Advisor/evaluator contact fields confer no
+roles, account access, evaluation assignments, invitation access, or sending rights.
+Reading/editing contact metadata follows the existing Student read/manage scope.
+
 1. Default deny.
 2. Every authenticated operation requires both an action and an allowed resource scope.
 3. Role names never come from client request data.

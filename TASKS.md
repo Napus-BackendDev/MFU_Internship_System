@@ -1,5 +1,17 @@
 # Implementation Tasks — Internship Transcript System V2
 
+## Owner-requested student contact matching — 2026-10-10
+
+- Implemented locally: Checklist contact import matched by Student ID and selected academic term, separate academic/site-visit advisors and workplace evaluator fields, preview/diff/per-row confirmation, scoped update-only commit, and directory/edit UI with contact completeness. OpenAPI/generated types, database, permissions and AC-DATA-008 synchronized. No real workbook import, email, provider, commit or push.
+- Validation: parser/import/Student CRUD regression suites pass 83/83; complete browser suite passes 51/51, including contact import at 360/1280 px. Workspace tests (with 5 Redis-dependent skips), typecheck and final build pass. Full verification remains blocked by pre-existing formatting/lint outside this change; see current evidence and follow-ups in `AI_HANDOFF.md`.
+- Follow-up: missing-contact reminder campaigns, university-advisor evaluation invitation semantics/permissions, and historical placement-scoped advisor assignments. Current contacts are Student profile metadata and do not grant user roles or evaluation access.
+
+## Owner-requested chat setup — 2026-10-10
+
+- Automation follow-up — configured: native Codex heartbeat `เลขาเก็บความจำแชท` (ID `automation`) is ACTIVE every 15 minutes for this chat, with quiet no-op runs. Create/view confirmed; first scheduled run is not yet verified. Secretary instructions enable per-response saving without repeated user commands.
+
+- Done: local chat secretary instructions and initial memory in `secretary/`, with conversational routing in root `AGENTS.md`. Normal Git tracking excludes chat memory. Validation covers documentation formatting, local links, diff integrity and ignore rules; application behavior is unchanged. See the dated secretary setup in `AI_HANDOFF.md`.
+
 ## 1. How to use this backlog
 
 Work on one task at a time. A task may start only when every dependency is `Done` and no listed decision is unresolved.

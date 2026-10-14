@@ -29,6 +29,10 @@ import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
 import { runWithTransaction } from '../common/mongo-transaction.js'
 import { StudentRecord } from './members.schema.js'
 import {
+  parseStudentContactsWorkbook,
+  STUDENT_CONTACT_FIELDS
+} from './student-contacts.parser.js'
+import {
   parseStudentWorkbook,
   type StudentImportIssue,
   type StudentImportSourceRow
@@ -50,7 +54,7 @@ export interface StudentImportDecision {
 
 interface ImportPayload extends Record<string, unknown> {
   studentId: string
-  name: string
+  name: StudentRecord['name']
   email: string
   schoolId: string
   programId: string
@@ -82,7 +86,8 @@ export class StudentImportService {
   public async preview(
     actor: AuthenticatedActor,
     sourceName: string,
-    file: Buffer
+    file: Buffer,
+    options: { mode?: 'students' | 'contacts'; academicTermId?: string } = {}
   ): Promise<unknown> {
     if (file.length === 0) {
       throw new UnprocessableEntityException({ code: 'WORKBOOK_EMPTY' })
@@ -94,7 +99,10 @@ export class StudentImportService {
 
     let parsed
     try {
-      parsed = parseStudentWorkbook(file)
+      parsed =
+        options.mode === 'contacts'
+          ? parseStudentContactsWorkbook(file)
+          : parseStudentWorkbook(file)
     } catch (error) {
       const code = error instanceof Error ? error.message : 'WORKBOOK_INVALID'
       if (
@@ -169,7 +177,8 @@ export class StudentImportService {
         terms,
         existingByStudentId,
         existingByEmail,
-        expiresAt
+        expiresAt,
+        options.academicTermId
       )
       prepared.push(result)
     }
@@ -181,6 +190,8 @@ export class StudentImportService {
         checksum,
         expiresAt,
         sourceRowCount: parsed.rows.length,
+        mode: options.mode ?? 'students',
+        academicTermId: options.academicTermId,
         questionFields: [...parsed.questionFields],
         status: 'preview'
       }).save(session ? { session } : {})
@@ -297,8 +308,19 @@ export class StudentImportService {
     terms: readonly Record<string, unknown>[],
     existingByStudentId: ReadonlyMap<string, HydratedDocument<StudentRecord>>,
     existingByEmail: ReadonlyMap<string, HydratedDocument<StudentRecord>>,
-    expiresAt: Date
+    expiresAt: Date,
+    academicTermId?: string
   ): Record<string, unknown> {
+    if (source.contacts !== undefined) {
+      return this.resolveContactRow(
+        actor,
+        source,
+        existingByStudentId.get(source.studentId),
+        terms,
+        academicTermId,
+        expiresAt
+      )
+    }
     const issues: StudentImportIssue[] = [...source.issues]
     const warnings: StudentImportIssue[] = []
     const sourcePreview = publicSourcePreview(source)
@@ -494,7 +516,14 @@ export class StudentImportService {
         ? { admissionYear: source.admissionYear }
         : {}),
       ...(source.company ? { company: source.company } : {}),
-      ...(source.province ? { province: source.province } : {})
+      ...(source.companyAddress ? { companyAddress: source.companyAddress } : {}),
+      ...(source.province ? { province: source.province } : {}),
+      ...(source.evaluatorEmail ? { evaluatorEmail: source.evaluatorEmail } : {}),
+      ...(source.evaluatorName ? { evaluatorName: source.evaluatorName } : {}),
+      ...(source.advisorEmail ? { advisorEmail: source.advisorEmail } : {}),
+      ...(source.advisorName ? { advisorName: source.advisorName } : {}),
+      ...(source.siteVisitAdvisorEmail ? { siteVisitAdvisorEmail: source.siteVisitAdvisorEmail } : {}),
+      ...(source.siteVisitAdvisorName ? { siteVisitAdvisorName: source.siteVisitAdvisorName } : {})
     }
 
     const existing = existingByStudentId.get(source.studentId)
@@ -592,6 +621,111 @@ export class StudentImportService {
           }
         : {}),
       expiresAt
+    }
+  }
+
+  private resolveContactRow(
+    actor: AuthenticatedActor,
+    source: StudentImportSourceRow,
+    existing: HydratedDocument<StudentRecord> | undefined,
+    terms: readonly Record<string, unknown>[],
+    academicTermId: string | undefined,
+    expiresAt: Date
+  ): Record<string, unknown> {
+    const base = {
+      rowKey: source.key,
+      sheet: source.sheet,
+      rowNumber: source.rowNumber,
+      sourceRowHash: requestHash(source),
+      sourcePreview: { studentId: source.studentId },
+      status: 'pending',
+      expiresAt
+    }
+    if (
+      !existing ||
+      existing.status !== 'active' ||
+      !actorCanManageStudentScope(actor, existing.schoolId, existing.programId)
+    ) {
+      return {
+        ...base,
+        action: 'invalid',
+        issues: [
+          issue(
+            'STUDENT_NOT_FOUND_IN_SCOPE',
+            'studentId',
+            'No active student in your scope; import students first.'
+          )
+        ],
+        warnings: [],
+        changes: []
+      }
+    }
+    const issues = [...source.issues]
+    if (
+      academicTermId &&
+      (existing.academicTermId !== academicTermId ||
+        !terms.some((term) => String(term._id) === academicTermId))
+    ) {
+      issues.push(
+        issue(
+          'CONTACT_TERM_MISMATCH',
+          'academicTermId',
+          'Student does not belong to the selected active term.'
+        )
+      )
+    }
+    const contacts = source.contacts ?? {}
+    const current = existing.toObject() as unknown as Record<string, unknown>
+    const merged = { ...current, ...contacts }
+    const warnings = []
+    if (!merged.evaluatorEmail)
+      warnings.push(
+        issue(
+          'EVALUATOR_EMAIL_MISSING',
+          'evaluatorEmail',
+          'Missing workplace evaluator email; invitation is not ready.'
+        )
+      )
+    if (!merged.advisorEmail && !merged.siteVisitAdvisorEmail)
+      warnings.push(
+        issue(
+          'ADVISOR_EMAIL_MISSING',
+          'advisorEmail',
+          'Missing university advisor email.'
+        )
+      )
+    const payload: ImportPayload = {
+      studentId: existing.studentId,
+      name: existing.name,
+      email: existing.email,
+      schoolId: existing.schoolId,
+      programId: existing.programId,
+      academicTermId: existing.academicTermId,
+      academicYear: existing.academicYear,
+      semester: existing.semester,
+      ...(existing.courseId ? { courseId: existing.courseId } : {}),
+      ...(existing.course ? { course: existing.course } : {}),
+      ...(existing.company ? { company: existing.company } : {}),
+      ...(existing.companyAddress ? { companyAddress: existing.companyAddress } : {}),
+      ...(existing.province ? { province: existing.province } : {}),
+      ...contacts
+    }
+    const changes = diffPayload(existing, payload)
+    return {
+      ...base,
+      sourcePreview: { ...publicStudentPayload(payload), ...contacts },
+      action: issues.length
+        ? 'invalid'
+        : changes.length
+          ? 'update'
+          : 'unchanged',
+      ...(issues.length === 0 && changes.length ? { payload } : {}),
+      issues,
+      warnings,
+      changes,
+      expectedStudentId: existing.id,
+      expectedUpdatedAt: existing.updatedAt,
+      expectedPayloadHash: studentPayloadHash(existing)
     }
   }
 
@@ -922,6 +1056,8 @@ export class StudentImportService {
     return {
       batchId: batch.id,
       sourceName: batch.sourceName,
+      mode: batch.mode ?? 'students',
+      academicTermId: batch.academicTermId,
       checksum: batch.checksum,
       expiresAt: batch.expiresAt.toISOString(),
       status: batch.status,
@@ -1157,7 +1293,11 @@ function studentPayloadHash(student: HydratedDocument<StudentRecord>): string {
     academicYear: value.academicYear,
     admissionYear: value.admissionYear,
     company: value.company,
-    province: value.province
+    companyAddress: value.companyAddress,
+    province: value.province,
+    ...Object.fromEntries(
+      STUDENT_CONTACT_FIELDS.map((field) => [field, value[field]])
+    )
   })
 }
 
@@ -1174,10 +1314,16 @@ function publicStudentPayload(
     email: payload.email,
     schoolId: payload.schoolId,
     programId: payload.programId,
+    ...Object.fromEntries(
+      STUDENT_CONTACT_FIELDS.filter(
+        (field) => payload[field] !== undefined
+      ).map((field) => [field, payload[field]])
+    ),
     ...(payload.course ? { course: payload.course } : {}),
     ...(payload.semester ? { semester: payload.semester } : {}),
     ...(payload.academicYear ? { academicYear: payload.academicYear } : {}),
     ...(payload.company ? { company: payload.company } : {}),
+    ...(payload.companyAddress ? { companyAddress: payload.companyAddress } : {}),
     ...(payload.province ? { province: payload.province } : {})
   }
 }
@@ -1194,7 +1340,14 @@ function publicSourcePreview(
     ...(source.courseReference ? { course: source.courseReference } : {}),
     ...(source.semester ? { semester: source.semester } : {}),
     ...(source.company ? { company: source.company } : {}),
+    ...(source.companyAddress ? { companyAddress: source.companyAddress } : {}),
     ...(source.province ? { province: source.province } : {}),
+    ...(source.evaluatorEmail ? { evaluatorEmail: source.evaluatorEmail } : {}),
+    ...(source.evaluatorName ? { evaluatorName: source.evaluatorName } : {}),
+    ...(source.advisorEmail ? { advisorEmail: source.advisorEmail } : {}),
+    ...(source.advisorName ? { advisorName: source.advisorName } : {}),
+    ...(source.siteVisitAdvisorEmail ? { siteVisitAdvisorEmail: source.siteVisitAdvisorEmail } : {}),
+    ...(source.siteVisitAdvisorName ? { siteVisitAdvisorName: source.siteVisitAdvisorName } : {}),
     ...(source.admissionYear !== undefined
       ? { admissionYear: source.admissionYear }
       : {})

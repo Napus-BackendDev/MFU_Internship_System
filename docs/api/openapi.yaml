@@ -821,6 +821,15 @@ paths:
       tags: [Students]
       operationId: previewStudentImport
       summary: Validate a student workbook without writing student records
+      description: Contacts mode reads Checklist headers, matches existing active students by Student ID within the explicitly selected academic term and actor scope, and previews contact-only updates. Blank contacts preserve existing values. It does not create accounts, evaluator assignments or email deliveries.
+      parameters:
+        - in: query
+          name: mode
+          schema: { type: string, enum: [students, contacts], default: students }
+        - in: query
+          name: academicTermId
+          description: Required in contacts mode. The student must already belong to this non-archived academic term.
+          schema: { type: string, pattern: '^[a-fA-F0-9]{24}$' }
       x-permissions: [students.import]
       requestBody:
         required: true
@@ -3387,6 +3396,10 @@ components:
         province: { type: string }
         evaluatorName: { type: string }
         evaluatorEmail: { type: string, format: email }
+        advisorName: { type: string, maxLength: 320 }
+        advisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, enum: [''] }] }
+        siteVisitAdvisorName: { type: string, maxLength: 320 }
+        siteVisitAdvisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, enum: [''] }] }
         admissionYear: { type: integer, minimum: 2000 }
         academicYear: { type: integer, minimum: 2000 }
         status: { type: string, enum: [active, archived], default: active }
@@ -3420,6 +3433,10 @@ components:
         province: { type: string }
         evaluatorName: { type: string }
         evaluatorEmail: { type: string, format: email }
+        advisorName: { type: string, maxLength: 320 }
+        advisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, enum: [''] }] }
+        siteVisitAdvisorName: { type: string, maxLength: 320 }
+        siteVisitAdvisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, enum: [''] }] }
         admissionYear: { type: integer, minimum: 2000 }
         academicYear: { type: integer, minimum: 2000 }
         status: { type: string, enum: [active, archived] }
@@ -3676,8 +3693,11 @@ components:
         committed: { type: integer, minimum: 0 }
     StudentImportPreview:
       type: object
+      description: Contacts previews update only existing scoped students in the selected term; academic contacts are metadata, not user roles or evaluator assignments.
       required: [batchId, sourceName, checksum, expiresAt, status, questionFieldsDetected, summary, items]
       properties:
+        mode: { type: string, enum: [students, contacts], default: students }
+        academicTermId: { type: string }
         batchId:
           $ref: '#/components/schemas/ObjectId'
         sourceName: { type: string }

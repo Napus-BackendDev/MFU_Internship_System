@@ -229,6 +229,203 @@ describe('student import on an isolated MongoDB replica set', () => {
     }
   }
 
+  it('matches contacts to an existing student in the chosen term without overwriting profile data or sending mail', async () => {
+    const initial = (await service.preview(
+      actor,
+      'students.xlsx',
+      workbookBuffer([sourceRow()])
+    )) as PreviewResponse
+    await service.commit(
+      actor,
+      initial.batchId,
+      'seed-contact-student',
+      [{ rowId: initial.items[0]!.id, action: 'create' }],
+      'contacts-test'
+    )
+    const student = await students.findOne({ studentId: '6631503001' }).orFail()
+    const contacts = workbookBuffer([
+      {
+        studentId: student.studentId,
+        advisorName: 'University adviser',
+        advisorEmail: 'academic@example.test',
+        siteVisitAdvisorName: 'Site visitor',
+        siteVisitAdvisorEmail: 'visit@example.test',
+        evaluatorEmail: 'mentor@example.test'
+      }
+    ])
+    const server = app.getHttpServer() as Parameters<typeof request>[0]
+    const response = await request(server)
+      .post(
+        `/api/v2/students/import-preview?mode=contacts&academicTermId=${student.academicTermId}`
+      )
+      .attach('file', contacts, 'checklist.xlsx')
+      .expect(201)
+    const preview = response.body as PreviewResponse
+    expect(preview.items[0]).toMatchObject({ action: 'update', issues: [] })
+    const decision = [
+      { rowId: preview.items[0]!.id, action: 'update' as const }
+    ]
+    await service.commit(
+      actor,
+      preview.batchId,
+      'commit-contacts',
+      decision,
+      'contacts-test'
+    )
+    await service.commit(
+      actor,
+      preview.batchId,
+      'commit-contacts',
+      decision,
+      'contacts-test'
+    )
+    const updated = await students.findById(student.id).orFail()
+    expect(updated).toMatchObject({
+      name: student.name,
+      email: student.email,
+      advisorName: 'University adviser',
+      advisorEmail: 'academic@example.test',
+      siteVisitAdvisorEmail: 'visit@example.test',
+      evaluatorEmail: 'mentor@example.test'
+    })
+    expect(await students.countDocuments()).toBe(1)
+    expect(await connection.collection('deliveries').countDocuments()).toBe(0)
+    const repeat = (await service.preview(actor, 'checklist.xlsx', contacts, {
+      mode: 'contacts',
+      academicTermId: student.academicTermId
+    })) as PreviewResponse
+    expect(repeat.items[0]!.action).toBe('unchanged')
+  })
+
+  it('matches contacts directly by studentId without requiring academicTermId query parameter', async () => {
+    const term = await terms.findOne().orFail()
+    const student = await students.create({
+      studentId: '6631503099',
+      name: 'Direct Contact Match Student',
+      email: 'direct-match@example.test',
+      schoolId,
+      programId,
+      academicTermId: term.id,
+      academicYear: term.academicYear,
+      semester: term.semester
+    })
+    const contacts = workbookBuffer([
+      {
+        studentId: student.studentId,
+        advisorName: 'Direct Advisor',
+        advisorEmail: 'direct-advisor@example.test',
+        evaluatorEmail: 'direct-evaluator@example.test'
+      }
+    ])
+    const server = app.getHttpServer() as Parameters<typeof request>[0]
+    const response = await request(server)
+      .post('/api/v2/students/import-preview?mode=contacts')
+      .attach('file', contacts, 'checklist.xlsx')
+      .expect(201)
+    const preview = response.body as PreviewResponse
+    expect(preview.items[0]).toMatchObject({ action: 'update', issues: [] })
+    expect(preview.items[0]!.student).toMatchObject({ studentId: student.studentId })
+  })
+
+  it('rejects unknown, out-of-scope and wrong-term contact matches without leaking the stored profile', async () => {
+    const term = await terms.findOne().orFail()
+    const existing = await students.create({
+      studentId: '6631503001',
+      name: 'Private profile',
+      email: 'private@example.test',
+      schoolId,
+      programId,
+      academicTermId: term.id,
+      academicYear: term.academicYear,
+      semester: term.semester
+    })
+    const contacts = workbookBuffer([
+      { studentId: existing.studentId, evaluatorEmail: 'mentor@example.test' },
+      { studentId: '6631503999', evaluatorEmail: 'other@example.test' }
+    ])
+    const scopedActor: AuthenticatedActor = {
+      ...actor,
+      roles: ['internshipStaff'],
+      scope: { tenant: false, schoolIds: ['another-school'], programIds: [] }
+    }
+    const outOfScope = (await service.preview(
+      scopedActor,
+      'checklist.xlsx',
+      contacts,
+      { mode: 'contacts', academicTermId: term.id }
+    )) as PreviewResponse
+    expect(outOfScope.items.every((row) => row.action === 'invalid')).toBe(true)
+    expect(JSON.stringify(outOfScope)).not.toContain('Private profile')
+    const wrongTerm = (await service.preview(
+      actor,
+      'checklist.xlsx',
+      contacts,
+      { mode: 'contacts', academicTermId: '000000000000000000000001' }
+    )) as PreviewResponse
+    expect(wrongTerm.items[0]!.issues).toContainEqual(
+      expect.objectContaining({ code: 'CONTACT_TERM_MISMATCH' })
+    )
+    await expect(
+      service.commit(
+        actor,
+        wrongTerm.batchId,
+        'reject-contacts',
+        [{ rowId: wrongTerm.items[0]!.id, action: 'update' }],
+        'contacts-test'
+      )
+    ).rejects.toThrow()
+    expect(
+      (await students.findById(existing.id).orFail()).evaluatorEmail
+    ).toBeUndefined()
+  })
+
+  it('preserves existing contacts when the Checklist has blank cells and detects a stale preview', async () => {
+    const term = await terms.findOne().orFail()
+    const student = await students.create({
+      studentId: '6631503001',
+      name: 'Example',
+      email: 'student@example.test',
+      schoolId,
+      programId,
+      academicTermId: term.id,
+      academicYear: term.academicYear,
+      semester: term.semester,
+      advisorEmail: 'keep@example.test'
+    })
+    const contacts = workbookBuffer([
+      {
+        studentId: student.studentId,
+        advisorEmail: '',
+        evaluatorEmail: 'mentor@example.test'
+      }
+    ])
+    const preview = (await service.preview(actor, 'checklist.xlsx', contacts, {
+      mode: 'contacts',
+      academicTermId: term.id
+    })) as PreviewResponse
+    expect(
+      preview.items[0]!.changes.some(
+        (change) => change.field === 'advisorEmail'
+      )
+    ).toBe(false)
+    await students.updateOne(
+      { _id: student.id },
+      { $set: { advisorEmail: 'new@example.test' } }
+    )
+    await expect(
+      service.commit(
+        actor,
+        preview.batchId,
+        'stale-contacts',
+        [{ rowId: preview.items[0]!.id, action: 'update' }],
+        'contacts-test'
+      )
+    ).rejects.toThrow()
+    expect((await students.findById(student.id).orFail()).advisorEmail).toBe(
+      'new@example.test'
+    )
+  })
+
   it('runs preview, reload, and idempotent commit through the student import HTTP routes', async () => {
     const server = app.getHttpServer() as Parameters<typeof request>[0]
     const workbook = workbookBuffer([sourceRow()])

@@ -56,6 +56,10 @@ export type StudentCreateInput = Pick<
       | 'province'
       | 'evaluatorName'
       | 'evaluatorEmail'
+      | 'advisorName'
+      | 'advisorEmail'
+      | 'siteVisitAdvisorName'
+      | 'siteVisitAdvisorEmail'
       | 'admissionYear'
       | 'academicYear'
       | 'status'
@@ -437,7 +441,9 @@ export class MembersService {
         'expired'
       ].includes(input.evaluationStatus)
         ? (input.evaluationStatus as EvaluationAssignmentRecord['status'])
-        : undefined
+        : input.evaluationStatus === 'in_progress'
+          ? 'inProgress'
+          : undefined
       const selectedReferences = exactStatus
         ? await bindSession(
             this.assignments.distinct('studentId', {
@@ -485,6 +491,10 @@ export class MembersService {
         .filter((reference) => Types.ObjectId.isValid(reference))
         .map((reference) => new Types.ObjectId(reference))
 
+      const allObjectIds = normalizedAllReferences
+        .filter((reference) => Types.ObjectId.isValid(reference))
+        .map((reference) => new Types.ObjectId(reference))
+
       if (input.evaluationStatus === 'evaluator_assigned') {
         requestedFilters.push({
           $or: [
@@ -493,12 +503,51 @@ export class MembersService {
           ]
         })
       } else if (input.evaluationStatus === 'awaiting_evaluator') {
-        const allObjectIds = normalizedAllReferences
-          .filter((reference) => Types.ObjectId.isValid(reference))
-          .map((reference) => new Types.ObjectId(reference))
         requestedFilters.push({
           _id: { $nin: allObjectIds },
           studentId: { $nin: normalizedAllReferences }
+        })
+      } else if (input.evaluationStatus === 'ready_to_send') {
+        requestedFilters.push({
+          _id: { $nin: allObjectIds },
+          studentId: { $nin: normalizedAllReferences },
+          company: { $exists: true, $nin: ['', '-', '—', null] },
+          evaluatorEmail: { $exists: true, $regex: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ }
+        })
+      } else if (input.evaluationStatus === 'missing_student_id') {
+        requestedFilters.push({
+          _id: { $nin: allObjectIds },
+          studentId: { $nin: normalizedAllReferences },
+          $or: [
+            { studentId: { $exists: false } },
+            { studentId: null },
+            { studentId: '' }
+          ]
+        })
+      } else if (input.evaluationStatus === 'missing_workplace') {
+        requestedFilters.push({
+          _id: { $nin: allObjectIds },
+          studentId: { $nin: normalizedAllReferences },
+          $or: [
+            { company: { $exists: false } },
+            { company: null },
+            { company: '' },
+            { company: '-' },
+            { company: '—' }
+          ]
+        })
+      } else if (input.evaluationStatus === 'missing_evaluator_email') {
+        requestedFilters.push({
+          _id: { $nin: allObjectIds },
+          studentId: { $nin: normalizedAllReferences },
+          $or: [
+            { evaluatorEmail: { $exists: false } },
+            { evaluatorEmail: null },
+            { evaluatorEmail: '' },
+            { evaluatorEmail: '-' },
+            { evaluatorEmail: '—' },
+            { evaluatorEmail: { $not: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ } }
+          ]
         })
       } else if (input.evaluationStatus === 'pending') {
         const ambiguousReferences = (

@@ -435,7 +435,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Validate a student workbook without writing student records */
+        /**
+         * Validate a student workbook without writing student records
+         * @description Contacts mode reads Checklist headers, matches existing active students by Student ID within the explicitly selected academic term and actor scope, and previews contact-only updates. Blank contacts preserve existing values. It does not create accounts, evaluator assignments or email deliveries.
+         */
         post: operations["previewStudentImport"];
         delete?: never;
         options?: never;
@@ -1764,6 +1767,10 @@ export interface components {
             evaluatorName?: string;
             /** Format: email */
             evaluatorEmail?: string;
+            advisorName?: string;
+            advisorEmail?: string | "";
+            siteVisitAdvisorName?: string;
+            siteVisitAdvisorEmail?: string | "";
             admissionYear?: number;
             academicYear?: number;
             /**
@@ -1790,6 +1797,10 @@ export interface components {
             evaluatorName?: string;
             /** Format: email */
             evaluatorEmail?: string;
+            advisorName?: string;
+            advisorEmail?: string | "";
+            siteVisitAdvisorName?: string;
+            siteVisitAdvisorEmail?: string | "";
             admissionYear?: number;
             academicYear?: number;
             /** @enum {string} */
@@ -1930,7 +1941,14 @@ export interface components {
             warnings: number;
             committed: number;
         };
+        /** @description Contacts previews update only existing scoped students in the selected term; academic contacts are metadata, not user roles or evaluator assignments. */
         StudentImportPreview: {
+            /**
+             * @default students
+             * @enum {string}
+             */
+            mode: "students" | "contacts";
+            academicTermId?: string;
             batchId: components["schemas"]["ObjectId"];
             sourceName: string;
             checksum: string;
@@ -3735,7 +3753,11 @@ export interface operations {
     };
     previewStudentImport: {
         parameters: {
-            query?: never;
+            query?: {
+                mode?: "students" | "contacts";
+                /** @description Required in contacts mode. The student must already belong to this non-archived academic term. */
+                academicTermId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

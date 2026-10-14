@@ -226,6 +226,23 @@ Indexes:
 
 ไม่เก็บ `evaluation` pointer เดียวใน Student เพราะนักศึกษามีหลาย term/cycle ได้
 
+#### Current-profile contact metadata (2026-10-10)
+
+The runtime Student profile additionally stores optional `advisorName`, `advisorEmail`,
+`siteVisitAdvisorName`, `siteVisitAdvisorEmail`, `evaluatorName`, and `evaluatorEmail`.
+University advisors and workplace evaluators remain distinct contacts. These are
+current-profile values associated with the Student's `academicTermId`, not historical
+placement contacts, user accounts, evaluator assignments, or permission grants.
+
+Contact import uses the existing actor-owned, expiring Student import batches with
+`mode: contacts` and the explicitly selected `academicTermId`. It matches the unique
+`studentId` only to active, in-scope Students in that term; it cannot create Students.
+Nonblank incoming contacts update only confirmed rows; blanks preserve stored values.
+Edited evaluator-email columns take precedence over the original email, including
+validation failures. Duplicate source IDs and malformed emails cannot be committed.
+Existing optimistic concurrency, transaction/audit, TTL and idempotency rules apply.
+No invitation, email delivery, teacher account, or assignment is created by this import.
+
 ### 5.8 `organizations`
 
 ```js

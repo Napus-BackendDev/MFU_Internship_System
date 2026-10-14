@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { components } from '@internship/api-client'
 import type { PaginatedItems } from '~/utils/load-all-pages'
 import {
   buildStudentEvaluationResult,
@@ -14,7 +15,13 @@ interface LocalizedText {
   readonly en: string
 }
 
-export interface StudentItem {
+export interface StudentItem extends Pick<
+  components['schemas']['Student'],
+  | 'advisorName'
+  | 'advisorEmail'
+  | 'siteVisitAdvisorName'
+  | 'siteVisitAdvisorEmail'
+> {
   readonly id: string
   readonly studentId: string
   readonly name: string | LocalizedText
@@ -292,8 +299,16 @@ function enrichStudents(
         : placement?.academicTerm
 
     // ข้อมูลจริง: ถ้าไม่มี ให้แสดง '-' ตามที่ผู้ใช้กำหนด (ห้ามสร้างขึ้นมาเอง)
-    const advisorTh = student.advisor?.th || '-'
-    const advisorEn = student.advisor?.en || '-'
+    const advisorTh =
+      student.advisorName ||
+      student.siteVisitAdvisorName ||
+      student.advisor?.th ||
+      '-'
+    const advisorEn =
+      student.advisorName ||
+      student.siteVisitAdvisorName ||
+      student.advisor?.en ||
+      '-'
 
     const evaluatorTh = evaluator?.name?.th || '-'
     const evaluatorEn = evaluator?.name?.en || '-'
@@ -1972,6 +1987,9 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                       </span>
                     </div>
                     <div class="border-t border-default/70 pt-1.5">
+                      <StudentContactsSummary
+                        :student="activeStudentRow.student"
+                      />
                       <span class="text-muted/80">อาจารย์ที่ปรึกษา:</span>
                       <p class="font-semibold text-highlighted text-xs">
                         {{

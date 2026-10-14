@@ -3,6 +3,12 @@ import { Schema as MongooseSchema } from 'mongoose'
 
 @Schema({ timestamps: true, collection: 'studentImportBatches' })
 export class StudentImportBatchRecord {
+  @Prop({ default: 'students', enum: ['students', 'contacts'] })
+  public mode!: 'students' | 'contacts'
+
+  @Prop()
+  public academicTermId?: string
+
   @Prop({ index: true, required: true })
   public actorId!: string
 

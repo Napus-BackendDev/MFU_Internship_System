@@ -182,6 +182,27 @@ Trace: `FR-MEM-005`
 **And** historical references remain resolvable  
 **And** new active workflows cannot select archived data.
 
+### AC-DATA-008 — Student contact matching (2026-10-10)
+
+- **Given** existing Students and a Checklist with university advisors and workplace evaluators,
+  **When** authorized Staff selects contact import and an academic term,
+  **Then** preview matches by Student ID to active Students in that term and actor scope,
+  and separates academic advisor, site-visit advisor and workplace evaluator contacts.
+- **Given** blank contact cells, duplicate IDs, corrected evaluator emails, unknown Students,
+  or wrong-term/out-of-scope Students, **When** preview is requested, **Then** blanks preserve
+  stored values, corrected emails override originals, invalid rows explain the issue,
+  and unknown/out-of-scope rows disclose no existing profile. No Student is created.
+- **Given** valid changed contacts, **When** Staff confirms each update and commits,
+  **Then** contacts persist with audit and idempotent retry; stale previews are rejected
+  and workflow/evaluation state is preserved. Import sends no email and creates no accounts.
+- **Given** the Student directory, **When** Staff views or edits a Student, **Then** all three
+  contact roles are distinct. The contact summary reports missing workplace evaluator email
+  and missing university-advisor email; contact completeness is separate from invitation
+  delivery and evaluation status. At least one university-advisor email satisfies that
+  category; importing contacts alone does not establish permission or readiness to send.
+- Missing-contact reminder campaigns and sending evaluation mail to university advisors
+  are follow-up work; existing workplace-evaluator invitation rules remain in force.
+
 ### AC-DATA-006 — Bulk import preview reports row-level issues
 
 Trace: `FR-MEM-002`

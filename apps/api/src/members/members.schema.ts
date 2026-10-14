@@ -67,6 +67,18 @@ export class StudentRecord {
   @Prop({ lowercase: true, trim: true })
   public evaluatorEmail?: string
 
+  @Prop({ trim: true })
+  public advisorName?: string
+
+  @Prop({ lowercase: true, trim: true })
+  public advisorEmail?: string
+
+  @Prop({ trim: true })
+  public siteVisitAdvisorName?: string
+
+  @Prop({ lowercase: true, trim: true })
+  public siteVisitAdvisorEmail?: string
+
   @Prop({ min: 2000 })
   public admissionYear?: number
 

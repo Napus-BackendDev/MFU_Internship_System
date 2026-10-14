@@ -1,10 +1,12 @@
 import * as XLSX from 'xlsx'
+import type { StudentContacts } from './student-contacts.parser.js'
 
 export const STUDENT_IMPORT_MAX_ROWS = 1000
 const STUDENT_IMPORT_MAX_SHEETS = 20
 const STUDENT_IMPORT_MAX_COLUMNS = 200
 
 export interface StudentImportSourceRow {
+  readonly contacts?: StudentContacts
   readonly key: string
   readonly sheet: string
   readonly rowNumber: number
@@ -20,7 +22,14 @@ export interface StudentImportSourceRow {
   readonly academicYear?: number
   readonly admissionYear?: number
   readonly company?: string
+  readonly companyAddress?: string
   readonly province?: string
+  readonly evaluatorEmail?: string
+  readonly evaluatorName?: string
+  readonly advisorEmail?: string
+  readonly advisorName?: string
+  readonly siteVisitAdvisorEmail?: string
+  readonly siteVisitAdvisorName?: string
   readonly questionFields: readonly string[]
   readonly issues: readonly StudentImportIssue[]
 }
@@ -138,10 +147,31 @@ const HEADER_ALIASES = {
     'Company',
     'Organization name',
     'Organization Name',
+    "Organization's Name",
+    'Organisation Name',
+    "Organisation's Name",
     'Organization',
     'สถานประกอบการ',
     'สถานประกอบการ (company)',
+    'ชื่อสถานประกอบการ',
     'บริษัท'
+  ],
+  companyAddress: [
+    'companyAddress',
+    'company_address',
+    'Organisation Adress',
+    "Organisation's Adress",
+    'Organisation Address',
+    "Organisation's Address",
+    'Organization Address',
+    "Organization's Address",
+    'Organization Adress',
+    "Organization's Adress",
+    'ที่อยู่สถานประกอบการ',
+    'ที่อยู่',
+    'ที่ตั้ง',
+    'Address',
+    'address'
   ],
   province: ['province', 'Province', 'จังหวัด', 'จังหวัด (province)']
 } as const
@@ -173,21 +203,50 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
         throw new Error('WORKBOOK_COLUMN_LIMIT_EXCEEDED')
       }
     }
-    const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
       defval: null,
       raw: true,
       blankrows: true
     })
+    const headerRowIndex = grid
+      .slice(0, 10)
+      .findIndex((row) =>
+        Array.isArray(row) &&
+        row.some((val) => {
+          const str = toText(val).toLowerCase().replace(/\s+/g, ' ')
+          return HEADER_ALIASES.studentId.some((alias) => {
+            const a = alias.toLowerCase().replace(/\s+/g, ' ')
+            return str === a || str.includes(a)
+          })
+        })
+      )
+    if (headerRowIndex < 0) continue
+
+    const rawHeaders = (grid[headerRowIndex] as unknown[]).map((h) => toText(h))
+    const records: Array<{ index: number; record: Record<string, unknown> }> = []
+    for (let r = headerRowIndex + 1; r < grid.length; r++) {
+      const dataRow = grid[r]
+      if (!Array.isArray(dataRow) || dataRow.length === 0) continue
+      const record: Record<string, unknown> = {}
+      for (let c = 0; c < rawHeaders.length; c++) {
+        const key = rawHeaders[c]
+        if (key) {
+          record[key] = (dataRow as unknown[])[c] ?? null
+        }
+      }
+      records.push({ index: r, record })
+    }
 
     const isTrackingSheet =
       /^(send\s*email|email\s*sent|mail\s*merge|email\s*logs?|delivery\s*logs?)$/i.test(
         sheetName.trim()
       ) ||
       (records.length > 0 &&
-        Object.keys(records[0] ?? {}).some((k) => /email\s*sent/i.test(k)) &&
-        Object.keys(records[0] ?? {}).some((k) => /pdf\s*url/i.test(k)))
+        Object.keys(records[0]?.record ?? {}).some((k) => /email\s*sent/i.test(k)) &&
+        Object.keys(records[0]?.record ?? {}).some((k) => /pdf\s*url/i.test(k)))
 
-    for (const [index, record] of records.entries()) {
+    for (const { index, record } of records) {
       const studentIdCell = pick(record, HEADER_ALIASES.studentId)
       if (toText(studentIdCell) === '') continue
       const studentId = normalizeStudentId(studentIdCell)
@@ -205,8 +264,17 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
 
       const rawEmailCell = toText(pick(record, HEADER_ALIASES.email))
       let email = rawEmailCell.toLowerCase()
-      const schoolReference = toText(pick(record, HEADER_ALIASES.school))
+      let schoolReference = toText(pick(record, HEADER_ALIASES.school))
       let programReference = toText(pick(record, HEADER_ALIASES.program))
+      if (!programReference) {
+        const inferred = inferProgramFromSheet(sheetName)
+        if (inferred) {
+          programReference = inferred.program
+          if (!schoolReference && inferred.school) {
+            schoolReference = inferred.school
+          }
+        }
+      }
       const courseReference = toText(pick(record, HEADER_ALIASES.course))
       let semester = toText(pick(record, HEADER_ALIASES.semester))
       let academicYear = parseYear(pick(record, HEADER_ALIASES.academicYear))
@@ -217,7 +285,46 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
       let rawNameTh = toText(pick(record, HEADER_ALIASES.nameTh))
       let rawNameEn = toText(pick(record, HEADER_ALIASES.nameEn))
       let company = toText(pick(record, HEADER_ALIASES.company))
+      const companyAddress = toText(pick(record, HEADER_ALIASES.companyAddress))
       const province = toText(pick(record, HEADER_ALIASES.province))
+
+      let evaluatorEmail = ''
+      let advisorName = ''
+      let advisorEmail = ''
+      let siteVisitAdvisorName = ''
+      let siteVisitAdvisorEmail = ''
+
+      for (const [rawKey, rawVal] of Object.entries(record)) {
+        const valStr = toText(rawVal)
+        if (!valStr || ['-', '—', 'n/a'].includes(valStr.toLowerCase())) continue
+        const cleanKey = rawKey.toLowerCase().replace(/\s+/g, ' ')
+        if (/ยืนยัน|confirm|comfirm/.test(cleanKey)) continue
+        if (/แก้ไข.*อีเมลผู้ประเมิน|edit.*evaluator.*email/.test(cleanKey)) {
+          if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valStr)) {
+            evaluatorEmail = valStr.toLowerCase()
+          }
+        } else if (/อีเมลผู้ประเมิน|evaluator.*email/.test(cleanKey)) {
+          if (!evaluatorEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valStr)) {
+            evaluatorEmail = valStr.toLowerCase()
+          }
+        } else if (/อาจารย์ผู้ประสานงาน|internship advisor/.test(cleanKey)) {
+          advisorName = valStr
+        } else if (/อาจารย์นิเทศ|site visit advisor/.test(cleanKey)) {
+          siteVisitAdvisorName = valStr
+        } else if (/อีเมลอาจารย์|advisor.*email/.test(cleanKey)) {
+          if (!advisorEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valStr)) {
+            advisorEmail = valStr.toLowerCase()
+          } else if (
+            !siteVisitAdvisorEmail &&
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valStr)
+          ) {
+            siteVisitAdvisorEmail = valStr.toLowerCase()
+          }
+        }
+      }
+      if (siteVisitAdvisorName && !siteVisitAdvisorEmail && advisorEmail) {
+        siteVisitAdvisorEmail = advisorEmail
+      }
 
       // Check for shifted columns (e.g. Email column has English name, Programe column has email address)
       if (
@@ -336,7 +443,13 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
         ...(academicYear !== null ? { academicYear } : {}),
         ...(admissionYear !== null ? { admissionYear } : {}),
         ...(company ? { company } : {}),
+        ...(companyAddress ? { companyAddress } : {}),
         ...(province ? { province } : {}),
+        ...(evaluatorEmail ? { evaluatorEmail } : {}),
+        ...(advisorName ? { advisorName } : {}),
+        ...(advisorEmail ? { advisorEmail } : {}),
+        ...(siteVisitAdvisorName ? { siteVisitAdvisorName } : {}),
+        ...(siteVisitAdvisorEmail ? { siteVisitAdvisorEmail } : {}),
         questionFields: rowQuestionFields,
         issues
       })
@@ -383,21 +496,76 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
   }
 }
 
+function inferProgramFromSheet(
+  sheetName: string
+): { program: string; school?: string } | null {
+  const clean = sheetName.trim()
+  if (/^dtbi|เทอม3\s*dtbi|dbi$/i.test(clean)) return { program: 'DBI', school: 'IT' }
+  if (/^mta$/i.test(clean)) return { program: 'MTA', school: 'IT' }
+  if (/^se$/i.test(clean)) return { program: 'SE', school: 'IT' }
+  if (/^ce|cpe$/i.test(clean)) return { program: 'CPE', school: 'IT' }
+  if (/^ba$/i.test(clean)) return { program: 'BA', school: 'MGT' }
+  if (/^eng|english$/i.test(clean)) return { program: 'ENG', school: 'LA' }
+  if (/^account|acc$/i.test(clean)) return { program: 'ACC', school: 'MGT' }
+  if (/^tour|tbe$/i.test(clean)) return { program: 'TBE', school: 'MGT' }
+  if (/^envi|env$/i.test(clean)) return { program: 'ENV', school: 'HS' }
+  if (/^bc$/i.test(clean)) return { program: 'BC', school: 'SIN' }
+  if (/^him|hbm$/i.test(clean)) return { program: 'HBM', school: 'MGT' }
+  return null
+}
+
 function pick(
   record: Readonly<Record<string, unknown>>,
   aliases: readonly string[]
 ): unknown {
-  const values = new Map(
-    Object.entries(record).map(([key, value]) => [
-      key.trim().toLowerCase(),
-      value
-    ])
-  )
+  const normalizedEntries = Object.entries(record)
+    .filter(([_, value]) => value !== undefined && value !== null && value !== '')
+    .map(
+      ([key, value]) =>
+        [key.trim().toLowerCase().replace(/\s+/g, ' '), value] as const
+    )
+
   for (const alias of aliases) {
-    const value = values.get(alias.trim().toLowerCase())
-    if (value !== undefined && value !== null && value !== '') return value
+    const target = alias.trim().toLowerCase().replace(/\s+/g, ' ')
+    for (const [key, value] of normalizedEntries) {
+      if (key === target) return value
+    }
+  }
+  for (const alias of aliases) {
+    const target = alias.trim().toLowerCase().replace(/\s+/g, ' ')
+    for (const [key, value] of normalizedEntries) {
+      if (key.includes(target) && !isExcludedSubmatch(key, target)) return value
+    }
   }
   return undefined
+}
+
+function isExcludedSubmatch(key: string, target: string): boolean {
+  if (
+    target === 'id' &&
+    (key.includes('student') ||
+      key.includes('email') ||
+      key.includes('school') ||
+      key.includes('program') ||
+      key.includes('course') ||
+      key.includes('mid'))
+  )
+    return true
+  if (
+    target === 'ปี' &&
+    (key.includes('ปีการศึกษา') ||
+      key.includes('ปีฝึกงาน') ||
+      key.includes('ปีที่เข้าศึกษา'))
+  )
+    return true
+  if (
+    target === 'ชื่อ' &&
+    (key.includes('ชื่อ-') ||
+      key.includes('ชื่อนักศึกษา') ||
+      key.includes('ชื่อสถานประกอบการ'))
+  )
+    return true
+  return false
 }
 
 function hasValue(

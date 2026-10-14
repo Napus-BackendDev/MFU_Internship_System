@@ -46,11 +46,16 @@ const listSchema = z.object({
     .enum([
       'awaiting_evaluator',
       'evaluator_assigned',
+      'ready_to_send',
+      'missing_evaluator_email',
+      'missing_workplace',
+      'missing_student_id',
       'awaiting_response',
       'submitted',
       'email_error',
       'pending',
       'inProgress',
+      'in_progress',
       'expired',
       'assignment_ambiguous'
     ])
@@ -132,6 +137,12 @@ const studentSchema = z.object({
   province: z.string().trim().optional(),
   evaluatorName: z.string().trim().optional(),
   evaluatorEmail: z.string().trim().optional(),
+  advisorName: z.string().trim().max(320).optional(),
+  advisorEmail: z.union([z.literal(''), z.email().max(320)]).optional(),
+  siteVisitAdvisorName: z.string().trim().max(320).optional(),
+  siteVisitAdvisorEmail: z
+    .union([z.literal(''), z.email().max(320)])
+    .optional(),
   admissionYear: z.number().int().min(2000).optional(),
   academicYear: z.number().int().min(2000).optional(),
   status: z.enum(['active', 'archived']).default('active')
@@ -210,7 +221,8 @@ export class MembersController {
   )
   public previewStudentImport(
     @Req() request: AuthenticatedRequest,
-    @UploadedFile() file: UploadedWorkbook | undefined
+    @UploadedFile() file: UploadedWorkbook | undefined,
+    @Query() rawOptions: unknown = {}
   ): Promise<unknown> {
     if (!file) {
       throw new z.ZodError([
@@ -241,7 +253,16 @@ export class MembersController {
     return this.importService.preview(
       request.actor!,
       decodedFilename,
-      file.buffer
+      file.buffer,
+      z
+        .object({
+          mode: z.enum(['students', 'contacts']).default('students'),
+          academicTermId: z
+            .string()
+            .regex(/^[a-f\d]{24}$/i)
+            .optional()
+        })
+        .parse(rawOptions)
     )
   }
 
