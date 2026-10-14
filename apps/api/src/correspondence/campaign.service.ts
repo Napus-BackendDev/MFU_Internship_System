@@ -11,6 +11,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
   UnprocessableEntityException
@@ -2377,41 +2378,54 @@ export class CampaignService {
     )
     const html = sanitizeEmailHtml(rawHtml)
 
-    const smtp = await this.resolveSmtpSettings()
+    const isMockMode =
+      this.config.get('NODE_ENV', { infer: true }) === 'development' ||
+      this.config.get('MAIL_DELIVERY_MODE', { infer: true }) === 'capture' ||
+      process.env.MAIL_DELIVERY_MODE === 'capture' ||
+      process.env.MOCK_EMAIL === 'true'
 
     let providerMessageId: string
-    try {
-      const transporter = nodemailer.createTransport({
-        host: smtp.host,
-        port: smtp.port,
-        secure: smtp.secure,
-        ...(smtp.username && smtp.password
-          ? { auth: { user: smtp.username, pass: smtp.password } }
-          : {}),
-        connectionTimeout: 3000,
-        greetingTimeout: 3000,
-        socketTimeout: 5000
-      })
+    if (isMockMode) {
+      providerMessageId = `<mock-captured-${Date.now()}@direct>`
+      Logger.log(
+        `[MOCK EMAIL CAPTURE] Invitation simulated for student ${student.studentId} to ${delivery.recipientEmail}. URL: ${invitationUrl}, PIN: ${pin}`,
+        'CampaignService'
+      )
+    } else {
+      const smtp = await this.resolveSmtpSettings()
+      try {
+        const transporter = nodemailer.createTransport({
+          host: smtp.host,
+          port: smtp.port,
+          secure: smtp.secure,
+          ...(smtp.username && smtp.password
+            ? { auth: { user: smtp.username, pass: smtp.password } }
+            : {}),
+          connectionTimeout: 3000,
+          greetingTimeout: 3000,
+          socketTimeout: 5000
+        })
 
-      const sendResult = await transporter.sendMail({
-        from: smtp.from,
-        to: delivery.recipientEmail,
-        subject,
-        html,
-        text
-      })
-      providerMessageId =
-        (sendResult as { messageId?: string })?.messageId ||
-        `<sent-${Date.now()}@direct>`
-    } catch (smtpErr: unknown) {
-      const errorMsg =
-        smtpErr instanceof Error ? smtpErr.message : 'SMTP_SEND_FAILED'
-      delivery.status = 'failed'
-      delivery.lastErrorCode = errorMsg
-      delivery.attempts = (delivery.attempts || 0) + 1
-      await delivery.save()
-      await this.reconcileCampaign(campaign.id, campaign.total)
-      throw smtpErr
+        const sendResult = await transporter.sendMail({
+          from: smtp.from,
+          to: delivery.recipientEmail,
+          subject,
+          html,
+          text
+        })
+        providerMessageId =
+          (sendResult as { messageId?: string })?.messageId ||
+          `<sent-${Date.now()}@direct>`
+      } catch (smtpErr: unknown) {
+        const errorMsg =
+          smtpErr instanceof Error ? smtpErr.message : 'SMTP_SEND_FAILED'
+        delivery.status = 'failed'
+        delivery.lastErrorCode = errorMsg
+        delivery.attempts = (delivery.attempts || 0) + 1
+        await delivery.save()
+        await this.reconcileCampaign(campaign.id, campaign.total)
+        throw smtpErr
+      }
     }
 
     delivery.status = 'sent'

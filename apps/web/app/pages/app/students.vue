@@ -2380,8 +2380,8 @@ async function handleSendEvaluationEmailSubmit() {
 
     if (isSent) {
       toast.add({
-        title: 'ส่งคำเชิญเรียบร้อยแล้ว',
-        description: `จัดส่งอีเมลไปยัง ${result.recipientEmail} แล้ว`,
+        title: 'ส่งคำเชิญเรียบร้อยแล้ว (จำลองการส่ง)',
+        description: `จัดส่งข้อมูลไปยัง ${result.recipientEmail} แล้ว (โหมดทดสอบ ไม่ส่งอีเมลจริง)`,
         color: 'success',
         icon: 'i-lucide-check-circle-2'
       })
@@ -4396,6 +4396,12 @@ function handleModalBackdropClick() {
                       : 'Evaluation Dispatch'
                   "
                 />
+                <UBadge
+                  color="warning"
+                  variant="subtle"
+                  size="xs"
+                  label="โหมดจำลอง (Developer Test)"
+                />
               </div>
               <p class="text-xs text-muted">
                 <template v-if="sendEmailModalMode === 'bulk'">
@@ -4426,6 +4432,24 @@ function handleModalBackdropClick() {
             :disabled="isSendingEvaluationEmail"
             @click="finishAndCloseSendModal"
           />
+        </div>
+
+        <!-- Developer Sandbox Notice -->
+        <div
+          v-if="
+            !sendEmailSuccessData &&
+            !bulkSendSuccessData &&
+            !(isSendingEvaluationEmail && sendEmailModalMode === 'single')
+          "
+          class="mx-6 mt-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-2.5 text-xs text-amber-700 dark:text-amber-300 shrink-0"
+        >
+          <UIcon
+            name="i-lucide-shield-alert"
+            class="size-4 shrink-0 text-amber-500"
+          />
+          <span
+            ><strong>โหมดทดสอบ (Developer Sandbox):</strong> ปิดระบบส่งอีเมลจริงภายนอก — ระบบจะจำลองว่าจัดส่งสำเร็จและสร้างลิงก์/PIN สำหรับทดสอบการประเมินได้ทันที</span
+          >
         </div>
 
         <!-- State 1: Sending Loading Animation Screen (Single Mode) -->
