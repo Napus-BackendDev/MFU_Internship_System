@@ -1343,7 +1343,7 @@ export class EvaluationsService {
       studentId?: string
       organizationId?: string
       search?: string
-      status?: EvaluationAssignmentRecord['status']
+      status?: EvaluationAssignmentRecord['status'] | 'sent'
     }
   ): Promise<unknown> {
     const filters: QueryFilter<EvaluationAssignmentRecord>[] = [
@@ -1351,11 +1351,55 @@ export class EvaluationsService {
     ]
     if (input.cycleId) filters.push({ cycleId: input.cycleId })
     if (input.studentId) filters.push({ studentId: input.studentId })
-    if (input.status) filters.push({ status: input.status })
+    if (input.status) {
+      if (input.status === 'sent') {
+        const sentDeliveries = await this.connection
+          .collection('deliveries')
+          .find({ status: 'sent' })
+          .project({ assignmentId: 1 })
+          .toArray()
+        const sentAssignmentIds = sentDeliveries
+          .map((d) => d.assignmentId)
+          .filter((id) => Boolean(id) && Types.ObjectId.isValid(id))
+          .map((id) => new Types.ObjectId(id))
+        filters.push({
+          _id: { $in: sentAssignmentIds },
+          status: { $nin: ['submitted', 'inProgress'] }
+        })
+      } else if (input.status === 'email_error') {
+        const failedDeliveries = await this.connection
+          .collection('deliveries')
+          .find({ status: 'failed' })
+          .project({ assignmentId: 1 })
+          .toArray()
+        const failedAssignmentIds = failedDeliveries
+          .map((d) => d.assignmentId)
+          .filter((id) => Boolean(id) && Types.ObjectId.isValid(id))
+          .map((id) => new Types.ObjectId(id))
+        filters.push({
+          $or: [
+            { status: 'email_error' },
+            { _id: { $in: failedAssignmentIds } }
+          ]
+        })
+      } else {
+        filters.push({ status: input.status })
+      }
+    }
     const filter: QueryFilter<EvaluationAssignmentRecord> =
       filters.length === 1 ? filters[0]! : { $and: filters }
     if (!input.search && !input.organizationId) {
-      return paginate(this.assignments, filter, input)
+      const pageResult = await paginate(this.assignments, filter, input)
+      const hydratedItems = pageResult.items.map((it) =>
+        it && typeof (it as any).toJSON === 'function'
+          ? (it as any).toJSON()
+          : it
+      )
+      const itemsWithDeliveries = await this.attachLatestDeliveries(hydratedItems)
+      return {
+        ...pageResult,
+        items: itemsWithDeliveries
+      }
     }
 
     const pipeline: PipelineStage[] = [
@@ -1527,10 +1571,12 @@ export class EvaluationsService {
       total: { count: number }[]
     }>(pipeline)
     const total = result?.total[0]?.count ?? 0
+    const hydratedItems = (result?.items ?? []).map((item) =>
+      this.assignments.hydrate(item).toJSON() as unknown as Record<string, unknown>
+    )
+    const itemsWithDeliveries = await this.attachLatestDeliveries(hydratedItems)
     return {
-      items: (result?.items ?? []).map((item) =>
-        this.assignments.hydrate(item).toJSON()
-      ),
+      items: itemsWithDeliveries,
       meta: {
         page: input.page,
         pageSize: input.pageSize,
@@ -1538,6 +1584,46 @@ export class EvaluationsService {
         totalPages: Math.ceil(total / input.pageSize)
       }
     }
+  }
+
+  private async attachLatestDeliveries<T extends Record<string, any>>(
+    items: T[]
+  ): Promise<(T & { delivery: Record<string, unknown> | null })[]> {
+    if (!items || !items.length) return items as any
+    const assignmentIds = items
+      .map((it) => (it._id ? String(it._id) : it.id ? String(it.id) : ''))
+      .filter(Boolean)
+    if (!assignmentIds.length) return items as any
+
+    const deliveries = await this.connection
+      .collection('deliveries')
+      .find({ assignmentId: { $in: assignmentIds } })
+      .sort({ createdAt: -1 })
+      .toArray()
+
+    const deliveryMap = new Map<string, Record<string, unknown>>()
+    for (const d of deliveries) {
+      const aId = String(d.assignmentId)
+      if (!deliveryMap.has(aId)) {
+        deliveryMap.set(aId, {
+          id: d._id.toString(),
+          status: d.status,
+          attempts: d.attempts || 0,
+          lastErrorCode: d.lastErrorCode,
+          recipientEmail: d.recipientEmail,
+          sentAt: d.sentAt,
+          createdAt: d.createdAt
+        })
+      }
+    }
+
+    return items.map((item) => {
+      const key = item._id ? String(item._id) : item.id ? String(item.id) : ''
+      return {
+        ...item,
+        delivery: deliveryMap.get(key) || null
+      }
+    })
   }
 
   public async createAssignment(

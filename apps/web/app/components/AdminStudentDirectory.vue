@@ -2181,7 +2181,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                   >
                     <p>ผู้ประเมินยังไม่ได้ส่งผลการประเมินฉบับสมบูรณ์</p>
                     <p class="text-[11px] text-muted/70 mt-0.5">
-                      ตรวจสอบคำเชิญและสถานะการส่งจากระบบ Correspondence
+                      ตรวจสอบคำเชิญและสถานะการส่งจากหน้าการประเมิน
                     </p>
                   </div>
                 </div>

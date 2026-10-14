@@ -773,9 +773,9 @@ watch(editorMode, (newMode) => {
       <div class="flex items-center gap-2">
         <UButton
           color="neutral"
-          icon="i-lucide-mail"
-          label="ประวัติการส่งอีเมล"
-          :to="$localePath('/app/correspondence')"
+          icon="i-lucide-clipboard-check"
+          label="ดูรายการประเมิน"
+          :to="$localePath('/app/evaluations')"
           variant="outline"
         />
       </div>

@@ -3,7 +3,6 @@ import type { RoleKey } from '@internship/shared-types'
 const ROUTE_ROLE_PERMISSIONS: Readonly<Record<string, readonly RoleKey[]>> = {
   '/app/users': ['systemAdmin', 'internshipStaff'],
   '/app/evaluations/forms': ['systemAdmin', 'internshipStaff'],
-  '/app/correspondence': ['systemAdmin', 'internshipStaff', 'auditor'],
   '/app/audit': ['systemAdmin', 'auditor'],
   '/app/settings/smtp': ['systemAdmin'],
   '/app/settings/academic': ['systemAdmin', 'internshipStaff'],

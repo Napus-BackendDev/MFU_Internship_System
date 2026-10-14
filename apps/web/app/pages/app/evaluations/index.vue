@@ -9,6 +9,16 @@ interface LocalizedText {
   readonly en: string
 }
 
+interface AssignmentDelivery {
+  readonly id: string
+  readonly status: 'sent' | 'queued' | 'sending' | 'failed' | 'uncertain'
+  readonly attempts: number
+  readonly lastErrorCode?: string
+  readonly recipientEmail?: string
+  readonly sentAt?: string
+  readonly createdAt?: string
+}
+
 interface Assignment {
   readonly id: string
   readonly studentId: string
@@ -21,6 +31,7 @@ interface Assignment {
     | 'expired'
     | 'reopened'
     | 'email_error'
+  readonly delivery?: AssignmentDelivery | null
 }
 
 interface StudentItem {
@@ -265,6 +276,18 @@ function getCompany(studentId: string, evaluatorId: string): string {
   return '[ไม่พบสถานประกอบการ]'
 }
 
+function getCompanyAddress(studentId: string, evaluatorId: string): string {
+  const s = getStudent(studentId)
+  if (s?.companyAddress) return s.companyAddress
+  const e = getEvaluator(evaluatorId)
+  if (e?.organizationId) {
+    const org = getOrganization(e.organizationId)
+    if (org?.address?.fullAddress) return org.address.fullAddress
+    if (org?.address?.street) return org.address.street
+  }
+  return s?.province || ''
+}
+
 function getProvince(studentId: string, evaluatorId: string): string {
   const s = getStudent(studentId)
   if (s?.province) return s.province
@@ -289,48 +312,79 @@ const statusColor = (value: Assignment['status']) =>
   )[value]
 
 function getAssignmentStatusBadge(item: Assignment) {
-  if (item.status === 'email_error') {
-    return {
-      color: 'error' as const,
-      label: 'ส่งอีเมลผิดพลาด (Email Error)',
-      icon: 'i-lucide-mail-warning'
-    }
-  }
   if (item.status === 'submitted') {
     return {
       color: 'success' as const,
       label: 'ส่งผลแล้ว (Submitted)',
-      icon: 'i-lucide-check-circle'
+      icon: 'i-lucide-check-circle-2',
+      detail: 'ผู้ประเมินส่งผลการประเมินเรียบร้อยแล้ว',
+      canRetry: false
     }
   }
   if (item.status === 'inProgress') {
     return {
       color: 'info' as const,
       label: 'กำลังทำแบบฟอร์ม (In Progress)',
-      icon: 'i-lucide-loader'
+      icon: 'i-lucide-loader',
+      detail: 'ผู้ประเมินกำลังดำเนินการทำแบบประเมิน',
+      canRetry: false
     }
   }
   if (item.status === 'expired') {
     return {
       color: 'error' as const,
       label: 'หมดอายุ (Expired)',
-      icon: 'i-lucide-alert-circle'
+      icon: 'i-lucide-alert-circle',
+      detail: 'แบบประเมินเกินกำหนดเวลาส่ง',
+      canRetry: true
+    }
+  }
+  if (item.status === 'email_error' || item.delivery?.status === 'failed') {
+    const reason = item.delivery?.lastErrorCode || 'ส่งอีเมลไม่สำเร็จ'
+    return {
+      color: 'error' as const,
+      label: 'ส่งอีเมลผิดพลาด (Email Error)',
+      icon: 'i-lucide-mail-warning',
+      detail: `สาเหตุ: ${reason}`,
+      canRetry: true
+    }
+  }
+  if (item.delivery?.status === 'sent' || item.status === 'pending') {
+    const email =
+      item.delivery?.recipientEmail || getEvaluator(item.evaluatorId)?.email
+    return {
+      color: 'success' as const,
+      label: 'ส่งแล้ว (Sent)',
+      icon: 'i-lucide-mail-check',
+      detail: email ? `จัดส่งไปยัง ${email} แล้ว` : 'จัดส่งคำขอประเมินแล้ว',
+      canRetry: false
+    }
+  }
+  if (item.delivery?.status === 'queued' || item.delivery?.status === 'sending') {
+    return {
+      color: 'warning' as const,
+      label: 'กำลังส่ง (Queued)',
+      icon: 'i-lucide-clock',
+      detail: 'ระบบกำลังนำคำเชิญเข้าคิวจัดส่ง',
+      canRetry: false
     }
   }
   return {
     color: 'warning' as const,
     label: 'รอการประเมิน (Pending)',
-    icon: 'i-lucide-clock'
+    icon: 'i-lucide-clock',
+    detail: '',
+    canRetry: false
   }
 }
 
 const statusOptions = [
   { value: undefined, label: 'ทั้งหมด (All)', icon: 'i-lucide-list-filter' },
   {
-    value: 'pending',
-    label: 'รอการประเมิน (Pending)',
-    icon: 'i-lucide-clock',
-    color: 'warning'
+    value: 'sent',
+    label: 'ส่งแล้ว (Sent)',
+    icon: 'i-lucide-mail-check',
+    color: 'success'
   },
   {
     value: 'inProgress',
@@ -843,9 +897,9 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                 </div>
               </td>
 
-              <!-- 2. คอลัมน์ผู้ประเมิน & สถานประกอบการ: email อยู่ข้างบน และ บริษัทไว้ข้างล่างพอ -->
+              <!-- 2. คอลัมน์ผู้ประเมิน & สถานประกอบการ: email อยู่ข้างบน, บริษัทไว้ตรงกลาง, ที่ตั้งอยู่ข้างล่าง -->
               <td class="py-3 px-4">
-                <div class="space-y-1.5">
+                <div class="space-y-1">
                   <!-- ส่วนบน: อีเมลผู้ประเมิน -->
                   <div class="flex items-center gap-1.5 text-xs">
                     <UIcon
@@ -860,7 +914,7 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                     </span>
                   </div>
 
-                  <!-- ส่วนล่าง: บริษัท และ ที่ตั้งจังหวัด -->
+                  <!-- ส่วนกลาง: สถานประกอบการ -->
                   <div class="flex items-center gap-1.5 text-xs text-muted">
                     <UIcon
                       name="i-lucide-building-2"
@@ -869,26 +923,26 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                     <span class="font-medium text-highlighted">
                       {{ getCompany(item.studentId, item.evaluatorId) }}
                     </span>
-                    <span
-                      v-if="
-                        getProvince(item.studentId, item.evaluatorId) &&
-                        getProvince(item.studentId, item.evaluatorId) !== '-'
-                      "
-                      class="text-muted/60"
-                      >·</span
-                    >
-                    <span
-                      v-if="
-                        getProvince(item.studentId, item.evaluatorId) &&
-                        getProvince(item.studentId, item.evaluatorId) !== '-'
-                      "
-                      class="inline-flex items-center gap-0.5 text-[11px] text-muted"
-                    >
-                      <UIcon
-                        name="i-lucide-map-pin"
-                        class="size-3 text-muted/80 shrink-0"
-                      />
-                      {{ getProvince(item.studentId, item.evaluatorId) }}
+                  </div>
+
+                  <!-- ส่วนล่าง: ที่ตั้ง (อยู่ข้างล่างสถานที่ประกอบการ) -->
+                  <div
+                    v-if="
+                      getCompanyAddress(item.studentId, item.evaluatorId) ||
+                      (getProvince(item.studentId, item.evaluatorId) &&
+                        getProvince(item.studentId, item.evaluatorId) !== '-')
+                    "
+                    class="flex items-start gap-1 text-[11px] text-muted pl-5"
+                  >
+                    <UIcon
+                      name="i-lucide-map-pin"
+                      class="size-3 text-muted/70 shrink-0 mt-0.5"
+                    />
+                    <span class="break-words leading-tight">
+                      {{
+                        getCompanyAddress(item.studentId, item.evaluatorId) ||
+                        getProvince(item.studentId, item.evaluatorId)
+                      }}
                     </span>
                   </div>
                 </div>
@@ -901,12 +955,47 @@ async function refreshAfterEmailAction(): Promise<boolean> {
 
               <!-- 5. สถานะ -->
               <td class="py-3 px-4">
-                <UBadge
-                  :color="getAssignmentStatusBadge(item).color"
-                  :label="getAssignmentStatusBadge(item).label"
-                  size="xs"
-                  variant="subtle"
-                />
+                <div class="space-y-1">
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <UBadge
+                      :color="getAssignmentStatusBadge(item).color"
+                      :label="getAssignmentStatusBadge(item).label"
+                      size="xs"
+                      variant="subtle"
+                    >
+                      <template #leading>
+                        <UIcon
+                          :name="getAssignmentStatusBadge(item).icon"
+                          class="size-3 shrink-0"
+                        />
+                      </template>
+                    </UBadge>
+                  </div>
+                  <p
+                    v-if="getAssignmentStatusBadge(item).detail"
+                    class="text-[11px] leading-tight max-w-[200px] break-words"
+                    :class="
+                      getAssignmentStatusBadge(item).color === 'error'
+                        ? 'text-red-600 dark:text-red-400 font-medium'
+                        : 'text-muted'
+                    "
+                  >
+                    {{ getAssignmentStatusBadge(item).detail }}
+                  </p>
+                  <div
+                    v-if="getAssignmentStatusBadge(item).canRetry"
+                    class="pt-0.5"
+                  >
+                    <UButton
+                      size="xs"
+                      color="error"
+                      variant="soft"
+                      icon="i-lucide-rotate-cw"
+                      label="ส่งใหม่"
+                      @click="openSendEmailModal(item)"
+                    />
+                  </div>
+                </div>
               </td>
 
               <!-- 6. การจัดการ -->

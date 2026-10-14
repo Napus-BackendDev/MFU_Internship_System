@@ -43,6 +43,7 @@ const pageSchema = z.object({
     .transform((value) => value || undefined),
   status: z
     .enum([
+      'sent',
       'pending',
       'inProgress',
       'submitted',

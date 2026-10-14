@@ -4697,9 +4697,9 @@ function handleModalBackdropClick() {
                 color="neutral"
                 variant="ghost"
                 size="xs"
-                icon="i-lucide-inbox"
-                label="ดูประวัติในหน้าการสื่อสาร"
-                :to="$localePath('/app/correspondence')"
+                icon="i-lucide-clipboard-check"
+                label="ดูรายการในหน้าการประเมิน"
+                :to="$localePath('/app/evaluations')"
                 @click="finishAndCloseSendModal"
               />
             </div>
@@ -4857,11 +4857,11 @@ function handleModalBackdropClick() {
           <div class="flex flex-wrap items-center justify-center gap-3 pt-2">
             <UButton
               color="neutral"
-              icon="i-lucide-inbox"
-              label="ดูประวัติในหน้าการสื่อสาร"
+              icon="i-lucide-clipboard-check"
+              label="ดูรายการในหน้าการประเมิน"
               size="md"
               variant="outline"
-              :to="$localePath('/app/correspondence')"
+              :to="$localePath('/app/evaluations')"
               @click="finishAndCloseSendModal"
             />
             <UButton
