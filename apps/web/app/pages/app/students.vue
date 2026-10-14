@@ -177,13 +177,14 @@ const toast = useToast()
 const search = ref('')
 const selectedSchool = ref('all')
 const selectedProgram = ref('all')
+const selectedAcademicYear = ref('all')
 const selectedCycleId = ref('all')
 const selectedCycleItem = ref<EvaluationCycleItem | null>(null)
 const selectedEvaluationStatus = ref('all')
 const page = ref(1)
 const pageSize = ref(5)
 
-// Fetch students list with school, program, evaluationStatus, and search filters
+// Fetch students list with school, program, academicYear, evaluationStatus, and search filters
 const { data, error, pending, refresh } = await useAsyncData(
   'students',
   () =>
@@ -196,6 +197,10 @@ const { data, error, pending, refresh } = await useAsyncData(
           selectedSchool.value !== 'all' ? selectedSchool.value : undefined,
         programId:
           selectedProgram.value !== 'all' ? selectedProgram.value : undefined,
+        academicYear:
+          selectedAcademicYear.value !== 'all'
+            ? Number(selectedAcademicYear.value)
+            : undefined,
         evaluationStatus:
           selectedEvaluationStatus.value !== 'all'
             ? selectedEvaluationStatus.value
@@ -209,6 +214,7 @@ const { data, error, pending, refresh } = await useAsyncData(
       pageSize,
       selectedSchool,
       selectedProgram,
+      selectedAcademicYear,
       selectedEvaluationStatus
     ]
   }
@@ -220,15 +226,25 @@ watch(selectedSchool, () => {
   clearSelection()
 })
 
-watch([search, pageSize, selectedProgram, selectedEvaluationStatus], () => {
-  page.value = 1
-  clearSelection()
-})
+watch(
+  [
+    search,
+    pageSize,
+    selectedProgram,
+    selectedAcademicYear,
+    selectedEvaluationStatus
+  ],
+  () => {
+    page.value = 1
+    clearSelection()
+  }
+)
 
 function resetFilters(): void {
   search.value = ''
   selectedSchool.value = 'all'
   selectedProgram.value = 'all'
+  selectedAcademicYear.value = 'all'
   selectedEvaluationStatus.value = 'all'
   page.value = 1
   clearSelection()
@@ -331,6 +347,48 @@ const evaluationStatusFilterOptions = [
   { value: 'email_error', label: '🔴 ส่งอีเมลผิดพลาด' },
   { value: 'expired', label: '⚫ หมดอายุ' }
 ]
+
+const { data: termsMasterData } = await useAsyncData(
+  'students-master-terms',
+  () =>
+    api<{ items: { id: string; academicYear: number; semester: string }[] }>(
+      '/academic/terms',
+      { query: { pageSize: 100 } }
+    )
+)
+
+const academicYearFilterOptions = computed(() => {
+  const yearsSet = new Set<number>()
+
+  for (const t of termsMasterData.value?.items || []) {
+    if (t.academicYear) yearsSet.add(t.academicYear)
+  }
+
+  for (const s of data.value?.items || []) {
+    if (s.academicYear) yearsSet.add(s.academicYear)
+    if (s.directoryRelations?.term?.academicYear) {
+      yearsSet.add(s.directoryRelations.term.academicYear)
+    }
+  }
+
+  if (yearsSet.size === 0) {
+    yearsSet.add(2025)
+  }
+
+  const sorted = Array.from(yearsSet).sort((a, b) => b - a)
+
+  return [
+    { value: 'all', label: 'ทุกปีการศึกษา (All Years)' },
+    ...sorted.map((y) => {
+      const beYear = y > 2400 ? y : y + 543
+      const ceYear = y > 2400 ? y - 543 : y
+      return {
+        value: String(ceYear),
+        label: `ปีการศึกษา ${beYear} (${ceYear})`
+      }
+    })
+  ]
+})
 
 interface PlacementItem {
   readonly id: string
@@ -1652,6 +1710,10 @@ async function selectAllMatchingStudents() {
             selectedSchool.value !== 'all' ? selectedSchool.value : undefined,
           programId:
             selectedProgram.value !== 'all' ? selectedProgram.value : undefined,
+          academicYear:
+            selectedAcademicYear.value !== 'all'
+              ? Number(selectedAcademicYear.value)
+              : undefined,
           evaluationStatus:
             selectedEvaluationStatus.value !== 'all'
               ? selectedEvaluationStatus.value
@@ -1714,6 +1776,10 @@ async function getSelectedStudents(): Promise<Student[]> {
             programId:
               selectedProgram.value !== 'all'
                 ? selectedProgram.value
+                : undefined,
+            academicYear:
+              selectedAcademicYear.value !== 'all'
+                ? Number(selectedAcademicYear.value)
                 : undefined,
             evaluationStatus:
               selectedEvaluationStatus.value !== 'all'
@@ -2584,7 +2650,7 @@ function handleModalBackdropClick() {
     <div
       class="rounded-xl border border-default bg-default p-4 shadow-sm space-y-3"
     >
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <!-- 1. ตัวกรองสำนักวิชา -->
         <div class="space-y-1">
           <label
@@ -2624,7 +2690,23 @@ function handleModalBackdropClick() {
           />
         </div>
 
-        <!-- 3. ตัวกรองสถานะการประเมิน (แบบ 3) -->
+        <!-- 3. ตัวกรองปีการศึกษา -->
+        <div class="space-y-1">
+          <label
+            class="text-xs font-semibold text-muted flex items-center gap-1.5"
+          >
+            <UIcon name="i-lucide-calendar" class="size-3.5 text-primary" />
+            ปีการศึกษา (Academic Year)
+          </label>
+          <SearchableSelect
+            v-model="selectedAcademicYear"
+            :options="academicYearFilterOptions"
+            search-placeholder="ค้นหาปีการศึกษา…"
+            aria-label="ปีการศึกษา"
+          />
+        </div>
+
+        <!-- 4. ตัวกรองสถานะการประเมิน -->
         <div class="space-y-1">
           <label
             class="text-xs font-semibold text-muted flex items-center gap-1.5"
@@ -2705,6 +2787,7 @@ function handleModalBackdropClick() {
           v-if="
             selectedSchool !== 'all' ||
             selectedProgram !== 'all' ||
+            selectedAcademicYear !== 'all' ||
             selectedEvaluationStatus !== 'all' ||
             search
           "
