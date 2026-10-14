@@ -2766,15 +2766,9 @@ function handleModalBackdropClick() {
                       {{ getProgramDisplay(student.programId, student) }}
                     </p>
                   </div>
-                  <div
-                    class="pt-0.5 flex items-center gap-1 text-[11px] text-muted"
-                  >
-                    <UIcon
-                      :name="getStudentCourseTrack(student).icon"
-                      class="size-3 text-muted shrink-0"
-                    />
-                    <span>{{ getStudentCourseTrack(student).display }}</span>
-                  </div>
+                  <p class="pt-0.5 text-[11px] text-muted leading-snug">
+                    {{ getStudentCourseTrack(student).display }}
+                  </p>
                 </div>
               </td>
 
