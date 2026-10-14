@@ -5049,11 +5049,11 @@ function handleModalBackdropClick() {
 
               <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-highlighted">
-                  ชื่อผู้ประเมิน
+                  ผู้ประเมิน
                 </label>
                 <UInput
                   v-model="sendEmailForm.evaluatorName"
-                  placeholder="เช่น นายสมบูรณ์ หัวหน้างาน"
+                  placeholder="เช่น นายสมบูรณ์ ผู้ประเมิน"
                   icon="i-lucide-user"
                   size="md"
                   class="w-full"
@@ -5095,42 +5095,45 @@ function handleModalBackdropClick() {
               <div
                 class="rounded-xl border border-default bg-muted/10 p-3 space-y-2 shadow-2xs"
               >
-                <span
-                  class="text-[11px] font-semibold text-muted flex items-center gap-1"
-                >
-                  <UIcon name="i-lucide-zap" class="size-3 text-amber-500" />
-                  ตั้งค่าด่วนสำหรับทุกคน (Batch Quick Fill):
-                </span>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <div class="flex items-center gap-1.5">
-                    <UInput
-                      v-model="bulkCommonEmail"
-                      placeholder="อีเมลผู้รับทุกคน"
-                      size="xs"
-                      class="flex-1"
-                    />
-                    <UButton
-                      color="primary"
-                      variant="soft"
-                      size="xs"
-                      label="ใช้ทุกคน"
-                      @click="applyBulkEmailToAll"
-                    />
-                  </div>
-                  <div class="flex items-center gap-1.5">
-                    <UInput
-                      v-model="bulkCommonEvaluator"
-                      placeholder="ชื่อผู้ประเมินทุกคน"
-                      size="xs"
-                      class="flex-1"
-                    />
-                    <UButton
-                      color="neutral"
-                      variant="soft"
-                      size="xs"
-                      label="ใช้ทุกคน"
-                      @click="applyBulkEvaluatorToAll"
-                    />
+                <!-- Quick Apply Tools -->
+                <div class="space-y-1.5">
+                  <span
+                    class="text-[11px] font-semibold text-muted flex items-center gap-1"
+                  >
+                    <UIcon name="i-lucide-zap" class="size-3 text-amber-500" />
+                    ตั้งค่าด่วนสำหรับทุกคน (Batch Quick Fill):
+                  </span>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div class="flex items-center gap-1.5">
+                      <UInput
+                        v-model="bulkCommonEmail"
+                        placeholder="อีเมลผู้รับทุกคน"
+                        size="xs"
+                        class="flex-1"
+                      />
+                      <UButton
+                        color="primary"
+                        variant="soft"
+                        size="xs"
+                        label="ใช้ทุกคน"
+                        @click="applyBulkEmailToAll"
+                      />
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                      <UInput
+                        v-model="bulkCommonEvaluator"
+                        placeholder="ชื่อผู้ประเมินทุกคน"
+                        size="xs"
+                        class="flex-1"
+                      />
+                      <UButton
+                        color="neutral"
+                        variant="soft"
+                        size="xs"
+                        label="ใช้ทุกคน"
+                        @click="applyBulkEvaluatorToAll"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -5138,7 +5141,7 @@ function handleModalBackdropClick() {
               <!-- Student Rows List -->
               <div class="space-y-1.5">
                 <div
-                  class="space-y-2.5 overflow-y-auto pr-1 max-h-[340px] rounded-xl"
+                  class="space-y-2.5 overflow-y-auto pr-1 max-h-[300px] rounded-xl"
                 >
                   <div
                     v-for="(st, sIdx) in bulkModalStudents"
@@ -5216,7 +5219,7 @@ function handleModalBackdropClick() {
                       </div>
                       <div class="space-y-0.5">
                         <label class="text-[11px] text-muted font-medium">
-                          ชื่อผู้ประเมิน
+                          ผู้ประเมิน
                         </label>
                         <UInput
                           v-model="bulkStudentEvaluators[st.id]!.name"
