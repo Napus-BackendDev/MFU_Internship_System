@@ -217,10 +217,12 @@ const { data, error, pending, refresh } = await useAsyncData(
 watch(selectedSchool, () => {
   selectedProgram.value = 'all'
   page.value = 1
+  clearSelection()
 })
 
 watch([search, pageSize, selectedProgram, selectedEvaluationStatus], () => {
   page.value = 1
+  clearSelection()
 })
 
 function resetFilters(): void {
@@ -229,6 +231,7 @@ function resetFilters(): void {
   selectedProgram.value = 'all'
   selectedEvaluationStatus.value = 'all'
   page.value = 1
+  clearSelection()
 }
 
 interface ProvinceMasterItem {
@@ -1573,6 +1576,8 @@ async function handleExecuteExcelImport() {
 // =========================================================================
 const selectedStudentIds = ref<string[]>([])
 const isBulkUpdating = ref(false)
+const isSelectingAll = ref(false)
+const selectedStudentsCache = ref<Map<string, Student>>(new Map())
 
 const isAllSelected = computed(() => {
   const items = data.value?.items ?? []
@@ -1589,6 +1594,11 @@ const isSomeSelected = computed(() => {
   return count > 0 && count < items.length
 })
 
+const isAllMatchingSelected = computed(() => {
+  const total = data.value?.meta?.total ?? 0
+  return total > 0 && selectedStudentIds.value.length === total
+})
+
 function toggleSelectAll() {
   const items = data.value?.items ?? []
   if (isAllSelected.value) {
@@ -1597,7 +1607,10 @@ function toggleSelectAll() {
     )
   } else {
     const newIds = new Set(selectedStudentIds.value)
-    items.forEach((s) => newIds.add(s.id))
+    items.forEach((s) => {
+      newIds.add(s.id)
+      selectedStudentsCache.value.set(s.id, s)
+    })
     selectedStudentIds.value = Array.from(newIds)
   }
 }
@@ -1608,11 +1621,124 @@ function toggleSelectStudent(id: string) {
     selectedStudentIds.value.splice(idx, 1)
   } else {
     selectedStudentIds.value.push(id)
+    const st = data.value?.items?.find((s) => s.id === id)
+    if (st) selectedStudentsCache.value.set(id, st)
   }
 }
 
 function clearSelection() {
   selectedStudentIds.value = []
+  selectedStudentsCache.value.clear()
+}
+
+async function selectAllMatchingStudents() {
+  if (isSelectingAll.value) return
+  isSelectingAll.value = true
+  try {
+    const total = data.value?.meta?.total ?? 0
+    if (total === 0) return
+
+    const allItems: Student[] = []
+    let currentPage = 1
+    const fetchPageSize = 500
+
+    while (allItems.length < total) {
+      const res = await api<StudentPage>('/students', {
+        query: {
+          page: currentPage,
+          pageSize: fetchPageSize,
+          search: search.value || undefined,
+          schoolId:
+            selectedSchool.value !== 'all' ? selectedSchool.value : undefined,
+          programId:
+            selectedProgram.value !== 'all' ? selectedProgram.value : undefined,
+          evaluationStatus:
+            selectedEvaluationStatus.value !== 'all'
+              ? selectedEvaluationStatus.value
+              : undefined
+        }
+      })
+      const items = res?.items ?? []
+      allItems.push(...items)
+      if (
+        items.length < fetchPageSize ||
+        allItems.length >= (res?.meta?.total ?? total)
+      ) {
+        break
+      }
+      currentPage++
+    }
+
+    for (const s of allItems) {
+      selectedStudentsCache.value.set(s.id, s)
+    }
+
+    selectedStudentIds.value = allItems.map((s) => s.id)
+    toast.add({
+      title: 'เลือกทั้งหมดสำเร็จ',
+      description: `เลือกนักศึกษาทั้งหมด ${selectedStudentIds.value.length} รายการเรียบร้อยแล้ว`,
+      color: 'success'
+    })
+  } catch (err: any) {
+    toast.add({
+      title: 'เลือกทั้งหมดไม่สำเร็จ',
+      description: err?.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลทั้งหมด',
+      color: 'error'
+    })
+  } finally {
+    isSelectingAll.value = false
+  }
+}
+
+async function getSelectedStudents(): Promise<Student[]> {
+  const map = new Map<string, Student>()
+  for (const s of data.value?.items ?? []) {
+    map.set(s.id, s)
+  }
+  for (const [id, s] of selectedStudentsCache.value.entries()) {
+    map.set(id, s)
+  }
+
+  const missingIds = selectedStudentIds.value.filter((id) => !map.has(id))
+  if (missingIds.length > 0) {
+    try {
+      let pageNum = 1
+      while (true) {
+        const res = await api<StudentPage>('/students', {
+          query: {
+            page: pageNum,
+            pageSize: 500,
+            search: search.value || undefined,
+            schoolId:
+              selectedSchool.value !== 'all' ? selectedSchool.value : undefined,
+            programId:
+              selectedProgram.value !== 'all'
+                ? selectedProgram.value
+                : undefined,
+            evaluationStatus:
+              selectedEvaluationStatus.value !== 'all'
+                ? selectedEvaluationStatus.value
+                : undefined
+          }
+        })
+        const items = res?.items ?? []
+        for (const s of items) {
+          map.set(s.id, s)
+          selectedStudentsCache.value.set(s.id, s)
+        }
+        if (items.length < 500 || pageNum * 500 >= (res?.meta?.total ?? 0)) {
+          break
+        }
+        pageNum++
+      }
+    } catch (e) {
+      console.error('Failed to fetch full student details for bulk action', e)
+    }
+  }
+
+  return selectedStudentIds.value
+    .map((id) => map.get(id))
+    .filter((s): s is Student => Boolean(s))
 }
 
 async function handleBulkDelete() {
@@ -1666,10 +1792,8 @@ async function handleBulkDelete() {
   }
 }
 
-function handleBulkExport() {
-  const selectedList = (data.value?.items ?? []).filter((s) =>
-    selectedStudentIds.value.includes(s.id)
-  )
+async function handleBulkExport() {
+  const selectedList = await getSelectedStudents()
   if (selectedList.length === 0) return
 
   const exportData = selectedList.map((s) => ({
@@ -2030,9 +2154,7 @@ async function openSendEmailModal(student: Student) {
 }
 
 async function openBulkSendEmailModal() {
-  const selectedList = (data.value?.items ?? []).filter((s) =>
-    selectedStudentIds.value.includes(s.id)
-  )
+  const selectedList = await getSelectedStudents()
   if (selectedList.length === 0) return
 
   const readyStudents = selectedList.filter(
@@ -2553,11 +2675,30 @@ function handleModalBackdropClick() {
       <div
         class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-default/70 text-xs text-muted"
       >
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-3">
           <span
             >แสดงผล <strong>{{ data?.items?.length ?? 0 }}</strong> คน
             (จากทั้งหมด {{ data?.meta?.total ?? 0 }} คนในระบบ)</span
           >
+          <UButton
+            v-if="(data?.meta?.total ?? 0) > 0"
+            size="xs"
+            color="primary"
+            variant="ghost"
+            icon="i-lucide-check-square"
+            :loading="isSelectingAll"
+            :label="
+              isAllMatchingSelected
+                ? 'ยกเลิกการเลือกทั้งหมด'
+                : `เลือกทั้งหมด (${data?.meta?.total ?? 0} คน)`
+            "
+            class="cursor-pointer"
+            @click="
+              isAllMatchingSelected
+                ? clearSelection()
+                : selectAllMatchingStudents()
+            "
+          />
         </div>
 
         <button
@@ -2621,15 +2762,40 @@ function handleModalBackdropClick() {
         v-if="selectedStudentIds.length > 0"
         class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 shadow-md"
       >
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <span
             class="grid size-7 place-items-center rounded-lg bg-primary text-inverted text-xs font-bold"
           >
             {{ selectedStudentIds.length }}
           </span>
           <span class="text-xs font-semibold text-highlighted">
-            เลือกอยู่ {{ selectedStudentIds.length }} รายการ
+            <template v-if="isAllMatchingSelected">
+              เลือกทั้งหมด {{ selectedStudentIds.length }} รายการแล้ว
+            </template>
+            <template v-else>
+              เลือกอยู่ {{ selectedStudentIds.length }} รายการ
+              <span
+                v-if="selectedStudentIds.length < (data?.meta?.total ?? 0)"
+                class="text-muted font-normal"
+              >
+                (ในหน้านี้)
+              </span>
+            </template>
           </span>
+
+          <!-- ปุ่มเลือกทั้งหมดตามภาพ -->
+          <UButton
+            v-if="!isAllMatchingSelected && (data?.meta?.total ?? 0) > selectedStudentIds.length"
+            size="xs"
+            color="primary"
+            variant="solid"
+            icon="i-lucide-check-check"
+            :loading="isSelectingAll"
+            :label="`เลือกทั้งหมด ${data?.meta?.total ?? 0} รายการ`"
+            class="ml-1 cursor-pointer font-medium"
+            @click="selectAllMatchingStudents"
+          />
+
           <button
             type="button"
             class="text-xs text-muted hover:text-highlighted underline ml-2 cursor-pointer"
@@ -2682,8 +2848,10 @@ function handleModalBackdropClick() {
               <th scope="col" class="py-3 px-4 w-10 text-center">
                 <input
                   type="checkbox"
-                  :checked="isAllSelected"
-                  :indeterminate="isSomeSelected && !isAllSelected"
+                  :checked="isAllSelected || isAllMatchingSelected"
+                  :indeterminate="
+                    isSomeSelected && !isAllSelected && !isAllMatchingSelected
+                  "
                   class="size-4 rounded border-default text-primary focus:ring-primary/20 cursor-pointer"
                   @change="toggleSelectAll"
                 />
