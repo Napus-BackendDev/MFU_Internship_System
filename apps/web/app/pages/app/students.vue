@@ -1872,7 +1872,7 @@ async function handleBulkExport() {
     ภาคการศึกษา: getSemesterDisplay(s),
     รายวิชา: getCourseDisplay(s),
     สถานประกอบการ: getCompanyDisplay(s),
-    'ผู้ประเมิน / พี่เลี้ยง': s.evaluatorName || '-',
+    'ผู้ประเมิน': s.evaluatorName || '-',
     อีเมลผู้ประเมิน: s.evaluatorEmail || '-',
     จังหวัด: getProvinceDisplay(s),
     สถานะการประเมิน: getStudentEvaluationStatus(s).label,
@@ -4017,16 +4017,16 @@ function handleModalBackdropClick() {
                 />
               </div>
 
-              <!-- 2. ชื่อผู้ประเมิน / พี่เลี้ยง -->
+              <!-- 2. ชื่อผู้ประเมิน -->
               <div>
                 <label
                   class="block text-xs font-semibold text-highlighted mb-1.5"
                 >
-                  ชื่อผู้ประเมิน / พี่เลี้ยง (Evaluator / Mentor Name)
+                  ชื่อผู้ประเมิน (Evaluator Name)
                 </label>
                 <UInput
                   v-model="editForm.evaluatorName"
-                  placeholder="เช่น นายสมบูรณ์ หัวหน้างาน หรือ พี่เลี้ยงฝึกงาน"
+                  placeholder="เช่น นายสมบูรณ์ หัวหน้างาน"
                   size="lg"
                   class="w-full"
                   icon="i-lucide-user-check"
@@ -5049,7 +5049,7 @@ function handleModalBackdropClick() {
 
               <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-highlighted">
-                  ชื่อผู้ประเมิน / พี่เลี้ยง
+                  ชื่อผู้ประเมิน
                 </label>
                 <UInput
                   v-model="sendEmailForm.evaluatorName"
@@ -5091,87 +5091,54 @@ function handleModalBackdropClick() {
 
             <!-- BULK MODE: Global Settings + Student Batch List -->
             <div v-else class="flex flex-col space-y-3 shrink-0">
-              <!-- Global Deadline & Quick Fill Card -->
+              <!-- Quick Fill Card -->
               <div
-                class="rounded-xl border border-default bg-muted/10 p-3.5 space-y-3 shadow-2xs"
+                class="rounded-xl border border-default bg-muted/10 p-3 space-y-2 shadow-2xs"
               >
-                <div class="flex items-center justify-between gap-2">
-                  <span
-                    class="text-xs font-bold text-highlighted flex items-center gap-1.5"
-                  >
-                    <UIcon
-                      name="i-lucide-calendar-clock"
-                      class="size-4 text-primary"
+                <span
+                  class="text-[11px] font-semibold text-muted flex items-center gap-1"
+                >
+                  <UIcon name="i-lucide-zap" class="size-3 text-amber-500" />
+                  ตั้งค่าด่วนสำหรับทุกคน (Batch Quick Fill):
+                </span>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div class="flex items-center gap-1.5">
+                    <UInput
+                      v-model="bulkCommonEmail"
+                      placeholder="อีเมลผู้รับทุกคน"
+                      size="xs"
+                      class="flex-1"
                     />
-                    กำหนดส่งภายใน (ทุกคน):
-                  </span>
-                  <select
-                    v-model="sendEmailForm.deadlineDays"
-                    class="h-8 rounded-lg border border-default bg-default px-2.5 text-xs text-highlighted focus:border-primary focus:outline-none"
-                  >
-                    <option :value="7">7 วัน</option>
-                    <option :value="14">14 วัน</option>
-                    <option :value="30">30 วัน (1 เดือน)</option>
-                    <option :value="60">60 วัน (2 เดือน)</option>
-                  </select>
-                </div>
-
-                <!-- Quick Apply Tools -->
-                <div class="pt-2 border-t border-default/60 space-y-2">
-                  <span
-                    class="text-[11px] font-semibold text-muted flex items-center gap-1"
-                  >
-                    <UIcon name="i-lucide-zap" class="size-3 text-amber-500" />
-                    ตั้งค่าด่วนสำหรับทุกคน (Batch Quick Fill):
-                  </span>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div class="flex items-center gap-1.5">
-                      <UInput
-                        v-model="bulkCommonEmail"
-                        placeholder="อีเมลผู้รับทุกคน"
-                        size="xs"
-                        class="flex-1"
-                      />
-                      <UButton
-                        color="primary"
-                        variant="soft"
-                        size="xs"
-                        label="ใช้ทุกคน"
-                        @click="applyBulkEmailToAll"
-                      />
-                    </div>
-                    <div class="flex items-center gap-1.5">
-                      <UInput
-                        v-model="bulkCommonEvaluator"
-                        placeholder="ชื่อผู้ดูแลทุกคน"
-                        size="xs"
-                        class="flex-1"
-                      />
-                      <UButton
-                        color="neutral"
-                        variant="soft"
-                        size="xs"
-                        label="ใช้ทุกคน"
-                        @click="applyBulkEvaluatorToAll"
-                      />
-                    </div>
+                    <UButton
+                      color="primary"
+                      variant="soft"
+                      size="xs"
+                      label="ใช้ทุกคน"
+                      @click="applyBulkEmailToAll"
+                    />
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <UInput
+                      v-model="bulkCommonEvaluator"
+                      placeholder="ชื่อผู้ประเมินทุกคน"
+                      size="xs"
+                      class="flex-1"
+                    />
+                    <UButton
+                      color="neutral"
+                      variant="soft"
+                      size="xs"
+                      label="ใช้ทุกคน"
+                      @click="applyBulkEvaluatorToAll"
+                    />
                   </div>
                 </div>
               </div>
 
               <!-- Student Rows List -->
               <div class="space-y-1.5">
-                <div class="flex items-center justify-between px-1">
-                  <span class="text-xs font-semibold text-highlighted">
-                    รายชื่อผู้รับแต่ละคน ({{ bulkModalStudents.length }} คน):
-                  </span>
-                  <span class="text-[11px] text-muted">
-                    กด "ดูตัวอย่าง" เพื่อดูจดหมาย
-                  </span>
-                </div>
-
                 <div
-                  class="space-y-2.5 overflow-y-auto pr-1 max-h-[300px] rounded-xl"
+                  class="space-y-2.5 overflow-y-auto pr-1 max-h-[340px] rounded-xl"
                 >
                   <div
                     v-for="(st, sIdx) in bulkModalStudents"
@@ -5249,11 +5216,11 @@ function handleModalBackdropClick() {
                       </div>
                       <div class="space-y-0.5">
                         <label class="text-[11px] text-muted font-medium">
-                          ชื่อผู้ประเมิน / พี่เลี้ยง
+                          ชื่อผู้ประเมิน
                         </label>
                         <UInput
                           v-model="bulkStudentEvaluators[st.id]!.name"
-                          placeholder="ชื่อผู้ดูแลการฝึกงาน"
+                          placeholder="ชื่อผู้ประเมิน"
                           size="xs"
                           icon="i-lucide-user"
                           class="w-full"
