@@ -31,6 +31,7 @@ interface Assignment {
     | 'expired'
     | 'reopened'
     | 'email_error'
+  readonly accessPin?: string
   readonly delivery?: AssignmentDelivery | null
 }
 
@@ -250,6 +251,26 @@ async function copyStudentId(id: string): Promise<void> {
     toast.add({
       title: 'ไม่สามารถคัดลอกรหัสนักศึกษาได้',
       description: 'โปรดลองคัดลอกรหัสนักศึกษาด้วยตนเอง',
+      color: 'error'
+    })
+  }
+}
+
+async function copyPin(pin?: string): Promise<void> {
+  if (!import.meta.client || !pin || pin === '-') return
+
+  try {
+    await navigator.clipboard.writeText(pin)
+    toast.add({
+      title: 'คัดลอก Pin สำเร็จ',
+      description: `Pin: ${pin}`,
+      color: 'success',
+      icon: 'i-lucide-check'
+    })
+  } catch {
+    toast.add({
+      title: 'ไม่สามารถคัดลอก Pin ได้',
+      description: 'โปรดลองคัดลอก Pin ด้วยตนเอง',
       color: 'error'
     })
   }
@@ -843,6 +864,7 @@ async function refreshAfterEmailAction(): Promise<boolean> {
             <tr>
               <th class="min-w-[200px] whitespace-nowrap">ข้อมูลนักศึกษา</th>
               <th class="min-w-[280px]">ผู้ประเมิน & สถานประกอบการ</th>
+              <th class="min-w-[140px]">Pin</th>
               <th class="min-w-[140px]">กำหนดส่ง</th>
               <th class="min-w-[110px]">สถานะ</th>
               <th class="w-24 text-right">การจัดการ</th>
@@ -934,6 +956,24 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                     </span>
                   </div>
                 </div>
+              </td>
+
+              <!-- 3. คอลัมน์ Pin -->
+              <td class="py-3 px-4">
+                <div v-if="item.accessPin" class="flex items-center gap-1.5">
+                  <span class="font-mono font-bold text-primary text-xs select-all">
+                    {{ item.accessPin }}
+                  </span>
+                  <button
+                    type="button"
+                    title="คัดลอก Pin"
+                    class="text-muted hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                    @click.stop="copyPin(item.accessPin)"
+                  >
+                    <UIcon name="i-lucide-copy" class="size-3" />
+                  </button>
+                </div>
+                <span v-else class="text-xs text-muted font-mono">-</span>
               </td>
 
               <!-- 4. กำหนดส่ง -->

@@ -1316,6 +1316,7 @@ export class CampaignService {
             expiresAt: assignment.deadlineAt,
             status: 'active',
             version: 1,
+            accessPin: pin,
             accessPinHash
           }).save(session ? { session } : {})
         } else {
@@ -1324,10 +1325,12 @@ export class CampaignService {
           previousInvitation.expiresAt = assignment.deadlineAt
           previousInvitation.status = 'active'
           previousInvitation.version = (previousInvitation.version || 1) + 1
+          previousInvitation.accessPin = pin
           previousInvitation.accessPinHash = accessPinHash
           invitation = await previousInvitation.save(session ? { session } : {})
         }
 
+        assignment.accessPin = pin
         assignment.accessPinHash = accessPinHash
         await assignment.save(session ? { session } : {})
 
@@ -2108,8 +2111,10 @@ export class CampaignService {
             email: recipientEmail,
             expiresAt: currentAssignment.deadlineAt,
             status: 'active',
+            accessPin: targetPin,
             accessPinHash
           }).save({ session })
+          currentAssignment.accessPin = targetPin
           currentAssignment.accessPinHash = accessPinHash
           await currentAssignment.save({ session })
         }
@@ -2308,18 +2313,22 @@ export class CampaignService {
       if (campaign.type === 'invitation' || !invitation.accessPinHash) {
         pin = generatePin()
         const accessPinHash = hashInvitationPin(pin, pepper)
+        invitation.accessPin = pin
         invitation.accessPinHash = accessPinHash
         await invitation.save()
+        assignment.accessPin = pin
         assignment.accessPinHash = accessPinHash
         await assignment.save()
       }
     } else {
       const accessPinHash = hashInvitationPin(pin, pepper)
-      if (invitation.accessPinHash !== accessPinHash) {
+      if (invitation.accessPinHash !== accessPinHash || !invitation.accessPin) {
+        invitation.accessPin = pin
         invitation.accessPinHash = accessPinHash
         await invitation.save()
       }
-      if (assignment.accessPinHash !== accessPinHash) {
+      if (assignment.accessPinHash !== accessPinHash || !assignment.accessPin) {
+        assignment.accessPin = pin
         assignment.accessPinHash = accessPinHash
         await assignment.save()
       }

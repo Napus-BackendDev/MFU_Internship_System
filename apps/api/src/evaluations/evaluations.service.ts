@@ -50,6 +50,7 @@ import {
   StudentRecord
 } from '../members/members.schema.js'
 import { studentReferenceFilter } from '../members/student-reference.js'
+import { generatePin, hashInvitationPin } from '../correspondence/pin.js'
 import { assignmentIdWithinScope } from './evaluation-assignment.scope.js'
 import { calculateCategoryScores } from './evaluation.scoring.js'
 import {
@@ -1549,6 +1550,7 @@ export class EvaluationsService {
       competencySetVersionId: 1,
       deadlineAt: 1,
       status: 1,
+      accessPin: 1,
       evaluationVersion: 1,
       createdAt: 1,
       updatedAt: 1
@@ -1594,6 +1596,27 @@ export class EvaluationsService {
       .map((it) => (it._id ? String(it._id) : it.id ? String(it.id) : ''))
       .filter(Boolean)
     if (!assignmentIds.length) return items as any
+
+    const pepper = process.env.INVITATION_TOKEN_PEPPER || 'internship-evaluation-token-pepper-default'
+    for (const rawItem of items) {
+      const item = rawItem as Record<string, any>
+      if (!item.accessPin) {
+        const key = item._id ? String(item._id) : item.id ? String(item.id) : ''
+        if (key && Types.ObjectId.isValid(key)) {
+          const inv = await this.connection.collection('invitations').findOne({ assignmentId: key })
+          if (inv?.accessPin) {
+            item.accessPin = inv.accessPin
+            await this.assignments.updateOne({ _id: new Types.ObjectId(key) }, { $set: { accessPin: inv.accessPin } })
+          } else {
+            const pin = generatePin()
+            const hash = hashInvitationPin(pin, pepper)
+            await this.assignments.updateOne({ _id: new Types.ObjectId(key) }, { $set: { accessPin: pin, accessPinHash: hash } })
+            await this.connection.collection('invitations').updateOne({ assignmentId: key }, { $set: { accessPin: pin, accessPinHash: hash } })
+            item.accessPin = pin
+          }
+        }
+      }
+    }
 
     const deliveries = await this.connection
       .collection('deliveries')
