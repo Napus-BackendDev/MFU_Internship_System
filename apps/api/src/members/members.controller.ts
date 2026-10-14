@@ -47,6 +47,7 @@ const listSchema = z.object({
       'awaiting_evaluator',
       'evaluator_assigned',
       'ready_to_send',
+      'missing_advisor',
       'missing_evaluator_email',
       'missing_workplace',
       'missing_student_id',

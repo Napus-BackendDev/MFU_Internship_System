@@ -318,6 +318,7 @@ const provinceSelectOptions = computed(() => {
 const evaluationStatusFilterOptions = [
   { value: 'all', label: 'ทุกสถานะ (All Statuses)' },
   { value: 'ready_to_send', label: '🔵 พร้อมส่งแบบประเมิน' },
+  { value: 'missing_advisor', label: '⚪ ขาดอาจารย์ที่ปรึกษา' },
   { value: 'missing_evaluator_email', label: '⚪ ขาดอีเมลผู้ประเมิน' },
   { value: 'missing_workplace', label: '⚪ ขาดสถานประกอบการ' },
   { value: 'missing_student_id', label: '⚪ ขาดรหัสนักศึกษา' },
@@ -734,13 +735,13 @@ function formatDateTime(isoStr?: string): string {
 // Helper: Check student data completeness before sending evaluation email
 function checkStudentCompleteness(student?: Student | null): {
   isComplete: boolean
-  missingItems: Array<{ key: 'studentId' | 'company' | 'evaluatorEmail'; label: string }>
-  firstMissing?: { key: 'studentId' | 'company' | 'evaluatorEmail'; label: string }
+  missingItems: Array<{ key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'; label: string }>
+  firstMissing?: { key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'; label: string }
 } {
   if (!student) {
     return { isComplete: false, missingItems: [] }
   }
-  const missingItems: Array<{ key: 'studentId' | 'company' | 'evaluatorEmail'; label: string }> = []
+  const missingItems: Array<{ key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'; label: string }> = []
 
   // 1. ตรวจรหัสนักศึกษา
   if (!student.studentId?.trim()) {
@@ -758,6 +759,17 @@ function checkStudentCompleteness(student?: Student | null): {
   const isValidEmail = Boolean(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
   if (!isValidEmail) {
     missingItems.push({ key: 'evaluatorEmail', label: 'อีเมลผู้ประเมิน' })
+  }
+
+  // 4. ตรวจอาจารย์ที่ปรึกษา / ผู้ประสานงาน
+  const hasAdvisor = Boolean(
+    student.advisorName?.trim() ||
+    student.advisorEmail?.trim() ||
+    student.siteVisitAdvisorName?.trim() ||
+    student.siteVisitAdvisorEmail?.trim()
+  )
+  if (!hasAdvisor) {
+    missingItems.push({ key: 'advisor', label: 'อาจารย์ที่ปรึกษา' })
   }
 
   return {
@@ -853,11 +865,20 @@ function getStudentEvaluationStatus(student: Student) {
         description: `ยังไม่สามารถส่งแบบประเมินได้ (ขาด: ${missingDesc})`
       }
     }
+    if (completeness.firstMissing?.key === 'evaluatorEmail') {
+      return {
+        code: 'missing_evaluator_email',
+        label: 'ขาดอีเมลผู้ประเมิน',
+        color: 'neutral' as const,
+        icon: 'i-lucide-mail-warning',
+        description: `ยังไม่สามารถส่งแบบประเมินได้ (ขาด: ${missingDesc})`
+      }
+    }
     return {
-      code: 'missing_evaluator_email',
-      label: 'ขาดอีเมลผู้ประเมิน',
+      code: 'missing_advisor',
+      label: 'ขาดอาจารย์ที่ปรึกษา',
       color: 'neutral' as const,
-      icon: 'i-lucide-mail-warning',
+      icon: 'i-lucide-user-x',
       description: `ยังไม่สามารถส่งแบบประเมินได้ (ขาด: ${missingDesc})`
     }
   }
@@ -3634,7 +3655,7 @@ function handleModalBackdropClick() {
             </li>
           </ul>
           <p class="text-[11px] text-muted pt-2 border-t border-default/50">
-            * ต้องมีรหัสนักศึกษา, ชื่อสถานประกอบการ และอีเมลผู้ประเมินที่ถูกต้อง จึงจะสามารถส่งอีเมลแบบประเมินได้
+            * ต้องมีรหัสนักศึกษา, ชื่อสถานประกอบการ, อีเมลผู้ประเมิน และอาจารย์ที่ปรึกษา จึงจะสามารถส่งอีเมลแบบประเมินได้
           </p>
         </div>
 

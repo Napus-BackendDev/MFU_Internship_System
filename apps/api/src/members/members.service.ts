@@ -512,7 +512,24 @@ export class MembersService {
           _id: { $nin: allObjectIds },
           studentId: { $nin: normalizedAllReferences },
           company: { $exists: true, $nin: ['', '-', '—', null] },
-          evaluatorEmail: { $exists: true, $regex: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ }
+          evaluatorEmail: { $exists: true, $regex: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+          $or: [
+            { advisorName: { $exists: true, $nin: ['', '-', '—', null] } },
+            { advisorEmail: { $exists: true, $nin: ['', '-', '—', null] } },
+            { siteVisitAdvisorName: { $exists: true, $nin: ['', '-', '—', null] } },
+            { siteVisitAdvisorEmail: { $exists: true, $nin: ['', '-', '—', null] } }
+          ]
+        })
+      } else if (input.evaluationStatus === 'missing_advisor') {
+        requestedFilters.push({
+          _id: { $nin: allObjectIds },
+          studentId: { $nin: normalizedAllReferences },
+          $and: [
+            { $or: [{ advisorName: { $exists: false } }, { advisorName: null }, { advisorName: '' }, { advisorName: '-' }, { advisorName: '—' }] },
+            { $or: [{ advisorEmail: { $exists: false } }, { advisorEmail: null }, { advisorEmail: '' }, { advisorEmail: '-' }, { advisorEmail: '—' }] },
+            { $or: [{ siteVisitAdvisorName: { $exists: false } }, { siteVisitAdvisorName: null }, { siteVisitAdvisorName: '' }, { siteVisitAdvisorName: '-' }, { siteVisitAdvisorName: '—' }] },
+            { $or: [{ siteVisitAdvisorEmail: { $exists: false } }, { siteVisitAdvisorEmail: null }, { siteVisitAdvisorEmail: '' }, { siteVisitAdvisorEmail: '-' }, { siteVisitAdvisorEmail: '—' }] }
+          ]
         })
       } else if (input.evaluationStatus === 'missing_student_id') {
         requestedFilters.push({
