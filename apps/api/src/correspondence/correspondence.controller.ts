@@ -63,14 +63,20 @@ const flexibleEmailSchema = z
     { message: 'Invalid email address' }
   )
 
+const optionalTrimmedString = z
+  .string()
+  .trim()
+  .optional()
+  .transform((val) => (val && val.length > 0 ? val : undefined))
+
 const directInvitationSchema = z.object({
   studentId: z.string().min(1),
   competencySetId: z.string().min(1),
   recipientEmail: flexibleEmailSchema,
-  evaluatorName: z.string().min(1).optional(),
+  evaluatorName: optionalTrimmedString,
   deadlineDays: z.coerce.number().int().min(1).max(365).default(30),
-  subject: z.string().optional(),
-  notes: z.string().optional()
+  subject: optionalTrimmedString,
+  notes: optionalTrimmedString
 })
 
 const targetedEmailSchema = z.object({
@@ -78,7 +84,7 @@ const targetedEmailSchema = z.object({
   studentId: z.string().min(1),
   templateCode: z.enum(['evaluation_request', 'evaluation_reminder']),
   recipientEmail: flexibleEmailSchema.optional(),
-  evaluatorName: z.string().min(1).optional()
+  evaluatorName: optionalTrimmedString
 })
 const invitationReissueSchema = z.object({
   reason: z.string().trim().min(5).max(500)

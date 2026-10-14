@@ -2351,9 +2351,13 @@ async function handleSendEvaluationEmailSubmit() {
         studentId: sendModalStudent.value.id,
         competencySetId: selectedCompetencySet.value.id,
         recipientEmail: sendEmailForm.value.recipientEmail.trim(),
-        evaluatorName: sendEmailForm.value.evaluatorName.trim(),
+        ...(sendEmailForm.value.evaluatorName?.trim()
+          ? { evaluatorName: sendEmailForm.value.evaluatorName.trim() }
+          : {}),
         deadlineDays: Number(sendEmailForm.value.deadlineDays),
-        notes: sendEmailForm.value.notes.trim()
+        ...(sendEmailForm.value.notes?.trim()
+          ? { notes: sendEmailForm.value.notes.trim() }
+          : {})
       }
     })
 
@@ -2487,9 +2491,11 @@ async function handleBulkSendEvaluationEmailSubmit() {
           studentId: st.id,
           competencySetId: selectedCompetencySet.value.id,
           recipientEmail: ev.email.trim(),
-          evaluatorName: ev.name.trim(),
+          ...(ev.name?.trim() ? { evaluatorName: ev.name.trim() } : {}),
           deadlineDays: Number(sendEmailForm.value.deadlineDays),
-          notes: sendEmailForm.value.notes.trim()
+          ...(sendEmailForm.value.notes?.trim()
+            ? { notes: sendEmailForm.value.notes.trim() }
+            : {})
         }
       })
 
