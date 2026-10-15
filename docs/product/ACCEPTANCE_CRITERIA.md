@@ -176,11 +176,13 @@ Trace: `FR-MEM-001`, `FR-MEM-004`
 
 Trace: `FR-MEM-005`
 
-**Given** a Program, Organization, Student, Placement, or Evaluator is referenced by historical workflow data  
+**Given** a Program, Organization, Student, Placement, Evaluator, or Province is referenced by historical workflow data
 **When** authorized Staff requests removal  
 **Then** the record is archived or the request is rejected  
 **And** historical references remain resolvable  
 **And** new active workflows cannot select archived data.
+
+For the Province catalog, removal sets `status: inactive`, preserves the catalog identity and historical Student province text, and can be reversed by an authorized activation. The DELETE response remains `200 { success: true }`.
 
 ### AC-DATA-008 — Student contact matching (2026-10-10)
 
@@ -255,6 +257,26 @@ Trace: `FR-MEM-002`
 - An unassigned Evaluator at Organization A and any Organization/Evaluator linked only to Student B remain hidden.
 - Search and explicit filters narrow the authorized result and cannot expand it.
 - Missing or malformed Student, Placement, or assignment references fail closed.
+
+### AC-DATA-011 — Audited Placement completion (owner approved 2026-10-15)
+
+**Given** authorized Staff or Admin manages an active Placement within scope
+
+**When** they confirm its actual end timestamp in Asia/Bangkok, nonblank reason and current revision
+
+**Then** the actual end must be strictly after start and no later than now
+
+**And** at least one linked assignment exists, every linked assignment is submitted, and each has its current nonsuperseded final evaluation
+
+**And** completion, revision increment, actual end and scoped audit persist in one transaction; an audit failure rolls back completion
+
+**And** stale/concurrent completion fails safely; concurrent assignment creation locks the same Placement
+
+**And** normal creation cannot set completed; sending invitations cannot reactivate completed Placements or reset submitted evaluations
+
+**And** the Student can request documents through the existing template/source checks; completion does not change scores or close evaluation cycles.
+
+This checks every linked assignment, with minimum one. Required evaluator count beyond linked assignments remains unspecified; no pass/fail or graduation policy is inferred.
 
 ## 5. Competency sets and evaluation cycles
 
@@ -459,6 +481,8 @@ Trace: `FR-MAIL-002`
 **Then** one campaign and one intended delivery per eligible recipient are created  
 **And** each job references the exact template version and invitation/assignment  
 **And** duplicate confirmation returns the existing campaign.
+**And** Worker alone dispatches deliveries in every environment; the API must not send the same outbox row directly or report queued as delivered.
+**And** the PIN received in the captured or delivered invitation email verifies against the current bound assignment; queue acceptance does not return a potentially rotated plaintext PIN.
 
 ### AC-MAIL-005 — Provider timeout does not create unintended duplicate
 

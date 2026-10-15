@@ -62,13 +62,15 @@ for (const width of [360, 1280]) {
     await page.goto('/app/students')
     await page.waitForLoadState('networkidle')
     await expect(
-      page.getByRole('columnheader', { name: 'อาจารย์ที่ปรึกษา / ผู้ประสานงาน' })
+      page.getByRole('columnheader', {
+        name: 'อาจารย์ที่ปรึกษา / ผู้ประสานงาน'
+      })
     ).toBeVisible()
     const evaluatorSummary = page.getByTestId('student-contacts').nth(0)
     const advisorSummary = page.getByTestId('student-contacts').nth(1)
-    await expect(evaluatorSummary).toContainText('ผู้ประเมินสถานประกอบการ')
-    await expect(advisorSummary).toContainText('อาจารย์ผู้ประสานงาน')
-    await expect(advisorSummary).toContainText('อาจารย์นิเทศ / ที่ปรึกษา')
+    await expect(evaluatorSummary).toContainText('evaluator@example.test')
+    await expect(advisorSummary).toContainText('Academic Coordinator')
+    await expect(advisorSummary).toContainText('Site Visitor')
     await expect(advisorSummary).not.toContainText('ขาดอีเมล')
     await page.getByRole('button', { name: 'นำเข้าจาก Excel' }).click()
     await page.getByRole('combobox', { name: 'ประเภทข้อมูลนำเข้า' }).click()
@@ -93,6 +95,17 @@ for (const width of [360, 1280]) {
     await expect(
       page.getByRole('dialog').getByText('พร้อมอัปเดต')
     ).toBeVisible()
+    const confirmRow = page.getByRole('checkbox', {
+      name: 'ยืนยันแถว Contacts/2'
+    })
+    await confirmRow.uncheck()
+    await expect(
+      page.getByRole('button', { name: 'ยืนยันนำเข้าข้อมูล (0 รายการ)' })
+    ).toBeDisabled()
+    await confirmRow.check()
+    await expect(
+      page.getByRole('button', { name: 'ยืนยันนำเข้าข้อมูล (1 รายการ)' })
+    ).toBeEnabled()
     expect(
       await page
         .getByRole('dialog')

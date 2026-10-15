@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import type { Filter, Document } from 'mongodb'
 import { decryptSmtpSecret, type AppEnvironment } from '@internship/config'
 import { sanitizeEmailHtml } from '@internship/email-security'
@@ -32,7 +31,6 @@ import { AuditService } from '../audit/audit.service.js'
 import { SessionRecord } from '../auth/user.schema.js'
 import { paginate, type PaginationInput } from '../common/pagination.js'
 import { idempotencyScopeKey, requestHash } from '../common/idempotency.js'
-import { runWithTransaction } from '../common/mongo-transaction.js'
 import { scopeFilter } from '../common/scope.js'
 import {
   CompetencySetRecord,
@@ -534,18 +532,8 @@ export class CampaignService {
       outbox.deliveries.map(async ({ deliveryId, invitationId }) => {
         try {
           await this.enqueueDelivery(deliveryId, invitationId)
-          if (
-            this.config.get('NODE_ENV', { infer: true }) === 'development' &&
-            process.env.NODE_ENV !== 'test'
-          ) {
-            await this.dispatchDeliveryDirect(deliveryId, invitationId)
-          }
         } catch {
-          if (process.env.NODE_ENV !== 'test') {
-            await this.dispatchDeliveryDirect(deliveryId, invitationId).catch(
-              () => undefined
-            )
-          }
+          // Leave the durable outbox queued for Worker reconciliation.
         }
       })
     )
@@ -1185,6 +1173,7 @@ export class CampaignService {
     }
 
     // 5. Ensure placement for student
+    let placementRefresh: Partial<PlacementRecord> | undefined
     let placement = await this.placements
       .findOne({
         studentId: { $in: [student.id, student.studentId] },
@@ -1202,14 +1191,17 @@ export class CampaignService {
         .exec()
 
       if (placement) {
-        placement.status = 'active'
-        placement.organizationId = evaluator.organizationId
-        placement.startsAt = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-        placement.endsAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)
-        if (student.schoolId) placement.schoolId = student.schoolId
-        if (student.programId) placement.programId = student.programId
-        if (academicTermId) placement.academicTermId = academicTermId
-        await placement.save()
+        if (!['planned', 'active'].includes(placement.status))
+          throw new ConflictException({ code: 'PLACEMENT_NOT_ASSIGNABLE' })
+        placementRefresh = {
+          status: 'active',
+          organizationId: evaluator.organizationId,
+          startsAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+          endsAt: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+          schoolId: student.schoolId,
+          programId: student.programId,
+          academicTermId
+        }
       } else {
         placement = await this.placements.create({
           studentId: student.id,
@@ -1224,8 +1216,7 @@ export class CampaignService {
         })
       }
     } else if (placement.organizationId !== evaluator.organizationId) {
-      placement.organizationId = evaluator.organizationId
-      await placement.save()
+      placementRefresh = { organizationId: evaluator.organizationId }
     }
 
     // 6. Create EvaluationAssignment with questionSnapshot
@@ -1262,10 +1253,30 @@ export class CampaignService {
 
     let outbox
     try {
-      outbox = await runWithTransaction(this.connection, async (session) => {
+      outbox = await this.connection.transaction(async (session) => {
         await this.lockOpenCycle(cycle!.id, now, session)
+        const placementLock = await this.placements.updateOne(
+          { _id: placement._id, status: { $in: ['planned', 'active'] } },
+          {
+            ...(placementRefresh ? { $set: placementRefresh } : {}),
+            $inc: { __v: 1 }
+          },
+          { session }
+        )
+        if (placementLock.matchedCount !== 1)
+          throw new ConflictException({ code: 'PLACEMENT_NOT_ASSIGNABLE' })
+        const previousAssignment = await this.assignments
+          .findOne({ cycleId: cycle!.id, studentId: student.id })
+          .session(session)
+          .exec()
+        if (previousAssignment?.status === 'submitted')
+          throw new ConflictException({ code: 'ASSIGNMENT_NOT_EDITABLE' })
         const assignment = await this.assignments.findOneAndUpdate(
-          { cycleId: cycle!.id, studentId: student.id },
+          {
+            cycleId: cycle!.id,
+            studentId: student.id,
+            status: { $ne: 'submitted' }
+          },
           {
             $set: {
               placementId: placement.id,
@@ -1407,42 +1418,15 @@ export class CampaignService {
       // ignore
     }
 
-    let deliveryStatus: CampaignRecord['status'] | 'failed' =
-      outbox.campaign.status
-    let deliveryError: string | undefined
-    if (process.env.NODE_ENV !== 'test') {
-      try {
-        try {
-          await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
-        } catch {
-          // Redis queue may be unavailable in dev/local
-        }
-        if (this.config.get('NODE_ENV', { infer: true }) === 'development') {
-          const directResult = await this.dispatchDeliveryDirect(
-            outbox.delivery.id,
-            outbox.invitation.id,
-            outbox.pin
-          )
-          if (directResult.success) {
-            deliveryStatus = 'completed'
-          }
-        }
-      } catch (err: unknown) {
-        deliveryStatus = 'failed'
-        deliveryError =
-          err instanceof Error ? err.message : 'SMTP_SEND_FAILED'
-      }
-    } else {
-      try {
-        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
-      } catch {
-        // Keep queued
-      }
+    try {
+      await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+    } catch {
+      // Leave the durable outbox queued for Worker reconciliation.
     }
 
     return {
-      success: deliveryStatus === 'completed',
-      status: deliveryStatus,
+      success: true,
+      status: outbox.campaign.status,
       assignmentId: outbox.assignment.id,
       invitationId: outbox.invitation.id,
       campaignId: outbox.campaign.id,
@@ -1450,9 +1434,7 @@ export class CampaignService {
       invitationUrl: outbox.invitationUrl,
       recipientEmail: evaluator.email,
       studentName: resolveStudentDisplayName(student.name, student.studentId),
-      deadlineAt: outbox.assignment.deadlineAt.toISOString(),
-      pin: outbox.pin,
-      ...(deliveryError ? { error: deliveryError } : {})
+      deadlineAt: outbox.assignment.deadlineAt.toISOString()
     }
   }
 
@@ -1641,50 +1623,21 @@ export class CampaignService {
       throw new ConflictException({ code: 'INVITATION_REISSUE_CONFLICT' })
     }
 
-    let deliveryStatus: CampaignRecord['status'] = outbox.campaign.status
-    if (process.env.NODE_ENV !== 'test') {
-      try {
-        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
-        if (this.config.get('NODE_ENV', { infer: true }) === 'development') {
-          const directResult = await this.dispatchDeliveryDirect(
-            outbox.delivery.id,
-            outbox.invitation.id
-          )
-          if (directResult.success) {
-            deliveryStatus = 'completed'
-          }
-        }
-      } catch {
-        try {
-          const directResult = await this.dispatchDeliveryDirect(
-            outbox.delivery.id,
-            outbox.invitation.id
-          )
-          if (directResult.success) {
-            deliveryStatus = 'completed'
-          }
-        } catch {
-          // Keep queued
-        }
-      }
-    } else {
-      try {
-        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
-      } catch {
-        // Keep queued
-      }
+    try {
+      await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+    } catch {
+      // Leave the durable outbox queued for Worker reconciliation.
     }
     return {
       success: true,
-      status: deliveryStatus,
+      status: outbox.campaign.status,
       assignmentId: outbox.assignment.id,
       invitationId: outbox.invitation.id,
       campaignId: outbox.campaign.id,
       deliveryId: outbox.delivery.id,
       invitationVersion: outbox.invitation.version,
       recipientEmail: outbox.invitation.email,
-      deadlineAt: outbox.assignment.deadlineAt.toISOString(),
-      pin: outbox.newPin
+      deadlineAt: outbox.assignment.deadlineAt.toISOString()
     }
   }
 
@@ -2161,41 +2114,14 @@ export class CampaignService {
       return this.sendTargetedEmail(actor, input, idempotencyKey)
     }
 
-    let deliveryStatus: CampaignRecord['status'] | 'failed' =
-      outbox.campaign.status
-    let deliveryError: string | undefined
-    if (process.env.NODE_ENV !== 'test') {
-      try {
-        try {
-          await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
-        } catch {
-          // Redis queue may be unavailable in dev/local
-        }
-        if (this.config.get('NODE_ENV', { infer: true }) === 'development') {
-          const directResult = await this.dispatchDeliveryDirect(
-            outbox.delivery.id,
-            outbox.invitation.id,
-            outbox.targetPin
-          )
-          if (directResult.success) {
-            deliveryStatus = 'completed'
-          }
-        }
-      } catch (err: unknown) {
-        deliveryStatus = 'failed'
-        deliveryError =
-          err instanceof Error ? err.message : 'SMTP_SEND_FAILED'
-      }
-    } else {
-      try {
-        await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
-      } catch {
-        // Keep queued
-      }
+    try {
+      await this.enqueueDelivery(outbox.delivery.id, outbox.invitation.id)
+    } catch {
+      // Leave the durable outbox queued for Worker reconciliation.
     }
 
     return {
-      status: deliveryStatus,
+      status: outbox.campaign.status,
       campaignId: outbox.campaign.id,
       deliveryId: outbox.delivery.id,
       assignmentId: assignment.id,
@@ -2397,7 +2323,7 @@ export class CampaignService {
     if (isMockMode) {
       providerMessageId = `<mock-captured-${Date.now()}@direct>`
       Logger.log(
-        `[MOCK EMAIL CAPTURE] Invitation simulated for student ${student.studentId} to ${delivery.recipientEmail}. URL: ${invitationUrl}, PIN: ${pin}`,
+        'Invitation delivery captured in development.',
         'CampaignService'
       )
     } else {

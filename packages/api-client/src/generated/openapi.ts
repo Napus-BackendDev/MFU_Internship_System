@@ -551,8 +551,31 @@ export interface paths {
         /** List Placements within effective scope */
         get: operations["listPlacements"];
         put?: never;
-        /** Create a Placement */
+        /**
+         * Create a Placement
+         * @description Completed status requires the audited completePlacement command; normal creation accepts planned, active or cancelled only.
+         */
         post: operations["createPlacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/placements/{placementId}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete active internship with actual end date and audited reason
+         * @description Requires at least one assignment and every linked assignment to have its current immutable final evaluation submitted. Uses revision compare-and-set and an atomic audit transaction; actual end cannot precede start or be in the future. Does not close evaluation cycles or alter scores.
+         */
+        post: operations["completePlacement"];
         delete?: never;
         options?: never;
         head?: never;
@@ -940,7 +963,10 @@ export interface paths {
         put?: never;
         /**
          * Create a scoped evaluator assignment and queue its invitation email
-         * @description Requires exactly one active placement and applicable active cycle, a published competency version, and an active evaluator. Ambiguous placement/cycle and missing master data are rejected; no defaults are created.
+         * @description Acceptance records a durable delivery intent; queued does not mean delivered.
+         *     Worker is the sole sender in every environment, including Development capture.
+         *     The response does not return a plaintext PIN; the evaluator receives it in email.
+         *     Requires exactly one active placement and applicable active cycle, a published competency version, and an active evaluator. Ambiguous placement/cycle and missing master data are rejected; no defaults are created.
          */
         post: operations["sendStudentInvitation"];
         delete?: never;
@@ -1093,7 +1119,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete a Province */
+        /** Archive a Province by setting its status to inactive */
         delete: operations["deleteProvince"];
         options?: never;
         head?: never;
@@ -1765,12 +1791,11 @@ export interface components {
             companyAddress?: string;
             province?: string;
             evaluatorName?: string;
-            /** Format: email */
             evaluatorEmail?: string;
             advisorName?: string;
-            advisorEmail?: string | "";
+            advisorEmail?: string;
             siteVisitAdvisorName?: string;
-            siteVisitAdvisorEmail?: string | "";
+            siteVisitAdvisorEmail?: string;
             admissionYear?: number;
             academicYear?: number;
             /**
@@ -1795,12 +1820,11 @@ export interface components {
             companyAddress?: string;
             province?: string;
             evaluatorName?: string;
-            /** Format: email */
             evaluatorEmail?: string;
             advisorName?: string;
-            advisorEmail?: string | "";
+            advisorEmail?: string;
             siteVisitAdvisorName?: string;
-            siteVisitAdvisorEmail?: string | "";
+            siteVisitAdvisorEmail?: string;
             admissionYear?: number;
             academicYear?: number;
             /** @enum {string} */
@@ -2021,15 +2045,19 @@ export interface components {
             meta: components["schemas"]["PageMeta"];
         };
         /** @enum {string} */
-        PlacementStatus: "draft" | "active" | "completed" | "cancelled" | "archived";
+        PlacementStatus: "planned" | "active" | "completed" | "cancelled";
         PlacementInput: {
             studentId: components["schemas"]["ObjectId"];
             organizationId: components["schemas"]["ObjectId"];
-            termId: components["schemas"]["ObjectId"];
-            /** Format: date */
+            academicTermId: components["schemas"]["ObjectId"];
+            schoolId: components["schemas"]["ObjectId"];
+            programId: components["schemas"]["ObjectId"];
+            positionTitle: components["schemas"]["LocalizedText"];
+            /** Format: date-time */
             startsAt: string;
-            /** Format: date */
+            /** Format: date-time */
             endsAt: string;
+            status?: components["schemas"]["PlacementStatus"];
         };
         Placement: components["schemas"]["PlacementInput"] & {
             id: components["schemas"]["ObjectId"];
@@ -2038,7 +2066,7 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
-            version: number;
+            revision: number;
         };
         PlacementList: {
             items: components["schemas"]["Placement"][];
@@ -2172,6 +2200,8 @@ export interface components {
             evaluationVersion: 1;
         };
         EvaluationAssignment: components["schemas"]["EvaluationAssignmentInput"] & {
+            /** @description Existing PIN is included only in assignment listings for actors with campaigns.send permission and scope covering this assignment. Evaluator responses omit it. Reading never creates or rotates a PIN. */
+            readonly accessPin?: string;
             id: components["schemas"]["ObjectId"];
             studentId?: string;
             status: components["schemas"]["AssignmentStatus"];
@@ -4068,7 +4098,10 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PlacementInput"];
+                "application/json": components["schemas"]["PlacementInput"] & {
+                    /** @enum {string} */
+                    status?: "planned" | "active" | "cancelled";
+                };
             };
         };
         responses: {
@@ -4081,6 +4114,42 @@ export interface operations {
                     "application/json": components["schemas"]["Placement"];
                 };
             };
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    completePlacement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                placementId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expectedRevision: number;
+                    /** Format: date-time */
+                    actualEndsAt: string;
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Placement completed and audited */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Placement"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
@@ -5018,7 +5087,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Province deleted */
+            /** @description Province archived; existing records and text references are preserved */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -1,4 +1,9 @@
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
+import { SessionService } from '../src/auth/session.service.js'
+import {
+  InvitationRecord,
+  InvitationSchema
+} from '../src/correspondence/correspondence.schema.js'
 import { createConnection, Types, type Connection, type Model } from 'mongoose'
 import type { AppEnvironment } from '@internship/config'
 import type { Queue } from 'bullmq'
@@ -313,7 +318,17 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
     expect(listed.items).toHaveLength(1)
     expect(listed.items[0]).not.toHaveProperty('accessPin')
     expect(listed.items[0]).not.toHaveProperty('accessPinHash')
-
+    const adminListing = (await service.listAssignments(
+      {
+        ...actor,
+        id: 'pin-manager',
+        roles: ['systemAdmin'],
+        scope: { tenant: true, schoolIds: [], programIds: [] }
+      },
+      { page: 1, pageSize: 10 }
+    )) as { items: Record<string, unknown>[] }
+    expect(adminListing.items[0]?.accessPin).toBe('DO-NOT-EXPOSE')
+    expect(adminListing.items[0]).not.toHaveProperty('accessPinHash')
     const explicitlySelected = await assignments
       .findById(assignment.id)
       .select('+accessPin +accessPinHash')
@@ -321,6 +336,70 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
     expect(explicitlySelected?.accessPin).toBe('DO-NOT-EXPOSE')
     expect(explicitlySelected?.toJSON()).not.toHaveProperty('accessPin')
     expect(explicitlySelected?.toJSON()).not.toHaveProperty('accessPinHash')
+  })
+
+  it('does not borrow campaign PIN access from a separate read-only role scope', async () => {
+    const own = await seedWorkflow('pin-own', 'pin-own-cycle')
+    const other = await seedWorkflow('pin-other', 'pin-other-cycle')
+    const otherSchoolId = '64b000000000000000000009'
+    const otherProgramId = '64b00000000000000000000a'
+    await assignments.updateOne(
+      { _id: own.assignment.id },
+      { $set: { accessPin: 'OWN-PIN' } }
+    )
+    await assignments.updateOne(
+      { _id: other.assignment.id },
+      {
+        $set: {
+          schoolId: otherSchoolId,
+          programId: otherProgramId,
+          accessPin: 'OTHER-PIN'
+        }
+      }
+    )
+    const multiRoleActor: AuthenticatedActor = {
+      ...own.actor,
+      id: 'scoped-pin-reader',
+      roles: ['internshipStaff', 'coordinator'],
+      scope: {
+        tenant: false,
+        schoolIds: [testSchoolId, otherSchoolId],
+        programIds: [testProgramId, otherProgramId]
+      },
+      roleScopes: [
+        {
+          role: 'internshipStaff',
+          tenant: false,
+          schoolIds: [testSchoolId],
+          programIds: [testProgramId]
+        },
+        {
+          role: 'coordinator',
+          tenant: false,
+          schoolIds: [otherSchoolId],
+          programIds: [otherProgramId]
+        }
+      ]
+    }
+    const result = (await service.listAssignments(multiRoleActor, {
+      page: 1,
+      pageSize: 10
+    })) as { items: Record<string, unknown>[] }
+    expect(result.items).toHaveLength(2)
+    expect(
+      result.items.find((item) => item.id === own.assignment.id)?.accessPin
+    ).toBe('OWN-PIN')
+    expect(
+      result.items.find((item) => item.id === other.assignment.id)
+    ).not.toHaveProperty('accessPin')
+    expect(
+      (
+        await assignments
+          .findById(other.assignment.id)
+          .select('+accessPin')
+          .lean()
+      )?.accessPin
+    ).toBe('OTHER-PIN')
   })
 
   it('does not let a Student assignment filter widen their own assignment scope', async () => {
@@ -2155,7 +2234,45 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
   })
 
   it('submits atomically, removes the draft, keeps assignment status canonical, and replays idempotently', async () => {
-    const { assignment, actor, student } = await seedWorkflow('student-1001')
+    const {
+      assignment,
+      actor: unboundActor,
+      student
+    } = await seedWorkflow('student-1001')
+    const evaluatorId = (await assignments.findById(assignment.id).lean())!
+      .evaluatorId
+    const invitations = connection.model(
+      InvitationRecord.name,
+      InvitationSchema
+    )
+    const invitation = await invitations.create({
+      assignmentId: assignment.id,
+      evaluatorId,
+      email: unboundActor.email,
+      expiresAt: new Date(Date.now() + 3_600_000),
+      version: 1,
+      status: 'active'
+    })
+    const actor: AuthenticatedActor = {
+      ...unboundActor,
+      id: `evaluator:${evaluatorId}`,
+      scope: {
+        ...unboundActor.scope,
+        invitationId: invitation.id,
+        invitationVersion: 1
+      }
+    }
+    const sessions = new SessionService(
+      {} as never,
+      invitations,
+      assignments,
+      {} as never,
+      {} as never,
+      { get: () => undefined } as never
+    )
+    await expect(
+      sessions.assertEvaluatorActorCurrent(actor)
+    ).resolves.toBeUndefined()
     const studentActor: AuthenticatedActor = {
       id: `student-user-${student.studentId}`,
       email: `${student.studentId}-student@example.test`,
@@ -2226,6 +2343,9 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
         requestId: 'request-evaluation-submit'
       })
     ).toBe(1)
+    await expect(
+      sessions.assertEvaluatorActorCurrent(actor)
+    ).resolves.toBeUndefined()
     const replay = (await service.submit(actor, assignment.id, {
       answers,
       idempotencyKey: 'submit-once'
@@ -2285,6 +2405,19 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
         idempotencyKey: 'submit-once'
       })
     ).rejects.toMatchObject({ status: 409 })
+    await expect(
+      service.submit(actor, assignment.id, {
+        answers,
+        idempotencyKey: 'submit-new-key'
+      })
+    ).rejects.toMatchObject({ status: 409 })
+    await invitations.updateOne(
+      { _id: invitation._id },
+      { $set: { status: 'revoked' } }
+    )
+    await expect(
+      sessions.assertEvaluatorActorCurrent(actor)
+    ).rejects.toMatchObject({ status: 401 })
   })
 
   it('saves evaluator drafts with optimistic revisions and enforces assignment ownership and expiry', async () => {

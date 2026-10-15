@@ -1,6 +1,16 @@
 <script setup lang="ts">
 defineOptions({ inheritAttrs: false })
-defineProps<{ open: boolean; title: string }>()
+withDefaults(
+  defineProps<{
+    open: boolean
+    title: string
+    fullscreen?: boolean
+    dismissible?: boolean
+    scrollable?: boolean
+    ui?: Record<string, string>
+  }>(),
+  { fullscreen: false, dismissible: true, scrollable: false, ui: () => ({}) }
+)
 const emit = defineEmits<{ 'update:open': [open: boolean] }>()
 let opener: HTMLElement | null = null
 function rememberFocus(): void {
@@ -20,6 +30,10 @@ function restoreFocus(event: Event): void {
     v-bind="$attrs"
     :open="open"
     :title="title"
+    :fullscreen="fullscreen"
+    :dismissible="dismissible"
+    :scrollable="scrollable"
+    :ui="ui"
     :content="{
       onOpenAutoFocus: rememberFocus,
       onCloseAutoFocus: restoreFocus

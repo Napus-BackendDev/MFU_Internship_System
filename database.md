@@ -311,6 +311,8 @@ No invitation, email delivery, teacher account, or assignment is created by this
 - `{ organizationId: 1, academicTermId: 1, status: 1 }`
 - `{ programId: 1, academicTermId: 1 }`
 
+Placement completion (2026-10-15): `POST /placements/:placementId/complete` uses `__v` as transport `revision` (`0` for a missing legacy key). A MongoDB transaction checks linked current final evaluations, sets `status: completed` and confirmed actual `endsAt`, increments revision and records `placements.completed` with reason and previous/actual end. Assignment creation locks the same Placement. Normal creation cannot set `completed`. Existing records and Published documents are not migrated.
+
 ### 5.11 `evaluatorAssignments`
 
 ```js
@@ -905,6 +907,10 @@ MONGODB_URI=<REMOTE_PRODUCTION_URI_FROM_SECRET_MANAGER>
 - ตรวจ MongoDB user, Atlas network access และ backup access เป็นระยะ
 
 ## 19. Database acceptance checklist
+
+QA correction (2026-10-14): `system_provinces` removal archives the catalog entry using its existing `status: inactive`; it never hard-deletes the entry. Student `province` text remains unchanged, and active-only selectors omit inactive provinces. Activation restores the same identity. Academic School/Program/Term optimistic updates treat a missing legacy `__v` as initial revision 0, atomically accept either missing or 0, increment to 1, and retain stale-write rejection for later revisions.
+
+Development document seeding uploads the bundled Sarabun bytes to local object storage before registering their computed checksum, family and OFL rights metadata. Document templates/versions use insert-only seeding so reruns do not overwrite Published versions. Existing invalid seeded layouts are repaired through an explicitly confirmed editor copy and saved as a new Draft; no historic Published document is rewritten.
 
 - [ ] schema/DTO/data dictionary ตรงกัน
 - [ ] unique indexes ป้องกัน student/evaluation/job duplicate

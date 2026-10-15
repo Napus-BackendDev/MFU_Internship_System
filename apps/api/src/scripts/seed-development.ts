@@ -1,5 +1,10 @@
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
+import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { extractFontFamilyName } from '../documents/font-metadata.js'
 import { loadEnvironment } from '@internship/config'
-import { MongoClient, ObjectId, type Db } from 'mongodb'
+import { MongoClient, ObjectId } from 'mongodb'
+import { upsertDevelopmentRecord as upsertId } from './development-seed-record.js'
 import { createDevelopmentPinCredential } from './development-pin.js'
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development'
@@ -14,6 +19,24 @@ if (environment.NODE_ENV !== 'development') {
   throw new Error('Development seed is disabled outside NODE_ENV=development.')
 }
 
+const storageHost = new URL(environment.S3_ENDPOINT).hostname
+  .replace(/^\[|\]$/gu, '')
+  .toLowerCase()
+if (
+  !['localhost', '127.0.0.1', '::1'].includes(storageHost) &&
+  !(environment.CONTAINERIZED && storageHost === 'minio')
+) {
+  throw new Error('Development seed requires local object storage.')
+}
+const s3 = new S3Client({
+  endpoint: environment.S3_ENDPOINT,
+  region: environment.S3_REGION,
+  forcePathStyle: environment.S3_FORCE_PATH_STYLE,
+  credentials: {
+    accessKeyId: environment.S3_ACCESS_KEY_ID,
+    secretAccessKey: environment.S3_SECRET_ACCESS_KEY
+  }
+})
 const client = new MongoClient(environment.MONGODB_URI)
 await client.connect()
 
@@ -1866,29 +1889,45 @@ try {
     }
   }
 
-  // 9. Document Assets, Template & Generated Document
+  // Upload licensed font bytes before registering an asset that publication can verify.
+  const fontBytes = await readFile(
+    new URL('../../../web/public/fonts/Sarabun-Regular.ttf', import.meta.url)
+  )
+  const fontFamily = extractFontFamilyName(fontBytes)
+  const fontSha256 = createHash('sha256').update(fontBytes).digest('hex')
+  const fontAssetKey = `development-fonts/sarabun-${fontSha256}.ttf`
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: environment.S3_BUCKET,
+      Key: fontAssetKey,
+      Body: fontBytes,
+      ContentLength: fontBytes.byteLength,
+      ContentType: 'font/ttf',
+      ContentDisposition: 'attachment',
+      Metadata: { sha256: fontSha256, assettype: 'font' }
+    })
+  )
   await upsertId(
     database,
     'documentAssets',
-    { key: 'approved-fonts/tahoma.ttf' },
+    { key: fontAssetKey },
     {
-      key: 'approved-fonts/tahoma.ttf',
+      key: fontAssetKey,
       assetType: 'font',
-      originalName: 'tahoma.ttf',
-      fontFamily: 'Tahoma',
+      originalName: 'Sarabun-Regular.ttf',
+      fontFamily,
       contentType: 'font/ttf',
-      size: 919260,
-      sha256:
-        '9af03d4ad44a3b413d92f7de48b94aa7cc8a1471a75d498406eae837f62ee1d1',
-      rightsBasis: 'System Standard Font',
-      rightsConfirmedBy: 'system',
+      size: fontBytes.byteLength,
+      sha256: fontSha256,
+      rightsBasis:
+        'SIL Open Font License 1.1; apps/web/public/fonts/OFL.txt; google/fonts/ofl/sarabun',
+      rightsConfirmedBy: 'development-seed',
       rightsConfirmedAt: now,
       status: 'active',
       createdAt: now,
       updatedAt: now
     }
   )
-
   const docTemplateId = await upsertId(
     database,
     'documentTemplates',
@@ -1921,23 +1960,10 @@ try {
           nameEn: 'Certificate of Professional Internship Completion',
           description:
             'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ (A4 แนวนอน)',
-          backgroundType: 'certificate_pattern',
+          backgroundType: 'none',
           bgOpacity: 15
         },
         elements: [
-          {
-            id: 'el-cr-emblem',
-            type: 'emblem',
-            content: 'GOLD-AWARD',
-            x: 476,
-            y: 45,
-            width: 72,
-            height: 72,
-            fontSize: 16,
-            fontWeight: 'normal',
-            color: '#b45309',
-            textAlign: 'center'
-          },
           {
             id: 'el-cr-univ',
             type: 'text',
@@ -1945,6 +1971,7 @@ try {
             x: 0,
             y: 128,
             width: 1024,
+            fontFamily: 'Sarabun',
             fontSize: 13,
             fontWeight: 'bold',
             color: '#b45309',
@@ -1957,6 +1984,7 @@ try {
             x: 0,
             y: 156,
             width: 1024,
+            fontFamily: 'Sarabun',
             fontSize: 34,
             fontWeight: 'bold',
             color: '#0f172a',
@@ -1969,6 +1997,7 @@ try {
             x: 0,
             y: 202,
             width: 1024,
+            fontFamily: 'Sarabun',
             fontSize: 13,
             fontWeight: 'bold',
             color: '#64748b',
@@ -1982,6 +2011,7 @@ try {
             x: 0,
             y: 270,
             width: 1024,
+            fontFamily: 'Sarabun',
             fontSize: 34,
             fontWeight: 'bold',
             color: '#78350f',
@@ -1990,7 +2020,7 @@ try {
         ]
       },
       placeholders: ['student_name_th'],
-      fontAssetKeys: [],
+      fontAssetKeys: [fontAssetKey],
       publishedAt: now,
       createdAt: now,
       updatedAt: now
@@ -2030,7 +2060,7 @@ try {
             'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน (Official Internship Referral Letter)',
           nameEn: 'Official Internship Referral Letter',
           description: 'เอกสารหนังสือส่งตัวนักศึกษาเข้าฝึกงาน (A4 แนวตั้ง)',
-          backgroundType: 'watermark',
+          backgroundType: 'none',
           bgOpacity: 12
         },
         elements: [
@@ -2041,6 +2071,7 @@ try {
             x: 0,
             y: 80,
             width: 794,
+            fontFamily: 'Sarabun',
             fontSize: 20,
             fontWeight: 'bold',
             color: '#0f172a',
@@ -2054,6 +2085,7 @@ try {
             x: 75,
             y: 200,
             width: 640,
+            fontFamily: 'Sarabun',
             fontSize: 14,
             fontWeight: 'normal',
             color: '#0f172a',
@@ -2062,7 +2094,7 @@ try {
         ]
       },
       placeholders: ['student_name_th'],
-      fontAssetKeys: [],
+      fontAssetKeys: [fontAssetKey],
       publishedAt: now,
       createdAt: now,
       updatedAt: now
@@ -2220,25 +2252,4 @@ try {
   )
 } finally {
   await client.close()
-}
-
-async function upsertId(
-  database: Db,
-  collection: string,
-  filter: Readonly<Record<string, unknown>>,
-  document: Readonly<Record<string, unknown>>,
-  unsetFields: readonly string[] = []
-): Promise<string> {
-  const update = {
-    $set: document,
-    $setOnInsert: { _id: new ObjectId() },
-    ...(unsetFields.length > 0
-      ? { $unset: Object.fromEntries(unsetFields.map((field) => [field, ''])) }
-      : {})
-  }
-  const result = await database
-    .collection(collection)
-    .findOneAndUpdate(filter, update, { upsert: true, returnDocument: 'after' })
-  if (!result) throw new Error(`Failed to seed ${collection}.`)
-  return result._id.toString()
 }

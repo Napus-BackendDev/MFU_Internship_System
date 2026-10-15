@@ -512,12 +512,25 @@ export class MembersService {
           _id: { $nin: allObjectIds },
           studentId: { $nin: normalizedAllReferences },
           company: { $exists: true, $nin: ['', '-', '—', null] },
-          evaluatorEmail: { $exists: true, $regex: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+          evaluatorEmail: {
+            $exists: true,
+            $regex: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+          },
           $or: [
             { advisorName: { $exists: true, $nin: ['', '-', '—', null] } },
             { advisorEmail: { $exists: true, $nin: ['', '-', '—', null] } },
-            { siteVisitAdvisorName: { $exists: true, $nin: ['', '-', '—', null] } },
-            { siteVisitAdvisorEmail: { $exists: true, $nin: ['', '-', '—', null] } }
+            {
+              siteVisitAdvisorName: {
+                $exists: true,
+                $nin: ['', '-', '—', null]
+              }
+            },
+            {
+              siteVisitAdvisorEmail: {
+                $exists: true,
+                $nin: ['', '-', '—', null]
+              }
+            }
           ]
         })
       } else if (input.evaluationStatus === 'missing_advisor') {
@@ -525,10 +538,42 @@ export class MembersService {
           _id: { $nin: allObjectIds },
           studentId: { $nin: normalizedAllReferences },
           $and: [
-            { $or: [{ advisorName: { $exists: false } }, { advisorName: null }, { advisorName: '' }, { advisorName: '-' }, { advisorName: '—' }] },
-            { $or: [{ advisorEmail: { $exists: false } }, { advisorEmail: null }, { advisorEmail: '' }, { advisorEmail: '-' }, { advisorEmail: '—' }] },
-            { $or: [{ siteVisitAdvisorName: { $exists: false } }, { siteVisitAdvisorName: null }, { siteVisitAdvisorName: '' }, { siteVisitAdvisorName: '-' }, { siteVisitAdvisorName: '—' }] },
-            { $or: [{ siteVisitAdvisorEmail: { $exists: false } }, { siteVisitAdvisorEmail: null }, { siteVisitAdvisorEmail: '' }, { siteVisitAdvisorEmail: '-' }, { siteVisitAdvisorEmail: '—' }] }
+            {
+              $or: [
+                { advisorName: { $exists: false } },
+                { advisorName: null },
+                { advisorName: '' },
+                { advisorName: '-' },
+                { advisorName: '—' }
+              ]
+            },
+            {
+              $or: [
+                { advisorEmail: { $exists: false } },
+                { advisorEmail: null },
+                { advisorEmail: '' },
+                { advisorEmail: '-' },
+                { advisorEmail: '—' }
+              ]
+            },
+            {
+              $or: [
+                { siteVisitAdvisorName: { $exists: false } },
+                { siteVisitAdvisorName: null },
+                { siteVisitAdvisorName: '' },
+                { siteVisitAdvisorName: '-' },
+                { siteVisitAdvisorName: '—' }
+              ]
+            },
+            {
+              $or: [
+                { siteVisitAdvisorEmail: { $exists: false } },
+                { siteVisitAdvisorEmail: null },
+                { siteVisitAdvisorEmail: '' },
+                { siteVisitAdvisorEmail: '-' },
+                { siteVisitAdvisorEmail: '—' }
+              ]
+            }
           ]
         })
       } else if (input.evaluationStatus === 'missing_student_id') {
@@ -2702,12 +2747,170 @@ export class MembersService {
     }
   }
 
+  public async completePlacement(
+    actor: AuthenticatedActor,
+    placementId: string,
+    input: { expectedRevision: number; actualEndsAt: Date; reason: string },
+    requestId = 'unknown'
+  ): Promise<unknown> {
+    if (!Types.ObjectId.isValid(placementId))
+      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    return this.placements.db.transaction(async (session) => {
+      const placement = await this.placements
+        .findOne({
+          $and: [
+            { _id: placementId },
+            scopeFilter<PlacementRecord>(actor, ['internshipStaff'])
+          ]
+        })
+        .session(session)
+        .exec()
+      if (!placement)
+        throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+      assertActorScope(actor, placement)
+      if (
+        placement.status !== 'active' ||
+        (placement.__v ?? 0) !== input.expectedRevision
+      ) {
+        throw new ConflictException({ code: 'PLACEMENT_CHANGED' })
+      }
+      if (
+        !input.reason.trim() ||
+        !Number.isFinite(input.actualEndsAt.getTime()) ||
+        input.actualEndsAt <= placement.startsAt ||
+        input.actualEndsAt > new Date()
+      ) {
+        throw new UnprocessableEntityException({
+          code: 'PLACEMENT_COMPLETION_DATE_INVALID'
+        })
+      }
+      const assignments = await this.assignments
+        .find({ placementId: placement.id })
+        .session(session)
+        .exec()
+      if (
+        assignments.length === 0 ||
+        assignments.some((item) => item.status !== 'submitted')
+      ) {
+        throw new ConflictException({
+          code: 'PLACEMENT_EVALUATIONS_INCOMPLETE'
+        })
+      }
+      for (const assignment of assignments) {
+        if (
+          assignment.schoolId !== placement.schoolId ||
+          assignment.programId !== placement.programId ||
+          assignment.studentId !== placement.studentId
+        ) {
+          const student = await this.students
+            .findOne({
+              $or: [
+                { studentId: placement.studentId },
+                ...(Types.ObjectId.isValid(placement.studentId)
+                  ? [{ _id: placement.studentId }]
+                  : [])
+              ]
+            })
+            .session(session)
+            .exec()
+          if (
+            !student ||
+            ![student.id, student.studentId].includes(assignment.studentId) ||
+            assignment.schoolId !== placement.schoolId ||
+            assignment.programId !== placement.programId
+          )
+            throw new ConflictException({
+              code: 'PLACEMENT_EVALUATIONS_INCOMPLETE'
+            })
+        }
+        const final = await this.evaluations
+          .findOne({
+            assignmentId: assignment.id,
+            version: assignment.evaluationVersion,
+            supersededAt: { $exists: false }
+          })
+          .session(session)
+          .exec()
+        if (!final || final.evaluatorId !== assignment.evaluatorId)
+          throw new ConflictException({
+            code: 'PLACEMENT_EVALUATIONS_INCOMPLETE'
+          })
+        const locked = await this.assignments.updateOne(
+          {
+            _id: assignment._id,
+            status: 'submitted',
+            evaluationVersion: assignment.evaluationVersion
+          },
+          { $inc: { __v: 1 } },
+          { session }
+        )
+        if (locked.matchedCount !== 1)
+          throw new ConflictException({
+            code: 'PLACEMENT_EVALUATIONS_INCOMPLETE'
+          })
+      }
+      const revisionFilter =
+        input.expectedRevision === 0
+          ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+          : { __v: input.expectedRevision }
+      const completed = await this.placements
+        .findOneAndUpdate(
+          {
+            _id: placement._id,
+            status: 'active',
+            ...revisionFilter
+          },
+          {
+            $set: { status: 'completed', endsAt: input.actualEndsAt },
+            $inc: { __v: 1 }
+          },
+          { session, returnDocument: 'after' }
+        )
+        .exec()
+      if (!completed) throw new ConflictException({ code: 'PLACEMENT_CHANGED' })
+      await this.auditService.record(
+        {
+          actorId: actor.id,
+          actorEmail: actor.email,
+          requestId,
+          action: 'placements.completed',
+          route: 'POST /api/v2/placements/:placementId/complete',
+          method: 'POST',
+          resourceScopes: [
+            {
+              schoolIds: [placement.schoolId],
+              programIds: [placement.programId]
+            }
+          ],
+          metadata: {
+            placementId: placement.id,
+            reason: input.reason.trim(),
+            previousEndsAt: placement.endsAt.toISOString(),
+            actualEndsAt: input.actualEndsAt.toISOString(),
+            assignmentIds: assignments.map((item) => item.id),
+            previousStatus: placement.status,
+            status: completed.status,
+            previousRevision: input.expectedRevision,
+            revision: completed.__v
+          }
+        },
+        session
+      )
+      return completed.toJSON()
+    })
+  }
+
   public async createPlacement(
     actor: AuthenticatedActor,
     input: PlacementRecord,
     requestId = 'unknown'
   ): Promise<unknown> {
     assertActorScope(actor, input)
+    if (input.status === 'completed') {
+      throw new UnprocessableEntityException({
+        code: 'PLACEMENT_COMPLETION_REQUIRED'
+      })
+    }
     const studentFilter = Types.ObjectId.isValid(input.studentId)
       ? {
           $or: [

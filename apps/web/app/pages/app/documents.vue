@@ -141,6 +141,7 @@ interface DocumentAssetApiItem {
   readonly fontFamily?: string
   readonly contentType: 'font/ttf' | 'font/otf' | 'image/png'
   readonly size: number
+  readonly sha256?: string
 }
 
 interface DocumentAssetPage {
@@ -349,9 +350,24 @@ const {
 } = await useAsyncData('docs-students', () =>
   loadAllPages(
     (page, pageSize) =>
-      api<PaginatedItems<StudentItem>>('/students', {
+      api<
+        PaginatedItems<
+          Omit<StudentItem, 'name'> & {
+            readonly name: string | StudentItem['name']
+          }
+        >
+      >('/students', {
         query: { page, pageSize }
-      }),
+      }).then((response) => ({
+        ...response,
+        items: response.items.map((student) => ({
+          ...student,
+          name:
+            typeof student.name === 'string'
+              ? { th: student.name, en: student.name }
+              : student.name
+        }))
+      })),
     100
   )
 )
@@ -1094,6 +1110,13 @@ const selectedDocumentFontKey = computed({
   set: (key: string) => {
     if (activeEditingDoc.value) {
       activeEditingDoc.value.fontAssetKeys = key ? [key] : []
+      const family = availableFontAssets.value.find(
+        (asset) => asset.key === key
+      )?.fontFamily
+      if (family) {
+        for (const element of activeEditingDoc.value.elements)
+          element.fontFamily = family
+      }
     }
   }
 })
@@ -1117,6 +1140,7 @@ const hasUnsavedChanges = computed(() => {
 })
 const selectedElementId = ref<string | null>(null)
 const canvasScale = ref<number>(0.9) // zoom level
+const studioPanel = ref<'canvas' | 'tools' | 'properties'>('canvas')
 const canvaSidebarTab = ref<
   'variables' | 'text' | 'shapes' | 'tables' | 'elements' | 'background'
 >('variables')
@@ -1238,7 +1262,7 @@ function openCreateChooser() {
   isFormatSelectModalOpen.value = true
 }
 
-function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
+async function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
   if (!canManageDocumentTemplates.value) return
   isFormatSelectModalOpen.value = false
   const code = `DOC-${type === 'certificate' ? 'CR' : 'TR'}-${Date.now().toString(36).toUpperCase()}`
@@ -1254,9 +1278,9 @@ function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
       createdAt: new Date().toISOString(),
       status: 'inactive',
       versionStatus: 'draft',
-      backgroundType: 'certificate_pattern',
+      backgroundType: 'none',
       bgOpacity: 15,
-      elements: JSON.parse(JSON.stringify(defaultCertificateElements))
+      elements: supportedStarterElements(defaultCertificateElements)
     }
     activeEditingDoc.value = newDoc
   } else {
@@ -1271,9 +1295,9 @@ function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
       createdAt: new Date().toISOString(),
       status: 'inactive',
       versionStatus: 'draft',
-      backgroundType: 'watermark',
+      backgroundType: 'none',
       bgOpacity: 12,
-      elements: JSON.parse(JSON.stringify(defaultTranscriptElements))
+      elements: supportedStarterElements(defaultTranscriptElements)
     }
     activeEditingDoc.value = newDoc
   }
@@ -1281,7 +1305,120 @@ function selectFormatAndOpenStudio(type: 'pdf' | 'certificate') {
   selectedElementId.value = activeEditingDoc.value?.elements?.[0]?.id || null
   savedEditorState.value = null
   isCanvaStudioOpen.value = true
-  void refreshFontAssets()
+  studioPanel.value = 'canvas'
+  const openedDoc = activeEditingDoc.value
+  await refreshFontAssets()
+  if (
+    activeEditingDoc.value !== openedDoc ||
+    isSavingTemplate.value ||
+    isPublishingTemplate.value
+  )
+    return
+  void refreshImageAssets()
+  await useStandardDocumentFont()
+}
+
+function supportedStarterElements(
+  elements: readonly CanvasElement[]
+): CanvasElement[] {
+  return structuredClone(
+    elements.filter(
+      (element) =>
+        element.type !== 'emblem' &&
+        element.type !== 'signature' &&
+        element.id !== 'el-tr-place-hrs' &&
+        element.id !== 'el-cr-footer-meta'
+    )
+  ).map((element) => ({ ...element, fontFamily: 'Sarabun' }))
+}
+
+async function useStandardDocumentFont(): Promise<void> {
+  if (
+    !activeEditingDoc.value ||
+    !canManageDocumentTemplates.value ||
+    isLoadingFontAssets.value ||
+    isUploadingFontAsset.value ||
+    isSavingTemplate.value ||
+    isPublishingTemplate.value
+  )
+    return
+  const doc = activeEditingDoc.value
+  isUploadingFontAsset.value = true
+  try {
+    const response = await fetch('/fonts/Sarabun-Regular.ttf')
+    if (!response.ok) throw new Error('โหลดฟอนต์มาตรฐานไม่สำเร็จ')
+    const bytes = await response.arrayBuffer()
+    const sha256 = Array.from(
+      new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+      (byte) => byte.toString(16).padStart(2, '0')
+    ).join('')
+    let asset = availableFontAssets.value.find(
+      (item) => item.sha256 === sha256 && item.fontFamily === 'Sarabun'
+    )
+    if (!asset) {
+      const form = new FormData()
+      form.append(
+        'file',
+        new File([bytes], 'Sarabun-Regular.ttf', { type: 'font/ttf' })
+      )
+      form.append('assetType', 'font')
+      form.append(
+        'rightsBasis',
+        'SIL Open Font License 1.1; /fonts/OFL.txt; google/fonts/ofl/sarabun'
+      )
+      form.append('rightsConfirmed', 'true')
+      asset = await api<DocumentAssetApiItem>('/document-assets', {
+        method: 'POST',
+        body: form
+      })
+      availableFontAssets.value = [asset, ...availableFontAssets.value]
+    }
+    if (activeEditingDoc.value === doc)
+      selectedDocumentFontKey.value = asset.key
+  } catch (error: unknown) {
+    showTemplateApiError(error)
+  } finally {
+    isUploadingFontAsset.value = false
+  }
+}
+
+async function prepareSupportedDocumentCopy(): Promise<void> {
+  const doc = activeEditingDoc.value
+  if (
+    !doc ||
+    !confirm(
+      'ปรับสำเนานี้สำหรับ PDF: ใช้พื้นหลังว่าง ลบตรา/ลายเซ็นที่ยังไม่มีไฟล์รับรอง และใช้ Sarabun กับข้อความทั้งหมด ข้อความชั่วโมงที่ไม่มีข้อมูลจะแสดงข้อความแจ้งแทน ฉบับ Published เดิมจะไม่เปลี่ยน และการบันทึกจะสร้าง Draft ใหม่'
+    )
+  )
+    return
+  doc.backgroundType = 'none'
+  doc.elements = doc.elements.filter(
+    (element) =>
+      !(element.type === 'emblem' && !element.assetKey) &&
+      !(element.type === 'signature' && element.assetKeys?.length !== 2)
+  )
+  for (const element of doc.elements) {
+    const unavailableHours = /\{\{\s*total_hours\s*\}\}/gu
+    element.content = element.content.replace(
+      unavailableHours,
+      '[ไม่มีข้อมูลชั่วโมงจากระบบ]'
+    )
+    if (element.variableKey === 'total_hours') {
+      element.type = 'text'
+      delete element.variableKey
+    }
+    if (element.tableData) {
+      element.tableData.headers = element.tableData.headers.map((value) =>
+        value.replace(unavailableHours, '[ไม่มีข้อมูลชั่วโมงจากระบบ]')
+      )
+      element.tableData.rows = element.tableData.rows.map((row) =>
+        row.map((value) =>
+          value.replace(unavailableHours, '[ไม่มีข้อมูลชั่วโมงจากระบบ]')
+        )
+      )
+    }
+  }
+  await useStandardDocumentFont()
 }
 
 async function refreshFontAssets(showError = true): Promise<void> {
@@ -1691,6 +1828,8 @@ async function publishStudioDraft(): Promise<void> {
     !doc.versionId ||
     doc.versionStatus !== 'draft' ||
     doc.templateStatus !== 'active' ||
+    isLoadingFontAssets.value ||
+    isUploadingFontAsset.value ||
     isSavingTemplate.value ||
     isPublishingTemplate.value
   ) {
@@ -1779,20 +1918,20 @@ async function publishStudioDraft(): Promise<void> {
 }
 
 const isActivatingTemplate = ref<string | null>(null)
+const activationTarget = ref<DocumentTemplateItem | null>(null)
 
 async function activateDocumentTemplate(
   doc: DocumentTemplateItem
 ): Promise<void> {
   if (!canManageDocumentTemplates.value || isActivatingTemplate.value) return
-  const typeLabel = doc.docType === 'certificate' ? 'Certification' : 'PDF'
+  activationTarget.value = doc
+}
 
-  if (
-    !window.confirm(
-      `ต้องการเปิดใช้งานแม่แบบ "${doc.nameTh}" เป็นแม่แบบ ${typeLabel} หลักหรือไม่?\n\n(ระบบจะเปิดใช้งานได้ประเภทละ 1 แม่แบบเท่านั้น โดยแม่แบบเดิมในประเภท ${typeLabel} จะถูกเปลี่ยนเป็นปิดใช้งาน)`
-    )
-  ) {
+async function confirmTemplateActivation(): Promise<void> {
+  const doc = activationTarget.value
+  if (!doc || !canManageDocumentTemplates.value || isActivatingTemplate.value)
     return
-  }
+  const typeLabel = doc.docType === 'certificate' ? 'Certification' : 'PDF'
 
   isActivatingTemplate.value = doc.id
   try {
@@ -1824,6 +1963,7 @@ async function activateDocumentTemplate(
     })
 
     void refreshTemplates().catch(() => {})
+    activationTarget.value = null
   } catch (error: unknown) {
     showTemplateApiError(error)
   } finally {
@@ -1840,7 +1980,14 @@ interface ActionMenuItem {
 
 function getDocMenuItems(doc: DocumentTemplateItem): ActionMenuItem[][] {
   const isCurrentlyActive =
-    doc.templateStatus === 'active' && doc.versionStatus === 'published'
+    doc.templateStatus === 'active' &&
+    doc.versionStatus === 'published' &&
+    documents.value.filter(
+      (item) =>
+        item.docType === doc.docType &&
+        item.templateStatus === 'active' &&
+        item.versionStatus === 'published'
+    ).length === 1
   const typeLabel = doc.docType === 'certificate' ? 'Certification' : 'PDF'
 
   const items: ActionMenuItem[] = [
@@ -1878,6 +2025,8 @@ async function saveStudioChanges() {
   if (
     !canManageDocumentTemplates.value ||
     !doc ||
+    isLoadingFontAssets.value ||
+    isUploadingFontAsset.value ||
     isSavingTemplate.value ||
     isPublishingTemplate.value
   )
@@ -1915,6 +2064,7 @@ async function saveStudioChanges() {
   isSavingTemplate.value = true
   try {
     let templateId = doc.templateId
+    let templateStatus = doc.templateStatus
     let savedVersion: DocumentTemplateVersionApiRecord
     if (!templateId) {
       const created = await api<PersistedDocumentTemplate>(
@@ -1931,6 +2081,7 @@ async function saveStudioChanges() {
         }
       )
       templateId = created.id
+      templateStatus = created.status
       const initialVersion = created.versions[0]
       if (!initialVersion) throw new Error('Initial template version missing')
       savedVersion = initialVersion
@@ -1953,6 +2104,7 @@ async function saveStudioChanges() {
       ...doc,
       id: templateId,
       templateId,
+      templateStatus,
       versionId: savedVersion.id,
       versionNumber: savedVersion.versionNumber,
       revision: savedVersion.revision,
@@ -3019,7 +3171,10 @@ function handleStudioBgUpload(event: Event) {
       :open="true"
       title="ออกแบบแม่แบบเอกสาร"
       fullscreen
-      :ui="{ content: 'flex flex-col bg-slate-950 text-slate-100' }"
+      :ui="{
+        content:
+          'flex flex-col w-screen max-w-none min-w-0 h-dvh rounded-none overflow-hidden bg-slate-950 text-slate-100'
+      }"
       @update:open="
         ($event) => {
           if (!$event) requestCloseStudio()
@@ -3043,10 +3198,10 @@ function handleStudioBgUpload(event: Event) {
       </div>
       <!-- Studio Header -->
       <div
-        class="no-print flex h-16 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/95 px-5 backdrop-blur-md"
+        class="no-print flex min-h-16 shrink-0 flex-wrap gap-3 py-3 items-center justify-between border-b border-slate-800 bg-slate-900/95 px-5 backdrop-blur-md"
       >
         <!-- Document Meta Info -->
-        <div class="flex items-center gap-3 min-w-0 max-w-2xl">
+        <div class="flex w-full xl:w-auto items-center gap-3 min-w-0 max-w-2xl">
           <span
             class="grid size-9 shrink-0 place-items-center rounded-lg bg-primary text-inverted"
           >
@@ -3060,8 +3215,8 @@ function handleStudioBgUpload(event: Event) {
                 class="bg-transparent text-base font-bold text-white border-b border-transparent hover:border-slate-700 focus:border-primary focus:outline-none transition-all"
                 :style="{
                   width: `${Math.max(26, (activeEditingDoc.nameTh?.length || 10) + 3)}ch`,
-                  minWidth: '320px',
-                  maxWidth: '580px',
+                  minWidth: '0',
+                  maxWidth: '100%',
                   fieldSizing: 'content'
                 }"
                 placeholder="ชื่อเทมเพลตเอกสาร..."
@@ -3091,14 +3246,14 @@ function handleStudioBgUpload(event: Event) {
         </div>
 
         <!-- Student Dynamic Preview Switcher & Mode Toggle -->
-        <div class="flex items-center gap-3">
+        <div class="flex min-w-0 flex-wrap items-center gap-3">
           <div
-            class="flex items-center gap-1.5 rounded-lg bg-slate-800 p-1 text-xs"
+            class="flex w-full sm:w-auto min-w-0 max-w-full items-center gap-1.5 rounded-lg bg-slate-800 p-1 text-xs"
           >
             <span class="pl-2 text-slate-400">จำลองนักศึกษา:</span>
             <select
               v-model="activeStudentId"
-              class="h-7 rounded border-none bg-slate-900 px-2 text-xs font-semibold text-white focus:outline-none"
+              class="h-7 flex-1 min-w-0 max-w-full rounded border-none bg-slate-900 px-2 text-xs font-semibold text-white focus:outline-none"
             >
               <option
                 v-for="std in studentsData?.items"
@@ -3178,7 +3333,10 @@ function handleStudioBgUpload(event: Event) {
             :label="isPublishingTemplate ? 'กำลังเผยแพร่...' : 'เผยแพร่แม่แบบ'"
             :loading="isPublishingTemplate"
             :disabled="
-              isSavingTemplate || isPublishingTemplate || hasUnsavedChanges
+              isUploadingFontAsset ||
+              isSavingTemplate ||
+              isPublishingTemplate ||
+              hasUnsavedChanges
             "
             :title="
               hasUnsavedChanges
@@ -3194,7 +3352,12 @@ function handleStudioBgUpload(event: Event) {
             icon="i-lucide-save"
             :label="isSavingTemplate ? 'กำลังบันทึก...' : 'บันทึก Draft'"
             :loading="isSavingTemplate"
-            :disabled="isSavingTemplate || isPublishingTemplate"
+            :disabled="
+              isLoadingFontAssets ||
+              isUploadingFontAsset ||
+              isSavingTemplate ||
+              isPublishingTemplate
+            "
             @click="saveStudioChanges"
           />
 
@@ -3203,7 +3366,13 @@ function handleStudioBgUpload(event: Event) {
             icon="i-lucide-x"
             size="sm"
             variant="ghost"
-            :disabled="isSavingTemplate || isPublishingTemplate"
+            :disabled="
+              isLoadingFontAssets ||
+              isUploadingFontAsset ||
+              isSavingTemplate ||
+              isPublishingTemplate
+            "
+            aria-label="ปิด Designer"
             @click="requestCloseStudio"
           />
         </div>
@@ -3211,7 +3380,8 @@ function handleStudioBgUpload(event: Event) {
 
       <div
         v-if="canManageDocumentTemplates"
-        class="no-print flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-800 bg-slate-900 px-5 py-2 text-xs text-slate-300"
+        class="no-print max-h-[24dvh] overflow-y-auto shrink-0 flex-wrap items-center gap-3 border-b border-slate-800 bg-slate-900 px-5 py-2 text-xs text-slate-300"
+        :class="studioPanel === 'tools' ? 'flex' : 'hidden lg:flex'"
       >
         <div class="min-w-52">
           <p class="font-semibold text-white">ฟอนต์หลักสำหรับ PDF</p>
@@ -3291,9 +3461,43 @@ function handleStudioBgUpload(event: Event) {
         />
       </div>
 
+      <div
+        class="no-print shrink-0 flex-wrap gap-2 border-b border-slate-800 p-2 text-xs"
+        :class="studioPanel === 'tools' ? 'flex' : 'hidden lg:flex'"
+      >
+        <UButton
+          size="xs"
+          :loading="isUploadingFontAsset"
+          :disabled="
+            isLoadingFontAssets ||
+            isUploadingFontAsset ||
+            isSavingTemplate ||
+            isPublishingTemplate
+          "
+          @click="useStandardDocumentFont"
+          >ใช้ฟอนต์มาตรฐาน Sarabun</UButton
+        >
+        <UButton
+          size="xs"
+          variant="outline"
+          :disabled="
+            isLoadingFontAssets ||
+            isUploadingFontAsset ||
+            isSavingTemplate ||
+            isPublishingTemplate
+          "
+          @click="prepareSupportedDocumentCopy"
+          >ปรับสำเนาสำหรับ PDF</UButton
+        >
+        <span
+          >ฟอนต์ที่เลือกจะใช้กับข้อความทั้งหมด • ฟอนต์มาตรฐานใช้ SIL OFL
+          1.1</span
+        >
+      </div>
       <!-- Studio Canva Toolbar (Font, Layering, Shapes, Alignment) -->
       <div
-        class="no-print flex h-14 shrink-0 flex-wrap items-center justify-between border-b border-slate-800/80 bg-slate-900/80 px-5 text-xs"
+        class="no-print min-h-14 h-auto py-2 shrink-0 flex-wrap items-center justify-between border-b border-slate-800/80 bg-slate-900/80 px-5 text-xs"
+        :class="studioPanel === 'properties' ? 'flex' : 'hidden lg:flex'"
       >
         <div v-if="selectedElement" class="flex flex-wrap items-center gap-2.5">
           <!-- Font Family Selector -->
@@ -3529,10 +3733,35 @@ function handleStudioBgUpload(event: Event) {
       </div>
 
       <!-- Studio Workspace Main Area -->
-      <div class="flex flex-1 overflow-hidden">
+      <div
+        class="no-print flex shrink-0 gap-2 p-2 lg:hidden"
+        aria-label="แผงเครื่องมือเอกสาร"
+      >
+        <UButton
+          size="sm"
+          :variant="studioPanel === 'canvas' ? 'solid' : 'outline'"
+          @click="studioPanel = 'canvas'"
+          >เอกสาร</UButton
+        >
+        <UButton
+          size="sm"
+          :variant="studioPanel === 'tools' ? 'solid' : 'outline'"
+          @click="studioPanel = 'tools'"
+          >เครื่องมือ</UButton
+        >
+        <UButton
+          size="sm"
+          :variant="studioPanel === 'properties' ? 'solid' : 'outline'"
+          :disabled="!selectedElement"
+          @click="studioPanel = 'properties'"
+          >คุณสมบัติ</UButton
+        >
+      </div>
+      <div class="flex flex-1 min-h-0 min-w-0 overflow-hidden">
         <!-- Left Sidebar (Canva Tool Palette) -->
         <div
-          class="no-print flex w-72 shrink-0 flex-col border-r border-slate-800 bg-slate-900"
+          class="no-print w-full lg:w-72 shrink-0 flex-col border-r border-slate-800 bg-slate-900"
+          :class="studioPanel === 'tools' ? 'flex' : 'hidden lg:flex'"
         >
           <!-- Sidebar Tabs -->
           <div
@@ -3994,7 +4223,9 @@ function handleStudioBgUpload(event: Event) {
 
         <!-- Center Canvas Workspace Area -->
         <div
-          class="flex-1 overflow-auto bg-slate-950 px-8 py-10 flex justify-center relative select-none scroll-smooth"
+          data-testid="studio-canvas-scroll"
+          class="flex-1 min-w-0 overflow-auto bg-slate-950 p-4 lg:px-8 lg:py-10 relative select-none scroll-smooth"
+          :class="studioPanel === 'canvas' ? 'block' : 'hidden lg:block'"
           @click="selectedElementId = null"
         >
           <!-- Scaled Canvas Outer Box for Accurate Scroll Bounds -->
@@ -4329,7 +4560,8 @@ function handleStudioBgUpload(event: Event) {
         <!-- Right Sidebar (Properties Inspector & Table Editor) -->
         <div
           v-if="selectedElement"
-          class="no-print w-80 shrink-0 border-l border-slate-800 bg-slate-900 p-4 space-y-4 overflow-y-auto"
+          class="no-print w-full lg:w-80 shrink-0 border-l border-slate-800 bg-slate-900 p-4 space-y-4 overflow-y-auto"
+          :class="studioPanel === 'properties' ? 'block' : 'hidden lg:block'"
         >
           <div
             class="flex items-center justify-between border-b border-slate-800 pb-2"
@@ -4660,6 +4892,37 @@ function handleStudioBgUpload(event: Event) {
               />
             </div>
           </div>
+        </div>
+      </div>
+    </AppModal>
+    <AppModal
+      :open="Boolean(activationTarget)"
+      title="ยืนยันแม่แบบหลัก"
+      :dismissible="!isActivatingTemplate"
+      @update:open="
+        (value) => {
+          if (!value) activationTarget = null
+        }
+      "
+    >
+      <div class="p-6 space-y-4">
+        <h2 class="text-lg font-semibold">ยืนยันแม่แบบหลัก</h2>
+        <p>
+          เปิดใช้งาน {{ activationTarget?.nameTh }} เป็นแม่แบบหลัก
+          แม่แบบเดิมในประเภทเดียวกันจะถูกปิดใช้งาน
+        </p>
+        <div class="flex justify-end gap-3">
+          <UButton
+            label="ยกเลิก"
+            variant="ghost"
+            :disabled="Boolean(isActivatingTemplate)"
+            @click="activationTarget = null"
+          />
+          <UButton
+            label="ยืนยันเปิดใช้งาน"
+            :loading="Boolean(isActivatingTemplate)"
+            @click="confirmTemplateActivation"
+          />
         </div>
       </div>
     </AppModal>

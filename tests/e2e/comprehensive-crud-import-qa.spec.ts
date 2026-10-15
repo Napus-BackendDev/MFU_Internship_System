@@ -9,7 +9,6 @@ const actor = {
 }
 
 const e2eOrganizationId = '64f000000000000000000020'
-const e2eEvaluatorId = '64f000000000000000000021'
 
 function generateSampleStudentExcelBuffer(): Buffer {
   return Buffer.from(
@@ -182,9 +181,7 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
     )
     await companyInput.fill('บริษัท ดิจิทัล ซิสเต็มส์ จำกัด (มหาชน)')
 
-    const mentorInput = page.getByPlaceholder(
-      'เช่น นายสมบูรณ์ หัวหน้างาน หรือ พี่เลี้ยงฝึกงาน'
-    )
+    const mentorInput = page.getByPlaceholder('เช่น นายสมบูรณ์ หัวหน้างาน')
     await mentorInput.fill('ดร. นภัส เกียรติสกุล')
 
     const emailInput = page.getByPlaceholder(
@@ -509,10 +506,20 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
 
     // 6. Verify Preview table displays uploaded students
     await expect(page.getByText('พร้อมนำเข้าข้อมูล (2 รายการ)')).toBeVisible()
-    await expect(page.getByText('6631503002')).toBeVisible()
-    await expect(page.getByText('สมชาย สายมุ่งมั่น')).toBeVisible()
-    await expect(page.getByText('6631503003')).toBeVisible()
-    await expect(page.getByText('สมหญิง รักการเรียน')).toBeVisible()
+    await expect(page.getByText('6631503002', { exact: true })).toBeVisible()
+    await expect(
+      page
+        .getByRole('dialog')
+        .getByRole('row')
+        .filter({ hasText: '6631503002' })
+    ).toContainText('สมชาย สายมุ่งมั่น')
+    await expect(page.getByText('6631503003', { exact: true })).toBeVisible()
+    await expect(
+      page
+        .getByRole('dialog')
+        .getByRole('row')
+        .filter({ hasText: '6631503003' })
+    ).toContainText('สมหญิง รักการเรียน')
 
     // 7. Click Commit Import button
     const commitButton = page.getByRole('button', {
@@ -527,7 +534,8 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
       .toBe(true)
     expect(committedRowIds).toEqual(['row-1', 'row-2'])
 
-    // 9. Verify Import Modal closes after successful commit
+    // Inspect the completion result, then close it explicitly.
+    await page.getByRole('button', { name: 'เสร็จสิ้นและปิดหน้าต่าง' }).click()
     await expect(page.getByText('1. ดาวน์โหลดเทมเพลตมาตรฐาน')).not.toBeVisible()
   })
 })

@@ -159,8 +159,13 @@ export class SessionService {
       this.assignments.exists({
         _id: assignmentId,
         evaluatorId,
-        deadlineAt: { $gt: now },
-        status: { $in: ['pending', 'inProgress'] }
+        $or: [
+          {
+            deadlineAt: { $gt: now },
+            status: { $in: ['pending', 'inProgress'] }
+          },
+          { status: 'submitted' }
+        ]
       })
     ])
     if (!invitation || !assignment) {

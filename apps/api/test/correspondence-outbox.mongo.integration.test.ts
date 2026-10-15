@@ -74,6 +74,7 @@ describe('campaign outbox on an isolated MongoDB replica set', () => {
   let queueAdd: ReturnType<typeof vi.fn>
   let failDeliverySave = false
   let publicWebUrl: string | undefined = 'https://internship.example.test'
+  let runtimeEnvironment = 'test'
   let actor: AuthenticatedActor
   let assignmentId: string
   let studentId: string
@@ -141,11 +142,13 @@ describe('campaign outbox on an isolated MongoDB replica set', () => {
       connection,
       {
         get: vi.fn((key: string) =>
-          key === 'AUTH_JWT_SECRET'
-            ? 'isolated-outbox-test-secret-at-least-32-bytes'
-            : key === 'PUBLIC_WEB_URL'
-              ? publicWebUrl
-              : undefined
+          key === 'NODE_ENV'
+            ? runtimeEnvironment
+            : key === 'AUTH_JWT_SECRET'
+              ? 'isolated-outbox-test-secret-at-least-32-bytes'
+              : key === 'PUBLIC_WEB_URL'
+                ? publicWebUrl
+                : undefined
         )
       } as unknown as ConfigService<AppEnvironment, true>,
       templateService,
@@ -190,6 +193,7 @@ describe('campaign outbox on an isolated MongoDB replica set', () => {
   }, 30_000)
 
   beforeEach(async () => {
+    runtimeEnvironment = 'test'
     failDeliverySave = false
     publicWebUrl = 'https://internship.example.test'
     queueAdd.mockClear()
@@ -1107,6 +1111,138 @@ describe('campaign outbox on an isolated MongoDB replica set', () => {
     expect(await invitations.countDocuments({})).toBe(0)
     expect(await deliveries.countDocuments({})).toBe(0)
     expect(queueAdd).not.toHaveBeenCalled()
+  })
+
+  it.each(
+    ['bulk', 'student', 'targeted', 'reissue'].flatMap((operation) =>
+      [true, false].map((queueAvailable) => ({ operation, queueAvailable }))
+    )
+  )(
+    'development $operation uses only Worker delivery (queueAvailable=$queueAvailable)',
+    async ({ operation, queueAvailable }) => {
+      runtimeEnvironment = 'development'
+      vi.stubEnv('NODE_ENV', 'development')
+      const direct = vi
+        .spyOn(service, 'dispatchDeliveryDirect')
+        .mockResolvedValue({
+          success: true,
+          pin: '0000000000000000',
+          invitationUrl: 'https://internship.example.test/evaluate'
+        })
+      try {
+        if (queueAvailable) queueAdd.mockResolvedValue({})
+        if (operation === 'reissue') {
+          await service.create(
+            actor,
+            {
+              type: 'invitation',
+              templateVersionId,
+              assignmentIds: [assignmentId]
+            },
+            'development-seed-0001'
+          )
+          queueAdd.mockClear()
+        }
+        if (operation === 'student')
+          await assignments.deleteOne({ _id: assignmentId })
+        const result =
+          operation === 'bulk'
+            ? await service.create(
+                actor,
+                {
+                  type: 'invitation',
+                  templateVersionId,
+                  assignmentIds: [assignmentId]
+                },
+                'development-bulk-0001'
+              )
+            : operation === 'student'
+              ? await service.sendStudentInvitation(
+                  actor,
+                  {
+                    studentId,
+                    competencySetId: 'OUTBOX',
+                    recipientEmail: 'evaluator@example.test'
+                  },
+                  'development-student-0001'
+                )
+              : operation === 'targeted'
+                ? await service.sendTargetedEmail(
+                    actor,
+                    {
+                      assignmentId,
+                      studentId,
+                      templateCode: 'evaluation_request'
+                    },
+                    'development-targeted-0001'
+                  )
+                : await service.reissueInvitation(
+                    actor,
+                    assignmentId,
+                    { reason: 'Development workflow regression' },
+                    'development-reissue-0001'
+                  )
+        expect(result).toMatchObject({ status: 'queued' })
+        expect(result).not.toHaveProperty('pin')
+        expect(queueAdd).toHaveBeenCalledTimes(1)
+        expect(direct).not.toHaveBeenCalled()
+        expect(await deliveries.countDocuments({ status: 'sent' })).toBe(0)
+        expect(
+          await deliveries.countDocuments({ status: 'queued' })
+        ).toBeGreaterThan(0)
+      } finally {
+        direct.mockRestore()
+        vi.unstubAllEnvs()
+      }
+    }
+  )
+
+  it('does not reactivate a completed Placement when sending another invitation', async () => {
+    const current = await placements.findOne({ studentId }).orFail().exec()
+    await placements.updateOne(
+      { _id: current.id },
+      { $set: { status: 'completed' } }
+    )
+    await expect(
+      service.sendStudentInvitation(
+        actor,
+        {
+          studentId,
+          competencySetId: 'OUTBOX',
+          recipientEmail: 'evaluator@example.test'
+        },
+        'completed-placement-key'
+      )
+    ).rejects.toMatchObject({ response: { code: 'PLACEMENT_NOT_ASSIGNABLE' } })
+    expect((await placements.findById(current.id))?.status).toBe('completed')
+    expect(await deliveries.countDocuments({})).toBe(0)
+  })
+
+  it('does not reset a submitted assignment when sending another invitation', async () => {
+    const placement = await placements.findOne({ studentId }).orFail().exec()
+    await placements.updateOne(
+      { _id: placement.id },
+      { $set: { endsAt: new Date(Date.now() - 60_000) } }
+    )
+    const before = await placements.findById(placement.id).lean()
+    await assignments.updateOne(
+      { _id: assignmentId },
+      { $set: { status: 'submitted' } }
+    )
+    await expect(
+      service.sendStudentInvitation(
+        actor,
+        {
+          studentId,
+          competencySetId: 'OUTBOX',
+          recipientEmail: 'evaluator@example.test'
+        },
+        'submitted-assignment-key'
+      )
+    ).rejects.toMatchObject({ response: { code: 'ASSIGNMENT_NOT_EDITABLE' } })
+    expect((await assignments.findById(assignmentId))?.status).toBe('submitted')
+    expect(await deliveries.countDocuments({})).toBe(0)
+    expect(await placements.findById(placement.id).lean()).toEqual(before)
   })
 
   it('rolls back direct assignment creation with its invitation outbox', async () => {

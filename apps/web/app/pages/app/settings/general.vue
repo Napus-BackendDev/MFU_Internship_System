@@ -274,7 +274,7 @@ async function handleDeleteProvince(province: Province) {
   if (!canManage.value || provincesPending.value || provincesError.value) return
   if (
     !confirm(
-      `คุณต้องการลบข้อมูลจังหวัด "${province.nameTh}" ออกจากระบบใช่หรือไม่?`
+      `เลิกใช้งานจังหวัด "${province.nameTh}" ใช่หรือไม่? ข้อมูลเดิมจะยังอยู่ และเปิดใช้งานใหม่ได้`
     )
   ) {
     return
@@ -286,7 +286,7 @@ async function handleDeleteProvince(province: Province) {
     })
     toast.add({
       title: 'ลบข้อมูลสำเร็จ',
-      description: `ลบจังหวัด ${province.nameTh} เรียบร้อยแล้ว`,
+      description: `เก็บจังหวัด ${province.nameTh} ไว้โดยไม่ลบข้อมูลอ้างอิง`,
       color: 'success'
     })
     await refreshProvinces()

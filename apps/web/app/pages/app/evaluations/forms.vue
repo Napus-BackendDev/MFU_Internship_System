@@ -3268,7 +3268,11 @@ function handleExecuteCopyCriteria() {
           <!-- ================================================================= -->
           <!-- PANEL 4: LIVE SIMULATOR (จำลองมุมมองจริง) -->
           <!-- ================================================================= -->
-          <div v-else-if="editorActiveTab === 'simulator'" class="space-y-6">
+          <div
+            v-else-if="editorActiveTab === 'simulator'"
+            data-testid="form-simulator-scroll"
+            class="flex-1 min-h-0 overflow-y-auto space-y-6 pr-1.5"
+          >
             <!-- Simulator Controls Header -->
             <div
               class="rounded-xl border border-primary/20 bg-primary/[0.04] p-5 space-y-3"

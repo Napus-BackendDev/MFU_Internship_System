@@ -1,4 +1,5 @@
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
+import { readFile } from 'node:fs/promises'
 import fontkit from '@pdf-lib/fontkit'
 import { createConnection, Types, type Connection, type Model } from 'mongoose'
 import {
@@ -246,6 +247,71 @@ describe('Document template versions on an isolated MongoDB replica set', () => 
     })
     vi.restoreAllMocks()
   })
+
+  it.each(['transcript', 'certificate'] as const)(
+    'publishes the supported %s Studio starter with the real bundled licensed font',
+    async (documentType) => {
+      const fontBytes = await readFile(
+        new URL('../../web/public/fonts/Sarabun-Regular.ttf', import.meta.url)
+      )
+      const uploaded = (await service.uploadAsset(
+        templateAdminActor,
+        {
+          assetType: 'font',
+          rightsBasis: 'SIL OFL 1.1; bundled OFL.txt',
+          rightsConfirmed: true
+        },
+        { originalname: 'Sarabun-Regular.ttf', buffer: fontBytes },
+        'starter-font-upload'
+      )) as { key: string; fontFamily: string }
+      expect(uploaded.fontFamily).toBe('Sarabun')
+      const fixture = JSON.parse(
+        await readFile(
+          new URL(
+            `../../../tests/fixtures/document-starter-${documentType}.json`,
+            import.meta.url
+          ),
+          'utf8'
+        )
+      ) as {
+        width: number
+        height: number
+        elements: Record<string, unknown>[]
+        placeholders: string[]
+      }
+      const canonicalJson = {
+        width: fixture.width,
+        height: fixture.height,
+        elements: fixture.elements,
+        editorMetadata: { backgroundType: 'none' }
+      }
+      const created = (await service.createTemplate(templateAdminActor, {
+        code: `STARTER-${documentType}`,
+        name: `Studio ${documentType}`,
+        documentType,
+        schemaVersion: 2,
+        canonicalJson,
+        placeholders: fixture.placeholders,
+        fontAssetKeys: [uploaded.key]
+      })) as { versions: { id: string }[] }
+      const versionId = created.versions[0]!.id
+      await expect(
+        service.publishVersion(templateAdminActor, versionId)
+      ).resolves.toMatchObject({ status: 'published' })
+      await expect(
+        service.updateVersion(templateAdminActor, versionId, {
+          revision: 1,
+          schemaVersion: 2,
+          canonicalJson,
+          placeholders: fixture.placeholders,
+          fontAssetKeys: [uploaded.key]
+        })
+      ).rejects.toMatchObject({ status: 409 })
+      await expect(
+        service.publishVersion(templateAdminActor, versionId)
+      ).rejects.toMatchObject({ status: 409 })
+    }
+  )
 
   function stubIssueSnapshot(): void {
     vi.spyOn(

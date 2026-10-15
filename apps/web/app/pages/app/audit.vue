@@ -3,8 +3,8 @@ definePageMeta({ layout: 'app', middleware: 'auth' })
 
 interface AuditItem {
   readonly id: string
-  readonly createdAt: string
-  readonly actorEmail: string
+  readonly occurredAt: string
+  readonly actorId: string
   readonly action: string
   readonly requestId: string
 }
@@ -97,7 +97,7 @@ watch(pageSize, () => {
             v-model="searchQuery"
             class="w-full"
             icon="i-lucide-fingerprint"
-            placeholder="ค้นหา Request ID, อีเมล Actor หรือการดำเนินการ..."
+            placeholder="ค้นหา Request ID..."
             size="md"
           >
             <template #trailing>
@@ -187,9 +187,13 @@ watch(pageSize, () => {
           <tbody>
             <tr v-for="item in filteredItems" :key="item.id">
               <td class="whitespace-nowrap">
-                {{ new Date(item.createdAt).toLocaleString('th-TH') }}
+                {{
+                  new Date(item.occurredAt).toLocaleString('th-TH', {
+                    timeZone: 'Asia/Bangkok'
+                  })
+                }}
               </td>
-              <td>{{ item.actorEmail }}</td>
+              <td>{{ item.actorId }}</td>
               <td class="font-medium text-highlighted">{{ item.action }}</td>
               <td class="font-mono text-xs">{{ item.requestId }}</td>
             </tr>

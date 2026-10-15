@@ -164,7 +164,19 @@ export class EvaluatorRecord {
 export const EvaluatorSchema = SchemaFactory.createForClass(EvaluatorRecord)
 EvaluatorSchema.index({ organizationId: 1, email: 1 }, { unique: true })
 
-@Schema({ ...schemaOptions, collection: 'placements' })
+@Schema({
+  ...schemaOptions,
+  collection: 'placements',
+  toJSON: {
+    virtuals: true,
+    transform: (_document: unknown, result: Record<string, unknown>) => {
+      result.revision = result.__v ?? 0
+      delete result._id
+      delete result.__v
+      return result
+    }
+  }
+})
 export class PlacementRecord {
   @Prop({ index: true, required: true })
   public studentId!: string

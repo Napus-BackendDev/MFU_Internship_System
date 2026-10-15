@@ -9,7 +9,6 @@ const routes = [
   '/app/evaluations',
   '/app/evaluations/forms',
   '/app/evaluations/cycles',
-  '/app/correspondence',
   '/app/documents',
   '/app/users',
   '/app/audit',
@@ -108,7 +107,6 @@ for (const role of roles) {
         ['/app/settings/smtp', ['admin']],
         ['/app/users', ['admin', 'staff']],
         ['/app/audit', ['admin', 'auditor']],
-        ['/app/correspondence', ['admin', 'staff', 'auditor']],
         ['/app/students', ['admin', 'staff', 'coordinator', 'auditor']],
         [
           '/app/evaluations',

@@ -18,6 +18,108 @@ function workbookBuffer(
 }
 
 describe('student import workbook parser', () => {
+  it.each([false, true])(
+    'uses corrected evaluator email regardless of column order (reversed: %s)',
+    (reverse) => {
+      const contacts = reverse
+        ? {
+            'Edit Evaluator Email': 'CORRECTED@example.test',
+            'Evaluator Email': 'old@example.test'
+          }
+        : {
+            'Evaluator Email': 'old@example.test',
+            'Edit Evaluator Email': 'CORRECTED@example.test'
+          }
+      const sheet = XLSX.utils.json_to_sheet([
+        {
+          studentId: '6631503999',
+          name: 'Example',
+          email: 'student@example.test',
+          schoolCode: 'ADT',
+          programCode: 'SE',
+          ...contacts
+        }
+      ])
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, sheet, 'Students')
+      expect(
+        parseStudentWorkbook(
+          XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+        ).rows[0]?.evaluatorEmail
+      ).toBe('corrected@example.test')
+    }
+  )
+  it.each([
+    'evaluatorEmail',
+    'Evaluter Email',
+    'อีเมลผู้ประเมิน (evaluatorEmail)'
+  ])('preserves evaluator contacts from %s', (header) => {
+    const parsed = parseStudentWorkbook(
+      workbookBuffer([
+        {
+          name: 'Students',
+          rows: [
+            [
+              'studentId',
+              'name',
+              'email',
+              'schoolCode',
+              'programCode',
+              'evaluatorName',
+              header
+            ],
+            [
+              '6631503999',
+              'Example',
+              'student@example.test',
+              'ADT',
+              'SE',
+              'Workplace Evaluator',
+              'Evaluator@Example.test'
+            ]
+          ]
+        }
+      ])
+    )
+    expect(parsed.rows[0]).toMatchObject({
+      evaluatorName: 'Workplace Evaluator',
+      evaluatorEmail: 'evaluator@example.test',
+      issues: []
+    })
+  })
+  it('reports malformed evaluator emails instead of silently dropping them', () => {
+    const parsed = parseStudentWorkbook(
+      workbookBuffer([
+        {
+          name: 'Students',
+          rows: [
+            [
+              'studentId',
+              'name',
+              'email',
+              'schoolCode',
+              'programCode',
+              'Evaluter Email'
+            ],
+            [
+              '6631503999',
+              'Example',
+              'student@example.test',
+              'ADT',
+              'SE',
+              'invalid-email'
+            ]
+          ]
+        }
+      ])
+    )
+    expect(parsed.rows[0]?.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'INVALID_EVALUATOR_EMAIL',
+        field: 'evaluatorEmail'
+      })
+    )
+  })
   it('parses CSV and reports question columns without mapping scores to evaluations', () => {
     const csv = [
       'studentId,nameTh,nameEn,email,schoolCode,programCode,courseCode,semester,academicYear,Hard Skill 1',

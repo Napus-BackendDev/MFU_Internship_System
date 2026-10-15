@@ -209,9 +209,8 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
       raw: true,
       blankrows: true
     })
-    const headerRowIndex = grid
-      .slice(0, 10)
-      .findIndex((row) =>
+    const headerRowIndex = grid.slice(0, 10).findIndex(
+      (row) =>
         Array.isArray(row) &&
         row.some((val) => {
           const str = toText(val).toLowerCase().replace(/\s+/g, ' ')
@@ -220,11 +219,12 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
             return str === a || str.includes(a)
           })
         })
-      )
+    )
     if (headerRowIndex < 0) continue
 
     const rawHeaders = (grid[headerRowIndex] as unknown[]).map((h) => toText(h))
-    const records: Array<{ index: number; record: Record<string, unknown> }> = []
+    const records: Array<{ index: number; record: Record<string, unknown> }> =
+      []
     for (let r = headerRowIndex + 1; r < grid.length; r++) {
       const dataRow = grid[r]
       if (!Array.isArray(dataRow) || dataRow.length === 0) continue
@@ -232,7 +232,7 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
       for (let c = 0; c < rawHeaders.length; c++) {
         const key = rawHeaders[c]
         if (key) {
-          record[key] = (dataRow as unknown[])[c] ?? null
+          record[key] = dataRow[c] ?? null
         }
       }
       records.push({ index: r, record })
@@ -243,7 +243,9 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
         sheetName.trim()
       ) ||
       (records.length > 0 &&
-        Object.keys(records[0]?.record ?? {}).some((k) => /email\s*sent/i.test(k)) &&
+        Object.keys(records[0]?.record ?? {}).some((k) =>
+          /email\s*sent/i.test(k)
+        ) &&
         Object.keys(records[0]?.record ?? {}).some((k) => /pdf\s*url/i.test(k)))
 
     for (const { index, record } of records) {
@@ -289,6 +291,8 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
       const province = toText(pick(record, HEADER_ALIASES.province))
 
       let evaluatorEmail = ''
+      let evaluatorName = ''
+      let correctedEvaluatorEmail = ''
       let advisorName = ''
       let advisorEmail = ''
       let siteVisitAdvisorName = ''
@@ -296,17 +300,20 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
 
       for (const [rawKey, rawVal] of Object.entries(record)) {
         const valStr = toText(rawVal)
-        if (!valStr || ['-', '—', 'n/a'].includes(valStr.toLowerCase())) continue
+        if (!valStr || ['-', '—', 'n/a'].includes(valStr.toLowerCase()))
+          continue
         const cleanKey = rawKey.toLowerCase().replace(/\s+/g, ' ')
         if (/ยืนยัน|confirm|comfirm/.test(cleanKey)) continue
-        if (/แก้ไข.*อีเมลผู้ประเมิน|edit.*evaluator.*email/.test(cleanKey)) {
-          if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valStr)) {
-            evaluatorEmail = valStr.toLowerCase()
-          }
-        } else if (/อีเมลผู้ประเมิน|evaluator.*email/.test(cleanKey)) {
-          if (!evaluatorEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valStr)) {
-            evaluatorEmail = valStr.toLowerCase()
-          }
+        if (
+          /แก้ไข.*อีเมลผู้ประเมิน|edit.*eval(?:uator|uter).*email/.test(
+            cleanKey
+          )
+        ) {
+          correctedEvaluatorEmail = valStr.toLowerCase()
+        } else if (/อีเมลผู้ประเมิน|eval(?:uator|uter).*email/.test(cleanKey)) {
+          if (!evaluatorEmail) evaluatorEmail = valStr.toLowerCase()
+        } else if (/ชื่อผู้ประเมิน|eval(?:uator|uter).*name/.test(cleanKey)) {
+          evaluatorName = valStr
         } else if (/อาจารย์ผู้ประสานงาน|internship advisor/.test(cleanKey)) {
           advisorName = valStr
         } else if (/อาจารย์นิเทศ|site visit advisor/.test(cleanKey)) {
@@ -322,6 +329,7 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
           }
         }
       }
+      evaluatorEmail = correctedEvaluatorEmail || evaluatorEmail
       if (siteVisitAdvisorName && !siteVisitAdvisorEmail && advisorEmail) {
         siteVisitAdvisorEmail = advisorEmail
       }
@@ -362,6 +370,16 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
 
       const rowNumber = index + 2
       const issues: StudentImportIssue[] = []
+      if (
+        evaluatorEmail &&
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(evaluatorEmail)
+      ) {
+        issues.push({
+          code: 'INVALID_EVALUATOR_EMAIL',
+          field: 'evaluatorEmail',
+          message: 'A valid evaluator email is required when provided.'
+        })
+      }
       if (!/^\d{7,20}$/.test(studentId)) {
         issues.push({
           code: 'INVALID_STUDENT_ID',
@@ -446,6 +464,7 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
         ...(companyAddress ? { companyAddress } : {}),
         ...(province ? { province } : {}),
         ...(evaluatorEmail ? { evaluatorEmail } : {}),
+        ...(evaluatorName ? { evaluatorName } : {}),
         ...(advisorName ? { advisorName } : {}),
         ...(advisorEmail ? { advisorEmail } : {}),
         ...(siteVisitAdvisorName ? { siteVisitAdvisorName } : {}),
@@ -500,7 +519,8 @@ function inferProgramFromSheet(
   sheetName: string
 ): { program: string; school?: string } | null {
   const clean = sheetName.trim()
-  if (/^dtbi|เทอม3\s*dtbi|dbi$/i.test(clean)) return { program: 'DBI', school: 'IT' }
+  if (/^dtbi|เทอม3\s*dtbi|dbi$/i.test(clean))
+    return { program: 'DBI', school: 'IT' }
   if (/^mta$/i.test(clean)) return { program: 'MTA', school: 'IT' }
   if (/^se$/i.test(clean)) return { program: 'SE', school: 'IT' }
   if (/^ce|cpe$/i.test(clean)) return { program: 'CPE', school: 'IT' }
@@ -519,7 +539,9 @@ function pick(
   aliases: readonly string[]
 ): unknown {
   const normalizedEntries = Object.entries(record)
-    .filter(([_, value]) => value !== undefined && value !== null && value !== '')
+    .filter(
+      ([, value]) => value !== undefined && value !== null && value !== ''
+    )
     .map(
       ([key, value]) =>
         [key.trim().toLowerCase().replace(/\s+/g, ' '), value] as const

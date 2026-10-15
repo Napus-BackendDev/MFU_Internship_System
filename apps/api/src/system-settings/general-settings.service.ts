@@ -488,12 +488,17 @@ export class GeneralSettingsService implements OnModuleInit {
   }
 
   public async deleteProvince(id: string): Promise<{ success: boolean }> {
-    const province = await this.provinceModel.findById(id).exec()
+    const province = await this.provinceModel
+      .findByIdAndUpdate(
+        id,
+        { $set: { status: 'inactive' } },
+        { returnDocument: 'after', runValidators: true }
+      )
+      .exec()
     if (!province) {
       throw new NotFoundException(`ไม่พบข้อมูลจังหวัดรหัส ${id}`)
     }
 
-    await this.provinceModel.findByIdAndDelete(id).exec()
     return { success: true }
   }
 

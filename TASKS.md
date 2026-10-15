@@ -1,5 +1,20 @@
 # Implementation Tasks — Internship Transcript System V2
 
+## Owner-requested real localhost workflow — 2026-10-15
+
+- [x] Run real local UI from synthetic Student creation through captured evaluator invitation, Draft/Submit, results, audited Placement completion and Student PDF generation/download of both documents.
+- [x] Add owner-approved completion workflow with scope/revision/final-result/date checks and transactional Audit; prevent create/resend bypasses and concurrent assignment creation races.
+- [x] Fix runtime proxy, mail dispatch/PIN race, Student-name compatibility, Audit field mapping, development PDF download and primary-template conflict recovery.
+- [x] Validate latest API 440/4 skipped, Web 82, Worker 49/1 skipped, production proxy 4/4, typecheck/build/OpenAPI/scoped lint, actual downloaded PDF text/layout. [Details and limits](docs/qa/2026-10-15-localhost-workflow.md).
+- [ ] Existing root quality baseline: 6 format files and 1 SMTP unused import; Production release gates remain separate.
+
+## Owner-requested workbook bug fixes — 2026-10-14
+
+- Implemented locally from all 5 sheets / 141 cases in `Internship Trarnscript Systems (1).xlsx`: 9 Fail rows / 8 distinct failures. Fixes cover manual/import evaluator contacts, row preview and selection before commit, form Simulator scroll, responsive fullscreen document Studio, licensed-font supported starters and explicit immutable repair-copy flow, missing-version academic CAS, Province archive, and invitation-bound submit replay.
+- Regression fixes retain API error status/code on failed session refresh, prohibit PIN generation on GET, redact PIN/hash by default, and expose stored PIN only inside the campaign-sending role's own resource scope. Tests include a Staff + read-only Coordinator boundary.
+- Source and result details: [QA bugfix report](docs/qa/2026-10-14-workbook-bugfix-report.md), [all-case inventory](docs/qa/2026-10-14-workbook-inventory.md). Existing Published templates/data are not migrated; use the confirmed Designer repair-copy action and save a new Draft. Full seed was not run against the user's data.
+- Validation: 634 unit/contract/integration cases pass across the workspace run plus a bounded API rerun (418/418), with 5 Redis-dependent skips. Browser coverage: initial full run 57/61, then all 4 failures fixed and affected lookup/6-role suite 7/7 passed, covering all 61 cases; workbook regressions 10/10 pass. Typecheck/build and OpenAPI checks pass. Root `pnpm verify` remains blocked by 8 existing formatting files and 3 unused-variable lint errors in campaign/SMTP; Production release gates remain unchanged. No commit, push, deployment or real mail/provider write.
+
 ## Owner-requested student contact matching — 2026-10-10
 
 - Implemented locally: Checklist contact import matched by Student ID and selected academic term, separate academic/site-visit advisors and workplace evaluator fields, preview/diff/per-row confirmation, scoped update-only commit, and directory/edit UI with contact completeness. OpenAPI/generated types, database, permissions and AC-DATA-008 synchronized. No real workbook import, email, provider, commit or push.

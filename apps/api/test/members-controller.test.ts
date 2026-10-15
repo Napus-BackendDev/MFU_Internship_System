@@ -7,6 +7,44 @@ import type { StudentImportService } from '../src/members/student-import.service
 import { MembersController } from '../src/members/members.controller.js'
 
 describe('MembersController page-bounded relation lookups', () => {
+  it('validates completion revision, actual timestamp, reason and rejects unknown fields', async () => {
+    const completePlacement = vi.fn().mockResolvedValue({ status: 'completed' })
+    const controller = new MembersController(
+      { completePlacement } as unknown as MembersService,
+      {} as StudentImportService
+    )
+    const request = {
+      actor: { id: 'staff-1' },
+      requestId: 'completion-request'
+    } as AuthenticatedRequest
+    const command = {
+      expectedRevision: 0,
+      actualEndsAt: '2026-10-15T00:00:00Z',
+      reason: ' ตรวจรับแล้ว '
+    }
+    await controller.completePlacement(request, 'a'.repeat(24), command)
+    expect(completePlacement).toHaveBeenCalledWith(
+      request.actor,
+      'a'.repeat(24),
+      {
+        ...command,
+        actualEndsAt: new Date(command.actualEndsAt),
+        reason: 'ตรวจรับแล้ว'
+      },
+      'completion-request'
+    )
+    for (const invalid of [
+      { ...command, expectedRevision: -1 },
+      { ...command, expectedRevision: 0.5 },
+      { ...command, actualEndsAt: 'invalid' },
+      { ...command, reason: ' ' },
+      { ...command, status: 'completed' }
+    ]) {
+      expect(() =>
+        controller.completePlacement(request, 'a'.repeat(24), invalid)
+      ).toThrow(ZodError)
+    }
+  })
   it('parses Student references and Organization/Evaluator ObjectId filters', async () => {
     const listStudents = vi.fn().mockResolvedValue({ items: [] })
     const listOrganizations = vi.fn().mockResolvedValue({ items: [] })

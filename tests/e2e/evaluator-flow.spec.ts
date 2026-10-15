@@ -136,7 +136,7 @@ test('evaluator verifies PIN, resumes draft, and submits final evaluation', asyn
           student: {
             id: 'student-record-e2e',
             studentId: 'student-e2e',
-            name: { th: 'นักศึกษาทดสอบ', en: 'Test student' }
+            name: 'นักศึกษาทดสอบ'
           }
         }
       })
@@ -207,6 +207,7 @@ test('evaluator verifies PIN, resumes draft, and submits final evaluation', asyn
     page.getByRole('heading', { name: 'แบบประเมินสมรรถนะการฝึกงาน' })
   ).toBeVisible()
   await expect(page.getByText('ทักษะการสื่อสาร Communication')).toBeVisible()
+  await expect(page.getByText('นักศึกษาทดสอบ (student-e2e)')).toBeVisible()
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth

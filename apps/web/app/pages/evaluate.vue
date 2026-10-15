@@ -35,7 +35,7 @@ interface EvaluationView {
   student?: {
     id: string
     studentId: string
-    name: { th: string; en: string }
+    name: string | { th?: string; en?: string }
     email?: string
     company?: string
   } | null
@@ -47,6 +47,15 @@ const api = useApi()
 const auth = useAuthStore()
 
 const view = ref<EvaluationView>()
+const studentDisplayName = computed(() => {
+  const name = view.value?.student?.name
+  return (
+    (typeof name === 'string' ? name : name?.th || name?.en) ||
+    view.value?.student?.studentId ||
+    view.value?.assignment.studentId ||
+    ''
+  )
+})
 const answers = reactive<Record<string, unknown>>({})
 const revision = ref(0)
 const loading = ref(true)
@@ -420,7 +429,7 @@ function ratingValues(question: Question): readonly number[] {
           <p class="mt-2 text-sm text-muted max-w-md mx-auto">
             ผลการประเมินของนักศึกษา
             <strong class="text-highlighted">
-              {{ view.student?.name?.th || view.assignment.studentId }}
+              {{ studentDisplayName }}
               ({{ view.student?.studentId || view.assignment.studentId }})
             </strong>
             ได้รับการบันทึกและล็อกเรียบร้อยแล้ว
@@ -752,7 +761,7 @@ function ratingValues(question: Question): readonly number[] {
           <p class="text-sm text-muted mt-1">
             นักศึกษา:
             <strong class="text-highlighted">
-              {{ view.student?.name?.th || view.assignment.studentId }}
+              {{ studentDisplayName }}
               ({{ view.student?.studentId || view.assignment.studentId }})
             </strong>
             · กำหนดส่งภายใน:

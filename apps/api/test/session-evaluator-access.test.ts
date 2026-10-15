@@ -116,7 +116,12 @@ describe('evaluator invitation-bound access', () => {
       expect.objectContaining({
         _id: 'assignment-a',
         evaluatorId: 'evaluator-a',
-        status: { $in: ['pending', 'inProgress'] }
+        $or: [
+          expect.objectContaining({
+            status: { $in: ['pending', 'inProgress'] }
+          }),
+          { status: 'submitted' }
+        ]
       })
     )
   })

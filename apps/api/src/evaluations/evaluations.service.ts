@@ -50,7 +50,6 @@ import {
   StudentRecord
 } from '../members/members.schema.js'
 import { studentReferenceFilter } from '../members/student-reference.js'
-import { generatePin, hashInvitationPin } from '../correspondence/pin.js'
 import { assignmentIdWithinScope } from './evaluation-assignment.scope.js'
 import { calculateCategoryScores } from './evaluation.scoring.js'
 import {
@@ -1360,8 +1359,11 @@ export class EvaluationsService {
           .project({ assignmentId: 1 })
           .toArray()
         const sentAssignmentIds = sentDeliveries
-          .map((d) => d.assignmentId)
-          .filter((id) => Boolean(id) && Types.ObjectId.isValid(id))
+          .map((d): unknown => d.assignmentId)
+          .filter(
+            (id): id is string =>
+              typeof id === 'string' && Types.ObjectId.isValid(id)
+          )
           .map((id) => new Types.ObjectId(id))
         filters.push({
           _id: { $in: sentAssignmentIds },
@@ -1374,8 +1376,11 @@ export class EvaluationsService {
           .project({ assignmentId: 1 })
           .toArray()
         const failedAssignmentIds = failedDeliveries
-          .map((d) => d.assignmentId)
-          .filter((id) => Boolean(id) && Types.ObjectId.isValid(id))
+          .map((d): unknown => d.assignmentId)
+          .filter(
+            (id): id is string =>
+              typeof id === 'string' && Types.ObjectId.isValid(id)
+          )
           .map((id) => new Types.ObjectId(id))
         filters.push({
           $or: [
@@ -1391,12 +1396,11 @@ export class EvaluationsService {
       filters.length === 1 ? filters[0]! : { $and: filters }
     if (!input.search && !input.organizationId) {
       const pageResult = await paginate(this.assignments, filter, input)
-      const hydratedItems = pageResult.items.map((it) =>
-        it && typeof (it as any).toJSON === 'function'
-          ? (it as any).toJSON()
-          : it
+      const hydratedItems = pageResult.items
+      const itemsWithDeliveries = await this.attachLatestDeliveries(
+        hydratedItems,
+        actor
       )
-      const itemsWithDeliveries = await this.attachLatestDeliveries(hydratedItems)
       return {
         ...pageResult,
         items: itemsWithDeliveries
@@ -1550,7 +1554,6 @@ export class EvaluationsService {
       competencySetVersionId: 1,
       deadlineAt: 1,
       status: 1,
-      accessPin: 1,
       evaluationVersion: 1,
       createdAt: 1,
       updatedAt: 1
@@ -1573,10 +1576,13 @@ export class EvaluationsService {
       total: { count: number }[]
     }>(pipeline)
     const total = result?.total[0]?.count ?? 0
-    const hydratedItems = (result?.items ?? []).map((item) =>
-      this.assignments.hydrate(item).toJSON() as unknown as Record<string, unknown>
+    const hydratedItems = (result?.items ?? []).map((item) => ({
+      ...this.assignments.hydrate(item).toJSON()
+    }))
+    const itemsWithDeliveries = await this.attachLatestDeliveries(
+      hydratedItems,
+      actor
     )
-    const itemsWithDeliveries = await this.attachLatestDeliveries(hydratedItems)
     return {
       items: itemsWithDeliveries,
       meta: {
@@ -1588,35 +1594,39 @@ export class EvaluationsService {
     }
   }
 
-  private async attachLatestDeliveries<T extends Record<string, any>>(
-    items: T[]
+  private async attachLatestDeliveries<T extends Record<string, unknown>>(
+    items: readonly T[],
+    actor: AuthenticatedActor
   ): Promise<(T & { delivery: Record<string, unknown> | null })[]> {
-    if (!items || !items.length) return items as any
+    if (!items.length) return []
     const assignmentIds = items
-      .map((it) => (it._id ? String(it._id) : it.id ? String(it.id) : ''))
+      .map((it) =>
+        typeof it.id === 'string'
+          ? it.id
+          : it._id instanceof Types.ObjectId
+            ? it._id.toString()
+            : ''
+      )
       .filter(Boolean)
-    if (!assignmentIds.length) return items as any
-
-    const pepper = process.env.INVITATION_TOKEN_PEPPER || 'internship-evaluation-token-pepper-default'
-    for (const rawItem of items) {
-      const item = rawItem as Record<string, any>
-      if (!item.accessPin) {
-        const key = item._id ? String(item._id) : item.id ? String(item.id) : ''
-        if (key && Types.ObjectId.isValid(key)) {
-          const inv = await this.connection.collection('invitations').findOne({ assignmentId: key })
-          if (inv?.accessPin) {
-            item.accessPin = inv.accessPin
-            await this.assignments.updateOne({ _id: new Types.ObjectId(key) }, { $set: { accessPin: inv.accessPin } })
-          } else {
-            const pin = generatePin()
-            const hash = hashInvitationPin(pin, pepper)
-            await this.assignments.updateOne({ _id: new Types.ObjectId(key) }, { $set: { accessPin: pin, accessPinHash: hash } })
-            await this.connection.collection('invitations').updateOne({ assignmentId: key }, { $set: { accessPin: pin, accessPinHash: hash } })
-            item.accessPin = pin
-          }
+    if (!assignmentIds.length)
+      return items.map((item) => ({ ...item, delivery: null }))
+    const pins = actorHasPermission(actor.roles, 'campaigns.send')
+      ? await this.assignments
+          .find({ _id: { $in: assignmentIds } })
+          .select('+accessPin')
+          .lean()
+          .exec()
+      : []
+    const pinsById = new Map(
+      pins.flatMap((assignment) => {
+        try {
+          assertActorScope(actor, assignment)
+          return [[String(assignment._id), assignment.accessPin] as const]
+        } catch {
+          return []
         }
-      }
-    }
+      })
+    )
 
     const deliveries = await this.connection
       .collection('deliveries')
@@ -1641,9 +1651,15 @@ export class EvaluationsService {
     }
 
     return items.map((item) => {
-      const key = item._id ? String(item._id) : item.id ? String(item.id) : ''
+      const key =
+        typeof item.id === 'string'
+          ? item.id
+          : item._id instanceof Types.ObjectId
+            ? item._id.toString()
+            : ''
       return {
         ...item,
+        ...(pinsById.get(key) ? { accessPin: pinsById.get(key) } : {}),
         delivery: deliveryMap.get(key) || null
       }
     })
@@ -1857,6 +1873,15 @@ export class EvaluationsService {
         )
         if (cycleLock.matchedCount !== 1) {
           throw new ConflictException({ code: 'CYCLE_CLOSED' })
+        }
+
+        const placementLock = await this.placements.updateOne(
+          { _id: placement._id, status: { $in: ['planned', 'active'] } },
+          { $inc: { __v: 1 } },
+          { session }
+        )
+        if (placementLock.matchedCount !== 1) {
+          throw new ConflictException({ code: 'PLACEMENT_NOT_ASSIGNABLE' })
         }
 
         const studentLock = await this.students.updateOne(

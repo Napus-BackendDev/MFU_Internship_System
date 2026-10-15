@@ -194,6 +194,8 @@ Audit read always includes the authenticated actor's own log records. Staff and 
 - Evaluator may see only the assigned Student summary required to assess.
 - Evaluator cannot enumerate Student, placement, cycle, or evaluation identifiers.
 - Assignment close, invitation revoke, expiry, or final submit removes Draft/submit ability.
+- A submitted assignment permits reading the final result and replaying the original submit key/payload while the same bound invitation remains active, unexpired and at the same version. A new key or changed payload remains rejected; revocation still invalidates the session. This does not allow editing the final result.
+- Assignment listings expose stored PINs only to actors with `campaigns.send` within the listing's existing resource scope. Read-only listing never generates or rotates credentials, and never exposes PIN hashes.
 - Reopen is unavailable in the Production MVP; legacy `reopened` records do not grant invitation exchange, PIN verification, Draft, or submit access.
 
 ### 7.3 Evaluation
@@ -275,6 +277,10 @@ For every protected operation, implement:
 10. frontend-hidden action remains denied when API called directly.
 
 Critical matrix scenarios are defined as `AC-AUTH-*` in `docs/product/ACCEPTANCE_CRITERIA.md`.
+
+### Placement completion — 2026-10-15
+
+`POST /placements/:placementId/complete` requires `placements.manage`: System Admin or scoped Internship Staff only. Resolve the target with the managing role's scope; absent/out-of-scope returns 404. Student, Coordinator, Evaluator and Auditor cannot complete a Placement. The transaction stores a paired School/Program audit scope, actor, request ID, reason and actual end; completion does not grant new permissions or change evaluation results.
 
 ## 11. Decisions still TBD
 

@@ -1117,13 +1117,18 @@ paths:
       tags: [Internship]
       operationId: createPlacement
       summary: Create a Placement
+      description: Completed status requires the audited completePlacement command; normal creation accepts planned, active or cancelled only.
       x-permissions: [placements.manage]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlacementInput'
+              allOf:
+                - $ref: '#/components/schemas/PlacementInput'
+                - type: object
+                  properties:
+                    status: { type: string, enum: [planned, active, cancelled] }
       responses:
         '201':
           description: Placement created
@@ -1131,6 +1136,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Placement'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /placements/{placementId}/complete:
+    post:
+      tags: [Internship]
+      operationId: completePlacement
+      summary: Complete active internship with actual end date and audited reason
+      description: Requires at least one assignment and every linked assignment to have its current immutable final evaluation submitted. Uses revision compare-and-set and an atomic audit transaction; actual end cannot precede start or be in the future. Does not close evaluation cycles or alter scores.
+      x-permissions: [placements.manage]
+      parameters:
+        - name: placementId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, actualEndsAt, reason]
+              properties:
+                expectedRevision: { type: integer, minimum: 0 }
+                actualEndsAt: { type: string, format: date-time }
+                reason: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        '201':
+          description: Placement completed and audited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Placement'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
@@ -1776,7 +1824,11 @@ paths:
       tags: [Correspondence]
       operationId: sendStudentInvitation
       summary: Create a scoped evaluator assignment and queue its invitation email
-      description: Requires exactly one active placement and applicable active cycle, a published competency version, and an active evaluator. Ambiguous placement/cycle and missing master data are rejected; no defaults are created.
+      description: |
+        Acceptance records a durable delivery intent; queued does not mean delivered.
+        Worker is the sole sender in every environment, including Development capture.
+        The response does not return a plaintext PIN; the evaluator receives it in email.
+        Requires exactly one active placement and applicable active cycle, a published competency version, and an active evaluator. Ambiguous placement/cycle and missing master data are rejected; no defaults are created.
       x-permissions: [campaigns.send]
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2019,10 +2071,10 @@ paths:
     delete:
       tags: [System Settings]
       operationId: deleteProvince
-      summary: Delete a Province
+      summary: Archive a Province by setting its status to inactive
       x-permissions: [system.config.manage]
       responses:
-        '200': { description: Province deleted }
+        '200': { description: Province archived; existing records and text references are preserved }
         '404': { $ref: '#/components/responses/NotFound' }
   /system-settings/provinces/reset:
     post:
@@ -3395,11 +3447,11 @@ components:
         companyAddress: { type: string }
         province: { type: string }
         evaluatorName: { type: string }
-        evaluatorEmail: { type: string, format: email }
+        evaluatorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, maxLength: 0 }] }
         advisorName: { type: string, maxLength: 320 }
-        advisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, enum: [''] }] }
+        advisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, maxLength: 0 }] }
         siteVisitAdvisorName: { type: string, maxLength: 320 }
-        siteVisitAdvisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, enum: [''] }] }
+        siteVisitAdvisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, maxLength: 0 }] }
         admissionYear: { type: integer, minimum: 2000 }
         academicYear: { type: integer, minimum: 2000 }
         status: { type: string, enum: [active, archived], default: active }
@@ -3432,11 +3484,11 @@ components:
         companyAddress: { type: string }
         province: { type: string }
         evaluatorName: { type: string }
-        evaluatorEmail: { type: string, format: email }
+        evaluatorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, maxLength: 0 }] }
         advisorName: { type: string, maxLength: 320 }
-        advisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, enum: [''] }] }
+        advisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, maxLength: 0 }] }
         siteVisitAdvisorName: { type: string, maxLength: 320 }
-        siteVisitAdvisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, enum: [''] }] }
+        siteVisitAdvisorEmail: { type: string, maxLength: 320, anyOf: [{ type: string, format: email }, { type: string, maxLength: 0 }] }
         admissionYear: { type: integer, minimum: 2000 }
         academicYear: { type: integer, minimum: 2000 }
         status: { type: string, enum: [active, archived] }
@@ -3826,28 +3878,36 @@ components:
           $ref: '#/components/schemas/PageMeta'
     PlacementStatus:
       type: string
-      enum: [draft, active, completed, cancelled, archived]
+      enum: [planned, active, completed, cancelled]
     PlacementInput:
       type: object
-      required: [studentId, organizationId, termId, startsAt, endsAt]
+      required: [studentId, organizationId, academicTermId, schoolId, programId, positionTitle, startsAt, endsAt]
       properties:
         studentId:
           $ref: '#/components/schemas/ObjectId'
         organizationId:
           $ref: '#/components/schemas/ObjectId'
-        termId:
+        academicTermId:
           $ref: '#/components/schemas/ObjectId'
+        schoolId:
+          $ref: '#/components/schemas/ObjectId'
+        programId:
+          $ref: '#/components/schemas/ObjectId'
+        positionTitle:
+          $ref: '#/components/schemas/LocalizedText'
         startsAt:
           type: string
-          format: date
+          format: date-time
         endsAt:
           type: string
-          format: date
+          format: date-time
+        status:
+          $ref: '#/components/schemas/PlacementStatus'
     Placement:
       allOf:
         - $ref: '#/components/schemas/PlacementInput'
         - type: object
-          required: [id, status, createdAt, updatedAt, version]
+          required: [id, status, createdAt, updatedAt, revision]
           properties:
             id:
               $ref: '#/components/schemas/ObjectId'
@@ -3855,7 +3915,7 @@ components:
               $ref: '#/components/schemas/PlacementStatus'
             createdAt: { type: string, format: date-time }
             updatedAt: { type: string, format: date-time }
-            version: { type: integer, minimum: 1 }
+            revision: { type: integer, minimum: 0 }
     PlacementList:
       type: object
       required: [items, meta]
@@ -4128,6 +4188,10 @@ components:
         - type: object
           required: [id, status, questionSnapshot, competencySetVersionId, evaluationVersion, createdAt, updatedAt]
           properties:
+            accessPin:
+              type: string
+              readOnly: true
+              description: Existing PIN is included only in assignment listings for actors with campaigns.send permission and scope covering this assignment. Evaluator responses omit it. Reading never creates or rotates a PIN.
             id:
               $ref: '#/components/schemas/ObjectId'
             studentId:

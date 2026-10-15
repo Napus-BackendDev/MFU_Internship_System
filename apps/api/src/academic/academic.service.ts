@@ -394,7 +394,13 @@ export class AcademicService {
       }
       const school = await this.schools
         .findOneAndUpdate(
-          { _id: current._id, __v: currentVersion, status: current.status },
+          {
+            _id: current._id,
+            ...(currentVersion === 0
+              ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+              : { __v: currentVersion }),
+            status: current.status
+          },
           { $set: input, $inc: { __v: 1 } },
           { returnDocument: 'after', runValidators: true, session }
         )
@@ -566,7 +572,9 @@ export class AcademicService {
             _id: current._id,
             schoolId: current.schoolId,
             status: current.status,
-            __v: currentVersion
+            ...(currentVersion === 0
+              ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+              : { __v: currentVersion })
           },
           { $set: input, $inc: { __v: 1 } },
           { returnDocument: 'after', runValidators: true, session }
@@ -979,7 +987,9 @@ export class AcademicService {
             _id: current._id,
             startsAt: current.startsAt,
             endsAt: current.endsAt,
-            __v: currentVersion
+            ...(currentVersion === 0
+              ? { $or: [{ __v: 0 }, { __v: { $exists: false } }] }
+              : { __v: currentVersion })
           },
           { $set: input, $inc: { __v: 1 } },
           { returnDocument: 'after', runValidators: true, session }

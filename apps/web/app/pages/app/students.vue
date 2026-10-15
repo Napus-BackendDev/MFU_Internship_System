@@ -3,6 +3,10 @@ import * as XLSX from 'xlsx'
 import type { components } from '@internship/api-client'
 import { createSandboxedEmailPreviewDocument } from '~/utils/email-preview'
 import { toSafeInvitationPath } from '~/utils/safe-invitation-path'
+import {
+  formatBangkokDateTimeInput,
+  bangkokDateTimeInputToIso
+} from '~/utils/cycle-datetime'
 
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
@@ -131,6 +135,8 @@ interface ParsedStudentRow {
     readonly company?: string
     readonly province?: string
     readonly admissionYear?: number
+    readonly evaluatorName?: string
+    readonly evaluatorEmail?: string
   }
   readonly action: 'create' | 'update' | 'unchanged' | 'invalid'
   readonly status: 'pending' | 'committed' | 'skipped'
@@ -353,7 +359,7 @@ const { data: termsMasterData } = await useAsyncData(
   () =>
     api<{ items: { id: string; academicYear: number; semester: string }[] }>(
       '/academic/terms',
-      { query: { pageSize: 100 } }
+      { query: { pageSize: 25 } }
     )
 )
 
@@ -392,6 +398,7 @@ const academicYearFilterOptions = computed(() => {
 
 interface PlacementItem {
   readonly id: string
+  readonly status?: 'planned' | 'active' | 'completed' | 'cancelled'
   readonly studentId: string
   readonly organizationId?: string
   readonly academicTermId: string
@@ -749,7 +756,8 @@ function getProvinceDisplay(student: Student): string {
 }
 
 function getCompanyAddressDisplay(student: Student): string {
-  const directAddress = (student as unknown as { companyAddress?: string }).companyAddress
+  const directAddress = (student as unknown as { companyAddress?: string })
+    .companyAddress
   if (directAddress && !['-', '—'].includes(directAddress.trim())) {
     return directAddress
   }
@@ -796,13 +804,22 @@ function formatDateTime(isoStr?: string): string {
 // Helper: Check student data completeness before sending evaluation email
 function checkStudentCompleteness(student?: Student | null): {
   isComplete: boolean
-  missingItems: Array<{ key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'; label: string }>
-  firstMissing?: { key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'; label: string }
+  missingItems: Array<{
+    key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'
+    label: string
+  }>
+  firstMissing?: {
+    key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'
+    label: string
+  }
 } {
   if (!student) {
     return { isComplete: false, missingItems: [] }
   }
-  const missingItems: Array<{ key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'; label: string }> = []
+  const missingItems: Array<{
+    key: 'studentId' | 'company' | 'evaluatorEmail' | 'advisor'
+    label: string
+  }> = []
 
   // 1. ตรวจรหัสนักศึกษา
   if (!student.studentId?.trim()) {
@@ -817,7 +834,9 @@ function checkStudentCompleteness(student?: Student | null): {
 
   // 3. ตรวจอีเมลผู้ประเมิน
   const email = student.evaluatorEmail?.trim()
-  const isValidEmail = Boolean(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+  const isValidEmail = Boolean(
+    email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  )
   if (!isValidEmail) {
     missingItems.push({ key: 'evaluatorEmail', label: 'อีเมลผู้ประเมิน' })
   }
@@ -1129,6 +1148,8 @@ interface ManualStudentForm {
   studentId: string
   name: string
   email: string
+  evaluatorName: string
+  evaluatorEmail: string
   schoolId: string
   programId: string
   courseId: string
@@ -1143,6 +1164,8 @@ const manualForm = ref<ManualStudentForm>({
   studentId: '',
   name: '',
   email: '',
+  evaluatorName: '',
+  evaluatorEmail: '',
   schoolId: '',
   programId: '',
   courseId: '',
@@ -1166,6 +1189,8 @@ function openManualAddModal() {
     studentId: '',
     name: '',
     email: '',
+    evaluatorName: '',
+    evaluatorEmail: '',
     schoolId: '',
     programId: '',
     courseId: '',
@@ -1203,6 +1228,9 @@ async function handleManualAddSubmit() {
         studentId: manualForm.value.studentId.trim(),
         name: manualForm.value.name.trim(),
         email: manualForm.value.email.trim().toLowerCase(),
+        evaluatorName: manualForm.value.evaluatorName.trim() || undefined,
+        evaluatorEmail:
+          manualForm.value.evaluatorEmail.trim().toLowerCase() || undefined,
         schoolId: manualForm.value.schoolId,
         programId: manualForm.value.programId,
         courseId: manualForm.value.courseId || undefined,
@@ -1257,11 +1285,7 @@ const importProgress = ref({
   current: 0,
   total: 0,
   status: 'idle' as
-    | 'idle'
-    | 'previewing'
-    | 'committing'
-    | 'completed'
-    | 'error',
+    'idle' | 'previewing' | 'committing' | 'completed' | 'error',
   summary: {
     total: 0,
     creates: 0,
@@ -1274,6 +1298,8 @@ const selectedImportCount = computed(
   () =>
     parsedRows.value.filter(
       (row) =>
+        row.selected &&
+        row.issues.length === 0 &&
         row.status === 'pending' &&
         (row.action === 'create' || row.action === 'update')
     ).length
@@ -1352,7 +1378,10 @@ function downloadStudentExcelTemplate() {
       'ภาคการศึกษา (semester)',
       'สถานประกอบการ (company)',
       'จังหวัด (province)',
-      'ปีที่เข้าศึกษา'
+      'ปีที่เข้าศึกษา',
+      'ปีการศึกษา (academicYear)',
+      'ชื่อผู้ประเมิน (evaluatorName)',
+      'อีเมลผู้ประเมิน (evaluatorEmail)'
     ]
   ])
   // Set column widths
@@ -1366,7 +1395,10 @@ function downloadStudentExcelTemplate() {
     { wch: 18 }, // semester
     { wch: 30 }, // company
     { wch: 20 }, // province
-    { wch: 16 } // admissionYear
+    { wch: 16 }, // admissionYear
+    { wch: 22 }, // academicYear
+    { wch: 28 }, // evaluatorName
+    { wch: 32 } // evaluatorEmail
   ]
 
   const wb = XLSX.utils.book_new()
@@ -1514,9 +1546,9 @@ async function handleExcelFileUpload(event: Event) {
     form.append('file', file)
     const batch = await api<StudentImportBatchResponse>(
       importMode.value === 'contacts'
-        ? (contactImportTermId.value
-            ? `/students/import-preview?mode=contacts&academicTermId=${encodeURIComponent(contactImportTermId.value)}`
-            : '/students/import-preview?mode=contacts')
+        ? contactImportTermId.value
+          ? `/students/import-preview?mode=contacts&academicTermId=${encodeURIComponent(contactImportTermId.value)}`
+          : '/students/import-preview?mode=contacts'
         : '/students/import-preview',
       { method: 'POST', body: form }
     )
@@ -1543,6 +1575,8 @@ async function handleExecuteExcelImport() {
   const decisions = parsedRows.value
     .filter(
       (row) =>
+        row.selected &&
+        row.issues.length === 0 &&
         row.status === 'pending' &&
         (row.action === 'create' || row.action === 'update')
     )
@@ -1741,10 +1775,13 @@ async function selectAllMatchingStudents() {
       description: `เลือกนักศึกษาทั้งหมด ${selectedStudentIds.value.length} รายการเรียบร้อยแล้ว`,
       color: 'success'
     })
-  } catch (err: any) {
+  } catch (err: unknown) {
     toast.add({
       title: 'เลือกทั้งหมดไม่สำเร็จ',
-      description: err?.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลทั้งหมด',
+      description:
+        err instanceof Error
+          ? err.message
+          : 'เกิดข้อผิดพลาดในการดึงข้อมูลทั้งหมด',
       color: 'error'
     })
   } finally {
@@ -1872,7 +1909,7 @@ async function handleBulkExport() {
     ภาคการศึกษา: getSemesterDisplay(s),
     รายวิชา: getCourseDisplay(s),
     สถานประกอบการ: getCompanyDisplay(s),
-    'ผู้ประเมิน': s.evaluatorName || '-',
+    ผู้ประเมิน: s.evaluatorName || '-',
     อีเมลผู้ประเมิน: s.evaluatorEmail || '-',
     จังหวัด: getProvinceDisplay(s),
     สถานะการประเมิน: getStudentEvaluationStatus(s).label,
@@ -1892,6 +1929,97 @@ async function handleBulkExport() {
 }
 
 // Actions Menu for Each Student Row
+const completionStudent = ref<Student | null>(null)
+const completionPlacement = ref<{
+  id: string
+  revision: number
+  startsAt: string
+  endsAt: string
+} | null>(null)
+const completionEndsAt = ref('')
+const completionReason = ref('')
+const completingPlacement = ref(false)
+const completionError = ref('')
+
+async function openPlacementCompletion(student: Student): Promise<void> {
+  completionStudent.value = student
+  completionPlacement.value = null
+  completionError.value = ''
+  completionReason.value = ''
+  completionEndsAt.value = formatBangkokDateTimeInput(new Date())
+  try {
+    const response = await api<
+      PaginatedItems<{
+        id: string
+        revision: number
+        startsAt: string
+        endsAt: string
+        academicTermId: string
+      }>
+    >('/placements', {
+      query: { studentId: student.id, status: 'active', page: 1, pageSize: 100 }
+    })
+    const candidates = response.items.filter(
+      (item) =>
+        item.academicTermId === getStudentPlacement(student)?.academicTermId
+    )
+    if (
+      candidates.length !== 1 ||
+      !candidates[0] ||
+      response.meta.total > 100
+    ) {
+      completionError.value =
+        'ไม่พบการฝึกงานที่ active เพียงรอบเดียวในเทอมที่เลือก กรุณาตรวจข้อมูลก่อน'
+      return
+    }
+    completionPlacement.value = candidates[0]
+  } catch {
+    completionError.value = 'โหลดการฝึกงานไม่สำเร็จ กรุณาปิดหน้าต่างแล้วลองใหม่'
+  }
+}
+
+async function completePlacement(): Promise<void> {
+  const placement = completionPlacement.value
+  const actualEndsAt = bangkokDateTimeInputToIso(completionEndsAt.value)
+  if (
+    !placement ||
+    !actualEndsAt ||
+    !completionReason.value.trim() ||
+    completingPlacement.value
+  )
+    return
+  completingPlacement.value = true
+  completionError.value = ''
+  try {
+    await api(`/placements/${placement.id}/complete`, {
+      method: 'POST',
+      body: {
+        expectedRevision: placement.revision,
+        actualEndsAt,
+        reason: completionReason.value.trim()
+      }
+    })
+    completionStudent.value = null
+    toast.add({
+      title: 'จบการฝึกงานแล้ว',
+      description:
+        'บันทึกวันที่สิ้นสุดจริงและ Audit แล้ว นักศึกษาตรวจสถานะเอกสารได้',
+      color: 'success'
+    })
+    await refresh()
+  } catch (error: unknown) {
+    const code = (error as { data?: { code?: string } }).data?.code
+    completionError.value =
+      code === 'PLACEMENT_COMPLETION_DATE_INVALID'
+        ? 'วันสิ้นสุดต้องไม่ก่อนเริ่มฝึกงานและไม่อยู่ในอนาคต'
+        : code === 'PLACEMENT_CHANGED'
+          ? 'ข้อมูลการฝึกงานเปลี่ยนแล้ว กรุณาปิดหน้าต่างและเปิดใหม่'
+          : 'จบการฝึกงานไม่สำเร็จ ตรวจว่ามีผลประเมินสุดท้ายครบทุกงานและข้อมูลไม่เปลี่ยนระหว่างทำรายการ'
+  } finally {
+    completingPlacement.value = false
+  }
+}
+
 function getStudentMenuItems(student: Student) {
   return [
     [
@@ -1906,6 +2034,15 @@ function getStudentMenuItems(student: Student) {
         label: 'แก้ไขข้อมูล',
         icon: 'i-lucide-pencil',
         onSelect: () => openEditStudentModal(student)
+      },
+      {
+        label:
+          getStudentPlacement(student)?.status === 'completed'
+            ? 'จบการฝึกงานแล้ว'
+            : 'จบการฝึกงาน',
+        icon: 'i-lucide-circle-check',
+        disabled: getStudentPlacement(student)?.status === 'completed',
+        onSelect: () => openPlacementCompletion(student)
       }
     ],
     [
@@ -2384,8 +2521,8 @@ async function handleSendEvaluationEmailSubmit() {
 
     if (isSent) {
       toast.add({
-        title: 'ส่งคำเชิญเรียบร้อยแล้ว (จำลองการส่ง)',
-        description: `จัดส่งข้อมูลไปยัง ${result.recipientEmail} แล้ว (โหมดทดสอบ ไม่ส่งอีเมลจริง)`,
+        title: 'ส่งคำเชิญเรียบร้อยแล้ว',
+        description: `จัดส่งข้อมูลไปยัง ${result.recipientEmail} แล้ว ตรวจสอบหลักฐานการส่งได้จากสถานะ Delivery`,
         color: 'success',
         icon: 'i-lucide-check-circle-2'
       })
@@ -2394,7 +2531,7 @@ async function handleSendEvaluationEmailSubmit() {
         result.error || 'เซิร์ฟเวอร์ SMTP ไม่ตอบสนองหรือยังไม่ได้ตั้งค่า'
       toast.add({
         title: 'สร้างคำเชิญแล้ว (ส่งอีเมลไม่สำเร็จ)',
-        description: `ไม่สามารถส่งอีเมลไปยัง ${result.recipientEmail} ได้ (${errDetail}) กรุณาคัดลอกลิงก์และรหัส PIN จากหน้าต่างนี้เพื่อส่งให้ผู้ประเมินด้วยตนเอง`,
+        description: `ไม่สามารถส่งอีเมลไปยัง ${result.recipientEmail} ได้ (${errDetail}) ตรวจสอบสถานะ Delivery ก่อนลองส่งซ้ำ`,
         color: 'warning',
         icon: 'i-lucide-alert-triangle'
       })
@@ -2656,7 +2793,9 @@ function handleModalBackdropClick() {
     <div
       class="rounded-xl border border-default bg-default p-4 shadow-sm space-y-3"
     >
-      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+      <div
+        class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3"
+      >
         <!-- 1. ตัวกรองสำนักวิชา -->
         <div class="space-y-1">
           <label
@@ -2874,7 +3013,10 @@ function handleModalBackdropClick() {
 
           <!-- ปุ่มเลือกทั้งหมดตามภาพ -->
           <UButton
-            v-if="!isAllMatchingSelected && (data?.meta?.total ?? 0) > selectedStudentIds.length"
+            v-if="
+              !isAllMatchingSelected &&
+              (data?.meta?.total ?? 0) > selectedStudentIds.length
+            "
             size="xs"
             color="primary"
             variant="solid"
@@ -3398,6 +3540,35 @@ function handleModalBackdropClick() {
                 </p>
               </div>
 
+              <div>
+                <label
+                  for="manual-evaluator-name"
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                  >ชื่อผู้ประเมินสถานประกอบการ</label
+                >
+                <UInput
+                  id="manual-evaluator-name"
+                  v-model="manualForm.evaluatorName"
+                  class="w-full"
+                  size="lg"
+                  placeholder="ชื่อ-นามสกุลผู้ประเมิน"
+                />
+              </div>
+              <div>
+                <label
+                  for="manual-evaluator-email"
+                  class="block text-xs font-semibold text-highlighted mb-1.5"
+                  >อีเมลผู้ประเมินสถานประกอบการ</label
+                >
+                <UInput
+                  id="manual-evaluator-email"
+                  v-model="manualForm.evaluatorEmail"
+                  type="email"
+                  class="w-full"
+                  size="lg"
+                  placeholder="evaluator@example.com"
+                />
+              </div>
               <!-- Admission Year & Status -->
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -3531,8 +3702,9 @@ function handleModalBackdropClick() {
           </UFormField>
           <template v-if="importMode === 'contacts'">
             <p class="text-sm text-muted">
-              จับคู่ข้อมูลอัตโนมัติด้วยรหัสนักศึกษา อัปเดตเฉพาะข้อมูลติดต่ออาจารย์และผู้ประเมิน
-              ไม่สร้างนักศึกษาใหม่ ช่องว่างจะไม่ลบข้อมูลเดิม และยังไม่ส่งอีเมล
+              จับคู่ข้อมูลอัตโนมัติด้วยรหัสนักศึกษา
+              อัปเดตเฉพาะข้อมูลติดต่ออาจารย์และผู้ประเมิน ไม่สร้างนักศึกษาใหม่
+              ช่องว่างจะไม่ลบข้อมูลเดิม และยังไม่ส่งอีเมล
             </p>
           </template>
         </div>
@@ -3683,7 +3855,10 @@ function handleModalBackdropClick() {
                       v-else-if="isExcelImporting"
                       class="text-primary font-medium"
                     >
-                      กำลังนำเข้าข้อมูลสู่ระบบ... ({{ importProgress.current }} / {{ importProgress.total }} รายการ)
+                      กำลังนำเข้าข้อมูลสู่ระบบ... ({{
+                        importProgress.current
+                      }}
+                      / {{ importProgress.total }} รายการ)
                     </span>
                     <span v-else>
                       ตรวจสอบข้อมูลเสร็จสิ้น พร้อมกดยืนยันนำเข้าข้อมูลทันที
@@ -3694,7 +3869,9 @@ function handleModalBackdropClick() {
 
               <!-- Reset / Change File -->
               <UButton
-                v-if="!isExcelImporting && importProgress.status !== 'completed'"
+                v-if="
+                  !isExcelImporting && importProgress.status !== 'completed'
+                "
                 color="neutral"
                 icon="i-lucide-rotate-ccw"
                 label="เลือกไฟล์ใหม่"
@@ -3718,10 +3895,13 @@ function handleModalBackdropClick() {
                           (importProgress.current / importProgress.total) * 100
                         )
                       : 0
-                  }}% ({{ importProgress.current }} / {{ importProgress.total }} รายการ)
+                  }}% ({{ importProgress.current }} /
+                  {{ importProgress.total }} รายการ)
                 </span>
               </div>
-              <div class="w-full bg-muted/40 rounded-full h-2.5 overflow-hidden">
+              <div
+                class="w-full bg-muted/40 rounded-full h-2.5 overflow-hidden"
+              >
                 <div
                   class="h-2.5 rounded-full transition-all duration-300"
                   :class="
@@ -3751,7 +3931,9 @@ function handleModalBackdropClick() {
               <div
                 class="rounded-xl border border-default/70 bg-card p-3 text-center"
               >
-                <span class="text-[11px] text-muted block">นักศึกษาทั้งหมด</span>
+                <span class="text-[11px] text-muted block"
+                  >นักศึกษาทั้งหมด</span
+                >
                 <span class="text-xl font-bold text-highlighted mt-0.5 block">
                   {{ importProgress.summary.total }}
                 </span>
@@ -3763,7 +3945,8 @@ function handleModalBackdropClick() {
               >
                 <span
                   class="text-[11px] text-amber-700 dark:text-amber-400 block font-medium"
-                >พร้อมอัปเดต</span>
+                  >พร้อมอัปเดต</span
+                >
                 <span
                   class="text-xl font-bold text-amber-600 dark:text-amber-400 mt-0.5 block"
                 >
@@ -3777,7 +3960,8 @@ function handleModalBackdropClick() {
               >
                 <span
                   class="text-[11px] text-emerald-700 dark:text-emerald-400 block font-medium"
-                >เพิ่มใหม่</span>
+                  >เพิ่มใหม่</span
+                >
                 <span
                   class="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5 block"
                 >
@@ -3808,13 +3992,104 @@ function handleModalBackdropClick() {
                   class="size-4 shrink-0 text-rose-500"
                 />
                 <span>
-                  พบข้อมูลที่ไม่ตรงเงื่อนไขหรือไม่พบในระบบ <strong>{{ importProgress.summary.invalid }}</strong> รายการ (ระบบจะข้ามรายการเหล่านี้อัตโนมัติ)
+                  พบข้อมูลที่ไม่ตรงเงื่อนไขหรือไม่พบในระบบ
+                  <strong>{{ importProgress.summary.invalid }}</strong> รายการ
+                  (ระบบจะข้ามรายการเหล่านี้อัตโนมัติ)
                 </span>
               </div>
             </div>
           </div>
         </div>
 
+        <div
+          v-if="parsedRows.length"
+          class="max-h-[40dvh] w-full overflow-auto rounded-xl border border-default"
+          aria-label="ผลตรวจสอบรายแถวก่อนนำเข้า"
+        >
+          <table class="w-full min-w-[680px] text-left text-xs">
+            <thead class="bg-muted text-highlighted">
+              <tr>
+                <th class="p-3">ยืนยัน</th>
+                <th class="p-3">นักศึกษา / แถว</th>
+                <th class="p-3">ข้อมูลและส่วนต่าง</th>
+                <th class="p-3">สถานะ / ปัญหา</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-default">
+              <tr v-for="row in parsedRows" :key="row.id">
+                <td class="p-3 align-top">
+                  <input
+                    v-model="row.selected"
+                    type="checkbox"
+                    :aria-label="`ยืนยันแถว ${row.sheet}/${row.rowNumber}`"
+                    :disabled="
+                      isExcelImporting ||
+                      row.status !== 'pending' ||
+                      row.issues.length > 0 ||
+                      (row.action !== 'create' && row.action !== 'update')
+                    "
+                  />
+                </td>
+                <td class="p-3 align-top">
+                  <strong>{{ row.student?.studentId ?? '—' }}</strong>
+                  <p>{{ importDiffValue(row.student?.name) }}</p>
+                  <p>{{ row.sheet }} / {{ row.rowNumber }}</p>
+                </td>
+                <td class="p-3 align-top space-y-1">
+                  <p
+                    v-if="
+                      row.student?.evaluatorName || row.student?.evaluatorEmail
+                    "
+                  >
+                    ผู้ประเมิน: {{ row.student?.evaluatorName }}
+                    {{ row.student?.evaluatorEmail }}
+                  </p>
+                  <p v-for="change in row.changes" :key="change.field">
+                    {{ importFieldLabel(change.field) }}:
+                    {{ importDiffValue(change.before) }} →
+                    {{ importDiffValue(change.after) }}
+                  </p>
+                  <details>
+                    <summary class="cursor-pointer">
+                      ดูข้อมูลที่จะนำเข้า
+                    </summary>
+                    <p v-for="(value, field) in row.student ?? {}" :key="field">
+                      {{ importFieldLabel(field) }}:
+                      {{ importDiffValue(value) }}
+                    </p>
+                  </details>
+                </td>
+                <td class="p-3 align-top space-y-1">
+                  <span>{{
+                    row.status === 'committed'
+                      ? 'บันทึกแล้ว'
+                      : row.action === 'create'
+                        ? 'เพิ่มใหม่'
+                        : row.action === 'update'
+                          ? 'อัปเดต'
+                          : row.action === 'unchanged'
+                            ? 'ข้อมูลตรงเดิม'
+                            : 'ข้อมูลไม่ผ่าน'
+                  }}</span>
+                  <p
+                    v-for="issue in row.issues"
+                    :key="issue.code"
+                    class="text-error"
+                  >
+                    {{ issue.code }}: {{ issue.message }}
+                  </p>
+                  <p
+                    v-for="warning in row.warnings"
+                    :key="warning.code"
+                    class="text-warning"
+                  >
+                    {{ warning.message }}
+                  </p>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <!-- Actions -->
         <div
           class="flex items-center justify-end gap-2.5 pt-4 border-t border-default"
@@ -3824,7 +4099,12 @@ function handleModalBackdropClick() {
             color="primary"
             icon="i-lucide-check"
             label="เสร็จสิ้นและปิดหน้าต่าง"
-            @click="isExcelModalOpen = false; clearExcelImportState()"
+            @click="
+              () => {
+                isExcelModalOpen = false
+                clearExcelImportState()
+              }
+            "
           />
           <template v-else>
             <UButton
@@ -3891,7 +4171,9 @@ function handleModalBackdropClick() {
           </div>
         </div>
 
-        <div class="rounded-xl border border-default bg-muted/20 p-4 space-y-2.5">
+        <div
+          class="rounded-xl border border-default bg-muted/20 p-4 space-y-2.5"
+        >
           <p class="text-xs font-semibold text-highlighted">
             รายการข้อมูลสำคัญที่ยังขาด:
           </p>
@@ -3901,12 +4183,16 @@ function handleModalBackdropClick() {
               :key="item.key"
               class="flex items-center gap-2 text-warning font-medium"
             >
-              <UIcon name="i-lucide-x-circle" class="size-4 shrink-0 text-red-500" />
+              <UIcon
+                name="i-lucide-x-circle"
+                class="size-4 shrink-0 text-red-500"
+              />
               <span>ขาด{{ item.label }}</span>
             </li>
           </ul>
           <p class="text-[11px] text-muted pt-2 border-t border-default/50">
-            * ต้องมีรหัสนักศึกษา, ชื่อสถานประกอบการ, อีเมลผู้ประเมิน และอาจารย์ที่ปรึกษา จึงจะสามารถส่งอีเมลแบบประเมินได้
+            * ต้องมีรหัสนักศึกษา, ชื่อสถานประกอบการ, อีเมลผู้ประเมิน
+            และอาจารย์ที่ปรึกษา จึงจะสามารถส่งอีเมลแบบประเมินได้
           </p>
         </div>
 
@@ -4078,7 +4364,9 @@ function handleModalBackdropClick() {
                       />
                     </UFormField>
                   </div>
-                  <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-default/50">
+                  <div
+                    class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-default/50"
+                  >
                     <UFormField label="ชื่ออาจารย์นิเทศ / ที่ปรึกษา">
                       <UInput
                         v-model="editForm.siteVisitAdvisorName"
@@ -4406,7 +4694,7 @@ function handleModalBackdropClick() {
                   color="warning"
                   variant="subtle"
                   size="xs"
-                  label="โหมดจำลอง (Developer Test)"
+                  label="คิวส่งคำเชิญ"
                 />
               </div>
               <p class="text-xs text-muted">
@@ -4454,7 +4742,9 @@ function handleModalBackdropClick() {
             class="size-4 shrink-0 text-amber-500"
           />
           <span
-            ><strong>โหมดทดสอบ (Developer Sandbox):</strong> ปิดระบบส่งอีเมลจริงภายนอก — ระบบจะจำลองว่าจัดส่งสำเร็จและสร้างลิงก์/PIN สำหรับทดสอบการประเมินได้ทันที</span
+            ><strong>การส่งคำเชิญ:</strong> ระบบรับคำขอเข้าคิวก่อนส่งอีเมล
+            ติดตามผลจากสถานะ Delivery และใช้ลิงก์/PIN
+            จากอีเมลที่ผู้ประเมินได้รับ</span
           >
         </div>
 
@@ -5583,6 +5873,76 @@ function handleModalBackdropClick() {
               @click="handleBulkSendEvaluationEmailSubmit"
             />
           </div>
+        </div>
+      </div>
+    </AppModal>
+
+    <AppModal
+      :open="Boolean(completionStudent)"
+      title="จบการฝึกงาน"
+      @update:open="
+        (value) => {
+          if (!value && !completingPlacement) completionStudent = null
+        }
+      "
+    >
+      <div class="space-y-4 p-6">
+        <h2 class="text-lg font-semibold">จบการฝึกงาน</h2>
+        <p>
+          {{ completionStudent?.studentId }} —
+          {{ getStudentName(completionStudent) }}
+        </p>
+        <p class="text-sm text-muted">
+          ยืนยันวันที่สิ้นสุดจริง เวลาไทย
+          ระบบจะตรวจว่าทุกงานประเมินส่งผลสุดท้ายแล้ว และบันทึกเหตุผลใน Audit
+          การจบการฝึกงานไม่เปลี่ยนคะแนน
+        </p>
+        <p v-if="completionPlacement" class="text-sm">
+          เริ่มฝึกงาน:
+          {{
+            new Date(completionPlacement.startsAt).toLocaleString('th-TH', {
+              timeZone: 'Asia/Bangkok'
+            })
+          }}
+        </p>
+        <label class="block" for="completion-ends-at"
+          >วันที่และเวลาสิ้นสุดจริง (Asia/Bangkok)</label
+        >
+        <UInput
+          id="completion-ends-at"
+          v-model="completionEndsAt"
+          type="datetime-local"
+          class="w-full"
+          :disabled="completingPlacement"
+        />
+        <label class="block" for="completion-reason"
+          >เหตุผลและการตรวจรับการฝึกงาน</label
+        >
+        <UTextarea
+          id="completion-reason"
+          v-model="completionReason"
+          :maxlength="1000"
+          class="w-full"
+          :disabled="completingPlacement"
+        />
+        <UAlert v-if="completionError" :title="completionError" color="error" />
+        <div class="flex justify-end gap-3">
+          <UButton
+            label="ยกเลิก"
+            variant="ghost"
+            :disabled="completingPlacement"
+            @click="completionStudent = null"
+          />
+          <UButton
+            label="ยืนยันจบการฝึกงาน"
+            :loading="completingPlacement"
+            :disabled="
+              !completionPlacement ||
+              !completionReason.trim() ||
+              !bangkokDateTimeInputToIso(completionEndsAt)
+            "
+            @click="completePlacement"
+          />
         </div>
       </div>
     </AppModal>

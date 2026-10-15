@@ -229,6 +229,39 @@ describe('student import on an isolated MongoDB replica set', () => {
     }
   }
 
+  it('previews and commits evaluator name and legacy-spelled email columns without creating access or sending mail', async () => {
+    const preview = (await service.preview(
+      actor,
+      'students.xlsx',
+      workbookBuffer([
+        sourceRow('6631503999', {
+          evaluatorName: 'Workplace Evaluator',
+          'Evaluter Email': 'Evaluator@Example.test'
+        })
+      ])
+    )) as PreviewResponse
+    expect(preview.items[0]).toMatchObject({ action: 'create', issues: [] })
+    await service.commit(
+      actor,
+      preview.batchId,
+      'import-evaluator-contacts',
+      [{ rowId: preview.items[0]!.id, action: 'create' }],
+      'qa-workbook'
+    )
+    await expect(
+      students.findOne({ studentId: '6631503999' }).lean()
+    ).resolves.toMatchObject({
+      evaluatorName: 'Workplace Evaluator',
+      evaluatorEmail: 'evaluator@example.test'
+    })
+    expect(await connection.collection('evaluators').countDocuments()).toBe(0)
+    expect(
+      await connection.collection('evaluationAssignments').countDocuments()
+    ).toBe(0)
+    expect(await connection.collection('invitations').countDocuments()).toBe(0)
+    expect(await connection.collection('deliveries').countDocuments()).toBe(0)
+  })
+
   it('matches contacts to an existing student in the chosen term without overwriting profile data or sending mail', async () => {
     const initial = (await service.preview(
       actor,
@@ -324,7 +357,9 @@ describe('student import on an isolated MongoDB replica set', () => {
       .expect(201)
     const preview = response.body as PreviewResponse
     expect(preview.items[0]).toMatchObject({ action: 'update', issues: [] })
-    expect(preview.items[0]!.student).toMatchObject({ studentId: student.studentId })
+    expect(preview.items[0]!.student).toMatchObject({
+      studentId: student.studentId
+    })
   })
 
   it('rejects unknown, out-of-scope and wrong-term contact matches without leaking the stored profile', async () => {

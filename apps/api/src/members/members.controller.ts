@@ -137,7 +137,7 @@ const studentSchema = z.object({
   companyAddress: z.string().trim().optional(),
   province: z.string().trim().optional(),
   evaluatorName: z.string().trim().optional(),
-  evaluatorEmail: z.string().trim().optional(),
+  evaluatorEmail: z.union([z.literal(''), z.email().max(320)]).optional(),
   advisorName: z.string().trim().max(320).optional(),
   advisorEmail: z.union([z.literal(''), z.email().max(320)]).optional(),
   siteVisitAdvisorName: z.string().trim().max(320).optional(),
@@ -173,9 +173,7 @@ const placementSchema = z
     positionTitle: nameSchema,
     startsAt: z.coerce.date(),
     endsAt: z.coerce.date(),
-    status: z
-      .enum(['planned', 'active', 'completed', 'cancelled'])
-      .default('planned')
+    status: z.enum(['planned', 'active', 'cancelled']).default('planned')
   })
   .refine((value) => value.endsAt > value.startsAt, {
     message: 'endsAt must be after startsAt',
@@ -417,6 +415,29 @@ export class MembersController {
     @Query() raw: unknown
   ): Promise<unknown> {
     return this.service.listPlacements(request.actor!, listSchema.parse(raw))
+  }
+
+  @RequirePermissions('placements.manage')
+  @Post('placements/:placementId/complete')
+  public completePlacement(
+    @Req() request: AuthenticatedRequest,
+    @Param('placementId') placementId: string,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    const input = z
+      .object({
+        expectedRevision: z.number().int().nonnegative(),
+        actualEndsAt: z.coerce.date(),
+        reason: z.string().trim().min(1).max(1000)
+      })
+      .strict()
+      .parse(raw)
+    return this.service.completePlacement(
+      request.actor!,
+      placementId,
+      input,
+      request.requestId ?? 'unknown'
+    )
   }
 
   @RequirePermissions('placements.manage')

@@ -1,5 +1,19 @@
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { createConnection, Types, type Connection, type Model } from 'mongoose'
+import { upsertDevelopmentRecord } from '../src/scripts/development-seed-record.js'
+import { GeneralSettingsService } from '../src/system-settings/general-settings.service.js'
+import {
+  ProvinceRecord,
+  ProvinceSchema,
+  GeneralConfigRecord,
+  GeneralConfigSchema
+} from '../src/system-settings/general-settings.schema.js'
+import {
+  createConnection,
+  Types,
+  type Connection,
+  type Model,
+  type HydratedDocument
+} from 'mongoose'
 import { HttpException, type INestApplication } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
@@ -290,6 +304,363 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       programId
     }
   }
+
+  async function completionFixture(
+    status: EvaluationAssignmentRecord['status'] = 'submitted',
+    finalVersion = 1
+  ): Promise<{
+    placement: HydratedDocument<PlacementRecord>
+    assignment: HydratedDocument<EvaluationAssignmentRecord>
+  }> {
+    const placement = await placements.create({
+      studentId: 'completion-student',
+      organizationId,
+      academicTermId: 'completion-term',
+      schoolId,
+      programId,
+      positionTitle: { th: 'ฝึกงาน', en: 'Intern' },
+      startsAt: new Date('2020-01-01T00:00:00Z'),
+      endsAt: new Date('2030-01-01T00:00:00Z'),
+      status: 'active'
+    })
+    const assignment = await assignments.create({
+      cycleId: new Types.ObjectId().toString(),
+      placementId: placement.id,
+      evaluatorId: 'completion-evaluator',
+      studentId: 'completion-student',
+      schoolId,
+      programId,
+      questionSnapshot: [],
+      competencySetVersionId: new Types.ObjectId().toString(),
+      deadlineAt: new Date('2030-01-01T00:00:00Z'),
+      status,
+      evaluationVersion: 1
+    })
+    if (finalVersion)
+      await evaluations.create({
+        assignmentId: assignment.id,
+        version: finalVersion,
+        answers: {},
+        questionSnapshot: [],
+        aggregateScore: null,
+        evaluatorId: assignment.evaluatorId,
+        submittedAt: new Date(),
+        idempotencyKey: 'completion-final'
+      })
+    return { placement, assignment }
+  }
+
+  const completionInput = {
+    expectedRevision: 0,
+    actualEndsAt: new Date('2021-01-01T00:00:00Z'),
+    reason: 'ตรวจรับการฝึกงานทดสอบ'
+  }
+
+  it('completes Placement atomically with actual date, revision and scoped audit', async () => {
+    const { placement } = await completionFixture()
+    await expect(
+      service.completePlacement(
+        admin,
+        placement.id,
+        completionInput,
+        'completion-request'
+      )
+    ).resolves.toMatchObject({
+      status: 'completed',
+      revision: 1,
+      endsAt: completionInput.actualEndsAt
+    })
+    expect(
+      await auditLogs.findOne({ action: 'placements.completed' }).lean()
+    ).toMatchObject({
+      requestId: 'completion-request',
+      metadata: { placementId: placement.id, reason: completionInput.reason }
+    })
+    await expect(
+      service.completePlacement(admin, placement.id, completionInput)
+    ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('requires the audited completion command instead of creating a completed Placement', async () => {
+    const { placement } = await completionFixture()
+    await expect(
+      service.createPlacement(admin, {
+        ...placement.toObject(),
+        status: 'completed'
+      })
+    ).rejects.toMatchObject({
+      response: { code: 'PLACEMENT_COMPLETION_REQUIRED' }
+    })
+  })
+
+  it.each(['pending', 'inProgress', 'expired', 'reopened'] as const)(
+    'rejects completion when an assignment is %s',
+    async (status) => {
+      const { placement } = await completionFixture(status)
+      await expect(
+        service.completePlacement(admin, placement.id, completionInput)
+      ).rejects.toMatchObject({
+        response: { code: 'PLACEMENT_EVALUATIONS_INCOMPLETE' }
+      })
+      expect((await placements.findById(placement.id))?.status).toBe('active')
+    }
+  )
+
+  it.each([0, 2])(
+    'rejects missing or stale final version %s',
+    async (version) => {
+      const { placement } = await completionFixture('submitted', version)
+      await expect(
+        service.completePlacement(admin, placement.id, completionInput)
+      ).rejects.toMatchObject({ status: 409 })
+    }
+  )
+
+  it('rejects empty assignments, stale revisions, invalid dates and unauthorized roles/scopes', async () => {
+    const { placement, assignment } = await completionFixture()
+    await expect(
+      service.completePlacement(admin, placement.id, {
+        ...completionInput,
+        expectedRevision: 7
+      })
+    ).rejects.toMatchObject({ status: 409 })
+    for (const actualEndsAt of [
+      new Date('2019-01-01'),
+      new Date('2099-01-01'),
+      new Date('invalid')
+    ]) {
+      await expect(
+        service.completePlacement(admin, placement.id, {
+          ...completionInput,
+          actualEndsAt
+        })
+      ).rejects.toMatchObject({ status: 422 })
+    }
+    for (const roles of [
+      ['student'],
+      ['coordinator'],
+      ['internshipStaff']
+    ] as const) {
+      await expect(
+        service.completePlacement(
+          {
+            ...admin,
+            roles: [...roles],
+            scope: { tenant: false, schoolIds: [otherSchoolId], programIds: [] }
+          },
+          placement.id,
+          completionInput
+        )
+      ).rejects.toMatchObject({ status: 404 })
+    }
+    await assignments.deleteOne({ _id: assignment._id })
+    await expect(
+      service.completePlacement(admin, placement.id, completionInput)
+    ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('rolls completion back when audit persistence fails', async () => {
+    const { placement } = await completionFixture()
+    const failure = vi
+      .spyOn(auditService, 'record')
+      .mockRejectedValueOnce(new Error('audit unavailable'))
+    try {
+      await expect(
+        service.completePlacement(admin, placement.id, completionInput)
+      ).rejects.toThrow('audit unavailable')
+      expect((await placements.findById(placement.id))?.status).toBe('active')
+    } finally {
+      failure.mockRestore()
+    }
+  })
+
+  it('permits only one concurrent completion and supports missing version keys', async () => {
+    const { placement } = await completionFixture()
+    await placements.updateOne({ _id: placement._id }, { $unset: { __v: 1 } })
+    const results = await Promise.allSettled([
+      service.completePlacement(admin, placement.id, completionInput),
+      service.completePlacement(admin, placement.id, completionInput)
+    ])
+    expect(
+      results.filter((result) => result.status === 'fulfilled')
+    ).toHaveLength(1)
+    expect(
+      await auditLogs.countDocuments({ action: 'placements.completed' })
+    ).toBe(1)
+  })
+
+  it('seeds complete document versions once and preserves immutable content on rerun', async () => {
+    const db = connection.db!
+    const filter = { templateId: 'seed-template', versionNumber: 1 }
+    const document = {
+      ...filter,
+      status: 'published',
+      canonicalJson: { content: 'Original approved content' },
+      fontAssetKeys: ['real-font']
+    }
+    const id = await upsertDevelopmentRecord(
+      db,
+      'documentTemplateVersions',
+      filter,
+      document
+    )
+    await expect(
+      db.collection('documentTemplateVersions').findOne(filter)
+    ).resolves.toMatchObject(document)
+    expect(
+      await upsertDevelopmentRecord(db, 'documentTemplateVersions', filter, {
+        ...document,
+        status: 'draft',
+        canonicalJson: { content: 'Replacement' }
+      })
+    ).toBe(id)
+    await expect(
+      db.collection('documentTemplateVersions').findOne(filter)
+    ).resolves.toMatchObject(document)
+  })
+
+  it('updates seeded school, program and term records without a version key', async () => {
+    const academic = new AcademicService(
+      schools,
+      programs,
+      courses,
+      terms,
+      auditService
+    )
+    const term = await terms.create({
+      code: 'LEGACY-VERSION',
+      academicYear: 2026,
+      semester: '1',
+      startsAt: new Date('2026-01-01'),
+      endsAt: new Date('2026-12-31'),
+      status: 'open'
+    })
+    await schools.collection.updateOne(
+      { _id: new Types.ObjectId(schoolId) },
+      { $unset: { __v: '' } }
+    )
+    await programs.collection.updateOne(
+      { _id: new Types.ObjectId(programId) },
+      { $unset: { __v: '' } }
+    )
+    await terms.collection.updateOne({ _id: term._id }, { $unset: { __v: '' } })
+    await expect(
+      academic.updateSchool(admin, schoolId, {
+        name: { th: 'Updated School', en: 'Updated School' }
+      })
+    ).resolves.toMatchObject({ name: { en: 'Updated School' } })
+    await expect(
+      academic.updateProgram(admin, programId, {
+        name: { th: 'Updated Program', en: 'Updated Program' }
+      })
+    ).resolves.toMatchObject({ name: { en: 'Updated Program' } })
+    await expect(
+      academic.updateTerm(admin, term.id, { status: 'closed' })
+    ).resolves.toMatchObject({ status: 'closed' })
+    expect((await schools.findById(schoolId).lean())?.__v).toBe(1)
+    expect((await programs.findById(programId).lean())?.__v).toBe(1)
+    expect((await terms.findById(term.id).lean())?.__v).toBe(1)
+    await academic.updateTerm(admin, term.id, { status: 'open' })
+    expect((await terms.findById(term.id).lean())?.__v).toBe(2)
+    expect(
+      await auditLogs.countDocuments({ action: 'academicTerms.updated' })
+    ).toBe(2)
+  })
+
+  it('rejects a concurrent stale update after both requests read a missing version', async () => {
+    const academic = new AcademicService(
+      schools,
+      programs,
+      courses,
+      terms,
+      auditService
+    )
+    const term = await terms.create({
+      code: 'LEGACY-RACE',
+      academicYear: 2026,
+      semester: '1',
+      startsAt: new Date('2026-01-01'),
+      endsAt: new Date('2026-12-31'),
+      status: 'open'
+    })
+    await terms.collection.updateOne({ _id: term._id }, { $unset: { __v: '' } })
+    const originalFindById = terms.findById.bind(terms)
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let readers = 0
+    const spy = vi.spyOn(terms, 'findById').mockImplementation((...args) => {
+      const query = originalFindById(...args)
+      const exec = query.exec.bind(query)
+      vi.spyOn(query, 'exec').mockImplementation(async () => {
+        const snapshot = await exec()
+        if (++readers === 2) release()
+        await barrier
+        return snapshot
+      })
+      return query
+    })
+    try {
+      const results = await Promise.allSettled([
+        academic.updateTerm(admin, term.id, { semester: '2' }),
+        academic.updateTerm(admin, term.id, { semester: '3' })
+      ])
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+      expect(results.find((r) => r.status === 'rejected')).toMatchObject({
+        reason: { status: 409, response: { code: 'ACADEMIC_TERM_CHANGED' } }
+      })
+    } finally {
+      spy.mockRestore()
+    }
+    expect((await terms.findById(term.id).lean())?.__v).toBe(1)
+    expect(
+      await auditLogs.countDocuments({ action: 'academicTerms.updated' })
+    ).toBe(1)
+  })
+
+  it('archives referenced provinces without deleting their identity or student data', async () => {
+    const provinces = connection.model(ProvinceRecord.name, ProvinceSchema)
+    const configs = connection.model(
+      GeneralConfigRecord.name,
+      GeneralConfigSchema
+    )
+    const settings = new GeneralSettingsService(provinces, configs)
+    const province = await provinces.create({
+      code: 'CRI',
+      nameTh: 'Chiang Rai',
+      nameEn: 'Chiang Rai',
+      region: 'north',
+      status: 'active'
+    })
+    const student = await students.create({
+      ...input('6631505999', 'province@example.test'),
+      province: province.nameTh
+    })
+    await expect(settings.deleteProvince(province.id)).resolves.toEqual({
+      success: true
+    })
+    await expect(provinces.findById(province.id).lean()).resolves.toMatchObject(
+      { code: 'CRI', nameTh: 'Chiang Rai', status: 'inactive' }
+    )
+    expect((await students.findById(student.id).lean())?.province).toBe(
+      'Chiang Rai'
+    )
+    expect(
+      (await settings.listProvinces({ status: 'active' })).items
+    ).toHaveLength(0)
+    expect(
+      (await settings.listProvinces({ status: 'inactive' })).items
+    ).toHaveLength(1)
+    await settings.deleteProvince(province.id)
+    await settings.updateProvince(province.id, { status: 'active' })
+    expect(
+      (await settings.listProvinces({ status: 'active' })).items
+    ).toHaveLength(1)
+    await expect(
+      settings.deleteProvince(new Types.ObjectId().toString())
+    ).rejects.toMatchObject({ status: 404 })
+  })
 
   it('reads Student and joined directory references from one MongoDB snapshot', async () => {
     const term = await terms.create({
@@ -2528,7 +2899,7 @@ describe('Student CRUD email integrity on an isolated MongoDB replica set', () =
       positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
       startsAt: new Date('2024-06-15T00:00:00.000Z'),
       endsAt: new Date('2024-08-15T00:00:00.000Z'),
-      status: 'completed' as const
+      status: 'active' as const
     })
     const firstPlacement = (await service.createPlacement(
       admin,

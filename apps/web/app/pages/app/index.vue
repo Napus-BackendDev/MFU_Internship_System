@@ -8,6 +8,7 @@ import {
 } from '~/utils/student-evaluation-result'
 import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
 import { selectCurrentStudentAssignment } from '~/utils/student-assignment'
+import { resolveSafeDownloadUrl } from '~/utils/safe-download-url'
 import {
   createStudentDocumentIdempotencyKey,
   findDocumentForEvaluationSet,
@@ -1280,14 +1281,12 @@ async function downloadDocument(type: StudentDocumentType): Promise<void> {
     const response = await api<{ url: string; expiresIn: number }>(
       `/generated-documents/${encodeURIComponent(issuedDocument.id)}/download-url`
     )
-    const signedUrl = new URL(response.url)
-    const secureProtocol =
-      signedUrl.protocol === 'https:' ||
-      (!import.meta.env.PROD && signedUrl.protocol === 'http:')
+    const signedUrl = resolveSafeDownloadUrl(
+      response.url,
+      window.location.protocol
+    )
     if (
-      !secureProtocol ||
-      signedUrl.username ||
-      signedUrl.password ||
+      !signedUrl ||
       !Number.isInteger(response.expiresIn) ||
       response.expiresIn < 1 ||
       response.expiresIn > 300
@@ -1296,7 +1295,7 @@ async function downloadDocument(type: StudentDocumentType): Promise<void> {
     }
 
     const link = document.createElement('a')
-    link.href = signedUrl.href
+    link.href = signedUrl
     link.rel = 'noopener noreferrer'
     link.referrerPolicy = 'no-referrer'
     document.body.appendChild(link)

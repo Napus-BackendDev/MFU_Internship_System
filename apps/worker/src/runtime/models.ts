@@ -78,10 +78,16 @@ const evaluatorSchema = new Schema(
   { collection: 'evaluators', timestamps: true }
 )
 
-const studentSchema = new Schema(
+const studentSchema = new Schema<{
+  studentId: string
+  name?: string | { th?: string; en?: string }
+  email?: string
+  company?: string
+  evaluationStatus?: string
+}>(
   {
     studentId: { type: String, required: true },
-    name: { th: String, en: String },
+    name: { type: Schema.Types.Mixed },
     email: String,
     company: String,
     evaluationStatus: String
