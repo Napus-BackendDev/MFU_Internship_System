@@ -182,6 +182,8 @@ export class DeliveryRecord {
 export const DeliverySchema = SchemaFactory.createForClass(DeliveryRecord)
 DeliverySchema.index({ campaignId: 1, assignmentId: 1 }, { unique: true })
 DeliverySchema.index({ status: 1, processingLeaseUntil: 1 })
+DeliverySchema.index({ assignmentId: 1, createdAt: -1 })
+DeliverySchema.index({ recipientId: 1, status: 1 })
 
 @Schema({ ...schemaOptions, collection: 'invitations' })
 export class InvitationRecord {

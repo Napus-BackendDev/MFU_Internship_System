@@ -87,7 +87,9 @@ const targetedEmailSchema = z.object({
   evaluatorName: optionalTrimmedString
 })
 const invitationReissueSchema = z.object({
-  reason: z.string().trim().min(5).max(500)
+  reason: z.string().trim().min(5).max(500),
+  recipientEmail: flexibleEmailSchema.optional(),
+  evaluatorName: optionalTrimmedString
 })
 
 @Controller()

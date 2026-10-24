@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { z } from 'zod'
+import { loadAllPages } from '~/utils/load-all-pages'
 
 definePageMeta({ layout: 'app', middleware: 'auth' })
 
@@ -57,12 +58,14 @@ interface PageResult<T> {
     total: number
     page: number
     pageSize: number
+    totalPages: number
   }
 }
 
 const api = useApi()
 const auth = useAuthStore()
 const toast = useToast()
+const { invalidateReferenceData } = useReferenceData()
 
 const canManage = computed(() =>
   auth.actor?.roles.some((r) => ['systemAdmin', 'internshipStaff'].includes(r))
@@ -99,13 +102,17 @@ const {
   error: schoolsError,
   pending: schoolsPending,
   refresh: refreshSchools
-} = await useAsyncData('settings-schools', () =>
-  api<PageResult<School>>('/academic/schools', {
-    query: {
-      page: 1,
-      pageSize: 100
-    }
-  })
+} = useAsyncData(
+  'settings-schools',
+  () =>
+    api<PageResult<School>>('/academic/schools', {
+      query: {
+        page: 1,
+        pageSize: 100,
+        archived: false
+      }
+    }),
+  { lazy: true }
 )
 
 // Fetch Programs
@@ -114,20 +121,15 @@ const {
   error: programsError,
   pending: programsPending,
   refresh: refreshPrograms
-} = await useAsyncData(
+} = useAsyncData(
   'settings-programs',
   () =>
-    api<PageResult<Program>>('/academic/programs', {
-      query: {
-        page: 1,
-        pageSize: 100,
-        schoolId:
-          programSchoolFilter.value !== 'all'
-            ? programSchoolFilter.value
-            : undefined
-      }
-    }),
-  { watch: [programSchoolFilter] }
+    loadAllPages<Program>((page, pageSize) =>
+      api<PageResult<Program>>('/academic/programs', {
+        query: { page, pageSize, archived: false }
+      })
+    ),
+  { lazy: true }
 )
 
 // Fetch Courses
@@ -136,13 +138,17 @@ const {
   error: coursesError,
   pending: coursesPending,
   refresh: refreshCourses
-} = await useAsyncData('settings-courses', () =>
-  api<PageResult<Course>>('/academic/courses', {
-    query: {
-      page: 1,
-      pageSize: 100
-    }
-  })
+} = useAsyncData(
+  'settings-courses',
+  () =>
+    api<PageResult<Course>>('/academic/courses', {
+      query: {
+        page: 1,
+        pageSize: 100,
+        archived: false
+      }
+    }),
+  { lazy: true }
 )
 
 // Fetch Terms
@@ -151,16 +157,17 @@ const {
   error: termsError,
   pending: termsPending,
   refresh: refreshTerms
-} = await useAsyncData(
+} = useAsyncData(
   'settings-terms',
   () =>
     api<PageResult<AcademicTerm>>('/academic/terms', {
       query: {
         page: termPage.value,
-        pageSize: 50
+        pageSize: 50,
+        archived: false
       }
     }),
-  { watch: [termPage] }
+  { lazy: true, watch: [termPage] }
 )
 
 // School lookup map
@@ -312,6 +319,87 @@ const modalSaving = ref(false)
 const editingSchoolId = ref<string | null>(null)
 const editingProgramId = ref<string | null>(null)
 
+const itemToDelete = ref<{
+  type: 'school' | 'program' | 'course' | 'term'
+  id: string
+  name: string
+  code?: string
+} | null>(null)
+const isDeletingItem = ref(false)
+
+function openDeleteAcademicModal(type: 'school' | 'program' | 'course' | 'term', item: { id: string; name: { th: string; en?: string } | string; code?: string }): void {
+  const nameStr = typeof item.name === 'string' ? item.name : item.name.th
+  itemToDelete.value = {
+    type,
+    id: item.id,
+    name: nameStr,
+    code: item.code
+  }
+}
+
+async function confirmDeleteAcademicItem(): Promise<void> {
+  if (!itemToDelete.value) return
+  isDeletingItem.value = true
+  const item = itemToDelete.value
+  const typeLabels: Record<string, string> = {
+    school: 'สำนักวิชา',
+    program: 'สาขาวิชา/หลักสูตร',
+    course: 'รายวิชา',
+    term: 'ภาคการศึกษา'
+  }
+  const label = typeLabels[item.type] || 'รายการ'
+
+  try {
+    if (item.type === 'school') {
+      await api(`/academic/schools/${item.id}`, { method: 'DELETE' })
+      await refreshSchools()
+    } else if (item.type === 'program') {
+      await api(`/academic/programs/${item.id}`, { method: 'DELETE' })
+      await refreshPrograms()
+    } else if (item.type === 'course') {
+      await api(`/academic/courses/${item.id}`, { method: 'DELETE' })
+      await refreshCourses()
+    } else if (item.type === 'term') {
+      await api(`/academic/terms/${item.id}`, { method: 'DELETE' })
+      invalidateReferenceData('terms')
+      await refreshTerms()
+    }
+
+    invalidateReferenceData()
+
+    toast.add({
+      title: `ลบ${label}สำเร็จ`,
+      description: `ลบ ${item.name} เรียบร้อยแล้ว`,
+      color: 'success'
+    })
+    itemToDelete.value = null
+  } catch (err: unknown) {
+    let msg = `ไม่สามารถลบ${label}ได้`
+    if (err && typeof err === 'object') {
+      const code = (err as { data?: { code?: string }; response?: { _data?: { code?: string } } }).data?.code ||
+                   (err as { response?: { _data?: { code?: string } } }).response?._data?.code
+      if (code === 'SCHOOL_HAS_ACTIVE_PROGRAMS') {
+        msg = 'ไม่สามารถลบสำนักวิชานี้ได้ เนื่องจากยังมีหลักสูตรที่เปิดใช้งานอยู่'
+      } else if (code === 'PROGRAM_HAS_OPEN_WORK') {
+        msg = 'ไม่สามารถลบหลักสูตรนี้ได้ เนื่องจากมีรอบการประเมินหรือการฝึกงานที่กำลังดำเนินการ'
+      } else if (code === 'COURSE_ARCHIVE_REQUIRES_MIGRATION') {
+        msg = 'ไม่สามารถลบรายวิชานี้ได้ เนื่องจากรายวิชานี้ผูกกับข้อมูลในระบบที่ต้องผ่านการย้ายข้อมูลก่อน'
+      } else if (code === 'ACADEMIC_TERM_ARCHIVE_GUARD_UNAVAILABLE') {
+        msg = 'ไม่สามารถลบภาคการศึกษานี้ได้ เนื่องจากมีรอบการประเมินหรือการฝึกงานที่เปิดอยู่'
+      } else if (err instanceof Error) {
+        msg = err.message
+      }
+    }
+    toast.add({
+      title: `ไม่สามารถลบ${label}ได้`,
+      description: msg,
+      color: 'error'
+    })
+  } finally {
+    isDeletingItem.value = false
+  }
+}
+
 // Validation schemas
 const schoolFormSchema = z.object({
   schoolCode: z
@@ -354,9 +442,31 @@ const programForm = reactive({
 
 const schoolFormErrors = ref<Record<string, string>>({})
 const programFormErrors = ref<Record<string, string>>({})
+const academicSaveErrors = reactive({
+  school: '',
+  program: '',
+  course: '',
+  term: ''
+})
+
+function academicSaveError(error: unknown): string {
+  const failure = error as {
+    statusCode?: number
+    status?: number
+    data?: { code?: string; error?: { code?: string } }
+  } | null
+  const code = failure?.data?.error?.code ?? failure?.data?.code
+  if (code === 'DUPLICATE_RESOURCE') return 'รหัสนี้มีอยู่แล้ว กรุณาใช้รหัสอื่น'
+  if (code?.endsWith('_CHANGED'))
+    return 'ข้อมูลถูกเปลี่ยนแล้ว กรุณาโหลดใหม่ก่อนบันทึก'
+  if (failure?.statusCode === 403 || failure?.status === 403)
+    return 'คุณไม่มีสิทธิ์บันทึกข้อมูลนี้'
+  return 'บันทึกไม่สำเร็จ กรุณาตรวจสอบข้อมูลและการเชื่อมต่อ แล้วลองใหม่'
+}
 
 // Open School Modal
 function openCreateSchoolModal() {
+  academicSaveErrors.school = ''
   editingSchoolId.value = null
   schoolForm.schoolCode = ''
   schoolForm.nameTh = ''
@@ -367,6 +477,7 @@ function openCreateSchoolModal() {
 }
 
 function openEditSchoolModal(school: School) {
+  academicSaveErrors.school = ''
   editingSchoolId.value = school.id
   schoolForm.schoolCode = school.schoolCode
   schoolForm.nameTh = school.name.th
@@ -378,6 +489,7 @@ function openEditSchoolModal(school: School) {
 
 // Open Program Modal
 function openCreateProgramModal() {
+  academicSaveErrors.program = ''
   editingProgramId.value = null
   programForm.schoolId =
     programSchoolFilter.value !== 'all'
@@ -392,6 +504,7 @@ function openCreateProgramModal() {
 }
 
 function openEditProgramModal(program: Program) {
+  academicSaveErrors.program = ''
   editingProgramId.value = program.id
   programForm.schoolId = program.schoolId
   programForm.programCode = program.programCode
@@ -404,6 +517,7 @@ function openEditProgramModal(program: Program) {
 
 // Save School
 async function handleSaveSchool() {
+  academicSaveErrors.school = ''
   schoolFormErrors.value = {}
   const result = schoolFormSchema.safeParse(schoolForm)
   if (!result.success) {
@@ -447,17 +561,10 @@ async function handleSaveSchool() {
       })
     }
     isSchoolModalOpen.value = false
+    invalidateReferenceData('schools')
     await refreshSchools()
   } catch (err: unknown) {
-    const errorMsg =
-      err && typeof err === 'object' && 'message' in err
-        ? String(err.message)
-        : 'ไม่สามารถบันทึกข้อมูลได้ กรุณาตรวจสอบรหัสซ้ำ'
-    toast.add({
-      title: 'บันทึกไม่สำเร็จ',
-      description: errorMsg,
-      color: 'error'
-    })
+    academicSaveErrors.school = academicSaveError(err)
   } finally {
     modalSaving.value = false
   }
@@ -465,6 +572,7 @@ async function handleSaveSchool() {
 
 // Save Program
 async function handleSaveProgram() {
+  academicSaveErrors.program = ''
   programFormErrors.value = {}
   const result = programFormSchema.safeParse(programForm)
   if (!result.success) {
@@ -509,17 +617,10 @@ async function handleSaveProgram() {
       })
     }
     isProgramModalOpen.value = false
+    invalidateReferenceData('programs')
     await refreshPrograms()
   } catch (err: unknown) {
-    const errorMsg =
-      err && typeof err === 'object' && 'message' in err
-        ? String(err.message)
-        : 'ไม่สามารถบันทึกข้อมูลได้ กรุณาตรวจสอบรหัสซ้ำ'
-    toast.add({
-      title: 'บันทึกไม่สำเร็จ',
-      description: errorMsg,
-      color: 'error'
-    })
+    academicSaveErrors.program = academicSaveError(err)
   } finally {
     modalSaving.value = false
   }
@@ -546,6 +647,7 @@ const courseForm = reactive({
 const courseFormErrors = ref<Record<string, string>>({})
 
 function openCreateCourseModal() {
+  academicSaveErrors.course = ''
   editingCourseId.value = null
   courseForm.nameTh = ''
   courseForm.nameEn = ''
@@ -555,6 +657,7 @@ function openCreateCourseModal() {
 }
 
 function openEditCourseModal(course: Course) {
+  academicSaveErrors.course = ''
   editingCourseId.value = course.id
   courseForm.nameTh = course.name.th
   courseForm.nameEn = course.name.en
@@ -564,6 +667,7 @@ function openEditCourseModal(course: Course) {
 }
 
 async function handleSaveCourse() {
+  academicSaveErrors.course = ''
   courseFormErrors.value = {}
   const result = courseFormSchema.safeParse(courseForm)
   if (!result.success) {
@@ -611,17 +715,10 @@ async function handleSaveCourse() {
       })
     }
     isCourseModalOpen.value = false
+    invalidateReferenceData('courses')
     await refreshCourses()
   } catch (err: unknown) {
-    const errorMsg =
-      err && typeof err === 'object' && 'message' in err
-        ? String(err.message)
-        : 'ไม่สามารถบันทึกข้อมูลรายวิชาได้'
-    toast.add({
-      title: 'บันทึกไม่สำเร็จ',
-      description: errorMsg,
-      color: 'error'
-    })
+    academicSaveErrors.course = academicSaveError(err)
   } finally {
     modalSaving.value = false
   }
@@ -848,6 +945,7 @@ const termForm = reactive({
 const termFormErrors = ref<Record<string, string>>({})
 
 function openCreateTermModal(prefillYear?: number, prefillSemester?: string) {
+  academicSaveErrors.term = ''
   editingTermId.value = null
   const currentYear = prefillYear ?? new Date().getFullYear()
   const sem = prefillSemester ?? '1'
@@ -876,6 +974,7 @@ function openCreateTermModal(prefillYear?: number, prefillSemester?: string) {
 }
 
 function openEditTermModal(term: AcademicTerm) {
+  academicSaveErrors.term = ''
   editingTermId.value = term.id
   termForm.code = term.code
   termForm.academicYear = term.academicYear
@@ -888,6 +987,7 @@ function openEditTermModal(term: AcademicTerm) {
 }
 
 async function handleSaveTerm() {
+  academicSaveErrors.term = ''
   termFormErrors.value = {}
   if (!termForm.code.trim()) {
     termFormErrors.value.code = 'กรุณาระบุรหัสภาคการศึกษา'
@@ -935,17 +1035,11 @@ async function handleSaveTerm() {
       })
     }
     isTermModalOpen.value = false
+    invalidateReferenceData('terms')
+    invalidateReferenceData('terms')
     await refreshTerms()
   } catch (err: unknown) {
-    const errorMsg =
-      err && typeof err === 'object' && 'message' in err
-        ? String(err.message)
-        : 'ไม่สามารถบันทึกภาคการศึกษาได้'
-    toast.add({
-      title: 'บันทึกไม่สำเร็จ',
-      description: errorMsg,
-      color: 'error'
-    })
+    academicSaveErrors.term = academicSaveError(err)
   } finally {
     modalSaving.value = false
   }
@@ -964,6 +1058,7 @@ async function handleToggleTermStatus(term: AcademicTerm) {
       description: `${term.code} เปลี่ยนสถานะเป็น ${actionText} แล้ว`,
       color: 'success'
     })
+    invalidateReferenceData('terms')
     await refreshTerms()
   } catch {
     toast.add({
@@ -1255,7 +1350,25 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                   />
                 </td>
                 <td v-if="canManage" class="text-right">
-                  <div class="flex items-center justify-end">
+                  <div class="flex items-center justify-end gap-1">
+                    <UButton
+                      color="neutral"
+                      icon="i-lucide-pencil"
+                      size="xs"
+                      title="แก้ไขสำนักวิชา"
+                      variant="ghost"
+                      class="hidden sm:inline-flex cursor-pointer"
+                      @click="openEditSchoolModal(school)"
+                    />
+                    <UButton
+                      color="error"
+                      icon="i-lucide-trash-2"
+                      size="xs"
+                      title="ลบสำนักวิชา"
+                      variant="ghost"
+                      class="hidden sm:inline-flex cursor-pointer hover:bg-red-500/10 text-red-600 dark:text-red-400"
+                      @click="openDeleteAcademicModal('school', school)"
+                    />
                     <UDropdownMenu
                       :items="[
                         [
@@ -1263,6 +1376,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                             label: 'แก้ไขสำนักวิชา',
                             icon: 'i-lucide-pencil',
                             onSelect: () => openEditSchoolModal(school)
+                          },
+                          {
+                            label: 'ลบสำนักวิชา...',
+                            icon: 'i-lucide-trash-2',
+                            color: 'error',
+                            onSelect: () => openDeleteAcademicModal('school', school)
                           }
                         ]
                       ]"
@@ -1455,7 +1574,25 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                   </span>
                 </td>
                 <td v-if="canManage" class="text-right">
-                  <div class="flex items-center justify-end">
+                  <div class="flex items-center justify-end gap-1">
+                    <UButton
+                      color="neutral"
+                      icon="i-lucide-pencil"
+                      size="xs"
+                      title="แก้ไขหลักสูตร"
+                      variant="ghost"
+                      class="hidden sm:inline-flex cursor-pointer"
+                      @click="openEditProgramModal(prog)"
+                    />
+                    <UButton
+                      color="error"
+                      icon="i-lucide-trash-2"
+                      size="xs"
+                      title="ลบหลักสูตร"
+                      variant="ghost"
+                      class="hidden sm:inline-flex cursor-pointer hover:bg-red-500/10 text-red-600 dark:text-red-400"
+                      @click="openDeleteAcademicModal('program', prog)"
+                    />
                     <UDropdownMenu
                       :items="[
                         [
@@ -1463,6 +1600,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                             label: 'แก้ไขหลักสูตร',
                             icon: 'i-lucide-pencil',
                             onSelect: () => openEditProgramModal(prog)
+                          },
+                          {
+                            label: 'ลบหลักสูตร...',
+                            icon: 'i-lucide-trash-2',
+                            color: 'error',
+                            onSelect: () => openDeleteAcademicModal('program', prog)
                           }
                         ]
                       ]"
@@ -1617,11 +1760,7 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                 </td>
                 <td>
                   <span
-                    v-if="
-                      !course.programIds?.length ||
-                      course.programIds.length >=
-                        (programsData?.items.length ?? 0)
-                    "
+                    v-if="!course.programIds?.length"
                     class="inline-flex items-center gap-1.5 text-sm text-highlighted"
                   >
                     <UBadge
@@ -1654,7 +1793,25 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                   </span>
                 </td>
                 <td v-if="canManage" class="text-right">
-                  <div class="flex items-center justify-end">
+                  <div class="flex items-center justify-end gap-1">
+                    <UButton
+                      color="neutral"
+                      icon="i-lucide-pencil"
+                      size="xs"
+                      title="แก้ไขรายวิชา"
+                      variant="ghost"
+                      class="hidden sm:inline-flex cursor-pointer"
+                      @click="openEditCourseModal(course)"
+                    />
+                    <UButton
+                      color="error"
+                      icon="i-lucide-trash-2"
+                      size="xs"
+                      title="ลบรายวิชา"
+                      variant="ghost"
+                      class="hidden sm:inline-flex cursor-pointer hover:bg-red-500/10 text-red-600 dark:text-red-400"
+                      @click="openDeleteAcademicModal('course', course)"
+                    />
                     <UDropdownMenu
                       :items="[
                         [
@@ -1662,6 +1819,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                             label: 'แก้ไขรายวิชา',
                             icon: 'i-lucide-pencil',
                             onSelect: () => openEditCourseModal(course)
+                          },
+                          {
+                            label: 'ลบรายวิชา...',
+                            icon: 'i-lucide-trash-2',
+                            color: 'error',
+                            onSelect: () => openDeleteAcademicModal('course', course)
                           }
                         ]
                       ]"
@@ -2016,6 +2179,15 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                         @click="openEditTermModal(term)"
                       />
                       <UButton
+                        color="error"
+                        icon="i-lucide-trash-2"
+                        size="xs"
+                        title="ลบภาคการศึกษา"
+                        variant="ghost"
+                        class="hover:bg-red-500/10 text-red-600 dark:text-red-400"
+                        @click="openDeleteAcademicModal('term', { id: term.id, name: `${term.semester}/${term.academicYear}`, code: term.code })"
+                      />
+                      <UButton
                         :color="term.status === 'open' ? 'warning' : 'success'"
                         :icon="
                           term.status === 'open'
@@ -2103,6 +2275,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
         </div>
 
         <form class="mt-4 space-y-4" @submit.prevent="handleSaveSchool">
+          <UAlert
+            v-if="academicSaveErrors.school"
+            role="alert"
+            color="error"
+            :description="academicSaveErrors.school"
+          />
           <div>
             <label class="block text-sm font-medium text-highlighted">
               รหัสสำนักวิชา (School Code) <span class="text-error">*</span>
@@ -2209,6 +2387,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
         </div>
 
         <form class="mt-4 space-y-4" @submit.prevent="handleSaveProgram">
+          <UAlert
+            v-if="academicSaveErrors.program"
+            role="alert"
+            color="error"
+            :description="academicSaveErrors.program"
+          />
           <div>
             <label class="block text-sm font-medium text-highlighted">
               สำนักวิชาสังกัด <span class="text-error">*</span>
@@ -2341,6 +2525,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
         </div>
 
         <form class="mt-4 space-y-4" @submit.prevent="handleSaveCourse">
+          <UAlert
+            v-if="academicSaveErrors.course"
+            role="alert"
+            color="error"
+            :description="academicSaveErrors.course"
+          />
           <div>
             <label class="block text-sm font-medium text-highlighted">
               ชื่อวิชาภาษาไทย <span class="text-error">*</span>
@@ -2430,6 +2620,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
         </div>
 
         <form class="mt-4 space-y-4" @submit.prevent="handleSaveTerm">
+          <UAlert
+            v-if="academicSaveErrors.term"
+            role="alert"
+            color="error"
+            :description="academicSaveErrors.term"
+          />
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-sm font-medium text-highlighted">
@@ -2739,6 +2935,57 @@ async function handleToggleTermStatus(term: AcademicTerm) {
             />
           </div>
         </form>
+      </div>
+    </AppModal>
+    <!-- MODAL: ยืนยันการลบข้อมูลโครงสร้างการศึกษา -->
+    <AppModal
+      v-if="itemToDelete"
+      :open="true"
+      title="ยืนยันการลบข้อมูล"
+      @update:open="
+        (open) => {
+          if (!open) itemToDelete = null
+        }
+      "
+    >
+      <div class="space-y-4 p-6">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
+            <UIcon name="i-lucide-trash-2" class="size-6 text-red-600 dark:text-red-400" />
+          </div>
+          <div>
+            <h2 class="text-lg font-semibold text-foreground">ยืนยันการลบ{{
+              itemToDelete.type === 'school' ? 'สำนักวิชา' :
+              itemToDelete.type === 'program' ? 'หลักสูตร' :
+              itemToDelete.type === 'course' ? 'รายวิชา' : 'ภาคการศึกษา'
+            }}</h2>
+            <p class="text-xs text-muted">ข้อมูลจะถูกเปลี่ยนสถานะเป็นเก็บถาวร (Archived)</p>
+          </div>
+        </div>
+        <p class="text-sm text-foreground">
+          คุณต้องการลบ {{
+            itemToDelete.type === 'school' ? 'สำนักวิชา' :
+            itemToDelete.type === 'program' ? 'หลักสูตร' :
+            itemToDelete.type === 'course' ? 'รายวิชา' : 'ภาคการศึกษา'
+          }} <strong class="font-medium text-red-600 dark:text-red-400">{{ itemToDelete.name }}</strong>
+          <span v-if="itemToDelete.code" class="text-xs text-muted"> ({{ itemToDelete.code }})</span> ใช่หรือไม่?
+        </p>
+        <div class="flex justify-end gap-2 pt-2 border-t border-default">
+          <UButton
+            label="ยกเลิก"
+            color="neutral"
+            variant="outline"
+            :disabled="isDeletingItem"
+            @click="itemToDelete = null"
+          />
+          <UButton
+            label="ยืนยันการลบ"
+            color="error"
+            icon="i-lucide-trash-2"
+            :loading="isDeletingItem"
+            @click="confirmDeleteAcademicItem"
+          />
+        </div>
       </div>
     </AppModal>
   </div>

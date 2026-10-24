@@ -209,6 +209,10 @@ Audit read always includes the authenticated actor's own log records. Staff and 
 ### 7.4 Templates
 
 - Draft competency/email templates may be modified by authorized Staff in scope.
+- Competency-set names require `competencies.manage` over every section in every
+  version, or tenant management. The shared master code cannot be changed after
+  creation. Read access or management over only one section does not permit
+  renaming a shared master.
 - Document templates and registered assets are shared tenant-wide and have no School/Program scope fields. Only System Admin and tenant-scoped Internship Staff may list the asset library, create/edit Draft versions, or publish. School/Program-scoped Staff cannot manage these shared artifacts.
 - Other roles with `documentTemplates.read` see active templates with Published versions and Published summaries only. Template summaries whitelist display names, description, background type, and opacity; Draft content, canonical JSON, arbitrary metadata, placeholders, and private asset keys are not returned. Published version IDs for archived templates are concealed as `404`.
 - Introducing scope-specific document templates/assets requires explicit scope fields, migration, and authorization tests; do not infer scope from an actor's combined role scopes.

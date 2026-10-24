@@ -105,6 +105,13 @@ export type ReportExportFormat = (typeof REPORT_EXPORT_FORMATS)[number]
 
 export type StudentDirectoryExportLocale = 'th' | 'en'
 
+export interface ExportSkillItem {
+  readonly index: number
+  readonly titleTh: string
+  readonly titleEn: string
+  readonly score: number | null
+}
+
 export interface StudentDirectoryExportValues {
   readonly studentId: string
   readonly nameTh: string
@@ -133,6 +140,13 @@ export interface StudentDirectoryExportValues {
   readonly statusEn: string
   readonly hardSkillScore: string
   readonly softSkillScore: string
+  readonly hardSkills?: readonly ExportSkillItem[]
+  readonly softSkills?: readonly ExportSkillItem[]
+  readonly hardAverage?: number | null
+  readonly softAverage?: number | null
+  readonly issuedOn?: string
+  readonly pdfUrl?: string
+  readonly emailSent?: string
 }
 
 export interface AccessScope {

@@ -91,7 +91,7 @@ onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer)
 })
 
-const { data, error, pending, refresh } = await useAsyncData(
+const { data, error, pending, refresh } = useAsyncData(
   'assignments',
   () =>
     api<AssignmentPage>('/evaluation-assignments', {
@@ -104,7 +104,7 @@ const { data, error, pending, refresh } = await useAsyncData(
         search: debouncedSearchQuery.value || undefined
       }
     }),
-  { watch: [status, selectedOrg, debouncedSearchQuery, page, pageSize] }
+  { lazy: true, watch: [status, selectedOrg, debouncedSearchQuery, page, pageSize] }
 )
 
 watch(pageSize, () => {
@@ -122,7 +122,7 @@ const {
   error: studentsError,
   pending: studentsPending,
   refresh: refreshStudents
-} = await useAsyncData(
+} = useAsyncData(
   'evaluations-students',
   () => {
     const studentIds = assignmentStudentIds.value.split(',').filter(Boolean)
@@ -135,7 +135,7 @@ const {
         })
       : Promise.resolve({ items: [] })
   },
-  { watch: [assignmentStudentIds] }
+  { lazy: true, watch: [assignmentStudentIds] }
 )
 
 const assignmentEvaluatorIds = computed(() =>
@@ -149,7 +149,7 @@ const {
   error: evaluatorsError,
   pending: evaluatorsPending,
   refresh: refreshEvaluators
-} = await useAsyncData(
+} = useAsyncData(
   'evaluations-evaluators',
   () => {
     const evaluatorIds = assignmentEvaluatorIds.value.split(',').filter(Boolean)
@@ -162,7 +162,7 @@ const {
         })
       : Promise.resolve({ items: [] })
   },
-  { watch: [assignmentEvaluatorIds] }
+  { lazy: true, watch: [assignmentEvaluatorIds] }
 )
 
 const assignmentOrganizationIds = computed(() =>
@@ -181,7 +181,7 @@ const {
   error: organizationsError,
   pending: organizationsPending,
   refresh: refreshOrganizations
-} = await useAsyncData(
+} = useAsyncData(
   'evaluations-organizations',
   () => {
     const organizationIds = assignmentOrganizationIds.value
@@ -196,7 +196,7 @@ const {
         })
       : Promise.resolve({ items: [] })
   },
-  { watch: [assignmentOrganizationIds] }
+  { lazy: true, watch: [assignmentOrganizationIds] }
 )
 
 const relationDataError = computed(
@@ -381,7 +381,10 @@ function getAssignmentStatusBadge(item: Assignment) {
       canRetry: false
     }
   }
-  if (item.delivery?.status === 'queued' || item.delivery?.status === 'sending') {
+  if (
+    item.delivery?.status === 'queued' ||
+    item.delivery?.status === 'sending'
+  ) {
     return {
       color: 'warning' as const,
       label: 'กำลังส่ง (Queued)',
@@ -540,6 +543,7 @@ const emailActionDisabled = computed(() => {
     return (
       reasonLength < 5 ||
       reasonLength > 500 ||
+      !recipientEmailInput.value.trim() ||
       !systemEmailTemplates.value.evaluation_request
     )
   }
@@ -613,7 +617,7 @@ async function confirmSendEmail(): Promise<void> {
     !systemEmailTemplates.value[
       reissue ? 'evaluation_request' : selectedEmailTemplateCode.value
     ] ||
-    (!reissue && !recipientEmailInput.value.trim())
+    !recipientEmailInput.value.trim()
   ) {
     toast.add({
       title: 'ยังส่งคำเชิญไม่ได้',
@@ -631,7 +635,11 @@ async function confirmSendEmail(): Promise<void> {
         {
           method: 'POST',
           headers: { 'idempotency-key': emailIdempotencyKey.value },
-          body: { reason }
+          body: {
+            reason,
+            recipientEmail: recipientEmailInput.value.trim() || undefined,
+            evaluatorName: evaluatorNameInput.value.trim() || undefined
+          }
         }
       )
       toast.add({
@@ -961,7 +969,9 @@ async function refreshAfterEmailAction(): Promise<boolean> {
               <!-- 3. คอลัมน์ Pin -->
               <td class="py-3 px-4">
                 <div v-if="item.accessPin" class="flex items-center gap-1.5">
-                  <span class="font-mono font-bold text-primary text-xs select-all">
+                  <span
+                    class="font-mono font-bold text-primary text-xs select-all"
+                  >
                     {{ item.accessPin }}
                   </span>
                   <button
@@ -1043,30 +1053,6 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                     "
                     @click="openSendEmailModal(item)"
                   />
-                  <UDropdownMenu
-                    :items="[
-                      [
-                        {
-                          label:
-                            item.status === 'inProgress'
-                              ? 'ส่งอีเมลแจ้งเตือน (Reminder)'
-                              : 'ส่งอีเมลขอความอนุเคราะห์ (Request)',
-                          icon: 'i-lucide-mail',
-                          onSelect: () => openSendEmailModal(item)
-                        }
-                      ]
-                    ]"
-                    :content="{ align: 'end' }"
-                  >
-                    <UButton
-                      aria-label="การจัดการการประเมิน"
-                      color="neutral"
-                      icon="i-lucide-ellipsis-vertical"
-                      size="sm"
-                      variant="ghost"
-                      class="!rounded-full size-8 p-0 flex items-center justify-center cursor-pointer hover:bg-muted/60"
-                    />
-                  </UDropdownMenu>
                 </div>
               </td>
             </tr>
@@ -1317,8 +1303,8 @@ async function refreshAfterEmailAction(): Promise<boolean> {
             </div>
 
             <!-- Recipient Fields Card -->
+            <!-- Recipient Fields Card -->
             <div
-              v-if="emailActionMode !== 'reissue'"
               class="rounded-xl border border-default bg-muted/10 p-3.5 space-y-3 shadow-xs"
             >
               <span
@@ -1356,24 +1342,11 @@ async function refreshAfterEmailAction(): Promise<boolean> {
               </div>
             </div>
 
+            <!-- Reissue Details Card (shown only in reissue mode) -->
             <div
-              v-else
+              v-if="emailActionMode === 'reissue'"
               class="rounded-xl border border-primary/30 bg-primary/5 p-3.5 space-y-3 shadow-xs"
             >
-              <div class="space-y-1">
-                <span
-                  class="font-semibold text-highlighted text-xs flex items-center gap-1.5"
-                >
-                  <UIcon
-                    name="i-lucide-at-sign"
-                    class="size-3.5 text-primary"
-                  />
-                  อีเมลในทะเบียนผู้ประเมิน
-                </span>
-                <p class="font-mono text-xs text-highlighted">
-                  {{ emailTargetEvaluator?.email || '-' }}
-                </p>
-              </div>
               <div class="space-y-1">
                 <label class="text-[11px] font-medium text-muted">
                   เหตุผลที่ออกคำเชิญใหม่ * (5–500 ตัวอักษร)
@@ -1384,12 +1357,12 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                   maxlength="500"
                   rows="3"
                   class="w-full rounded-lg border border-default bg-default px-3 py-2 text-xs text-highlighted focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all"
-                  placeholder="เช่น ผู้ประเมินแจ้งว่าลิงก์เดิมใช้งานไม่ได้"
+                  placeholder="เช่น ผู้ประเมินแจ้งว่าลิงก์เดิมใช้งานไม่ได้ หรือขอเปลี่ยนอีเมลผู้รับ"
                 ></textarea>
               </div>
               <p class="text-[11px] text-muted leading-relaxed">
                 PIN และ session เดิมจะใช้ไม่ได้ทันที
-                ระบบส่งคำเชิญใหม่ไปยังอีเมลข้างต้น และคง deadline เดิม
+                ระบบส่งคำเชิญใหม่ไปยังอีเมลที่ระบุข้างต้น และคง deadline เดิม
               </p>
             </div>
           </div>

@@ -12,7 +12,12 @@ export function resolveSafeDownloadUrl(
 
   let url: URL
   try {
-    url = new URL(value)
+    url = new URL(
+      value,
+      typeof window !== 'undefined' && window?.location?.origin
+        ? window.location.origin
+        : 'http://localhost:8080'
+    )
   } catch {
     return null
   }
@@ -26,6 +31,6 @@ export function resolveSafeDownloadUrl(
     return null
   }
 
-  // Return the original string: normalizing a presigned URL can invalidate its signature.
-  return value
+  // Return original string for absolute presigned URLs to avoid signature changes; otherwise full resolved URL.
+  return value.startsWith('http') ? value : url.href
 }

@@ -375,20 +375,22 @@ test('user status change requires confirmation and preserves cancel', async ({
   await page.waitForLoadState('networkidle')
   const row = page.getByRole('row').filter({ hasText: 'user@example.test' })
   await row.getByRole('button', { name: 'การจัดการผู้ใช้งาน' }).click()
-  page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toContain('user@example.test')
-    await dialog.dismiss()
-  })
   await page
     .getByRole('menuitem', { name: 'ระงับการใช้งานบัญชี', exact: true })
     .click()
+  await expect(page.getByRole('dialog')).toContainText('user@example.test')
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'ยกเลิก', exact: true })
+    .click()
   expect(mutations).toBe(0)
   await row.getByRole('button', { name: 'การจัดการผู้ใช้งาน' }).click()
-  page.once('dialog', async (dialog) => {
-    await dialog.accept()
-  })
   await page
     .getByRole('menuitem', { name: 'ระงับการใช้งานบัญชี', exact: true })
+    .click()
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'ยืนยัน', exact: true })
     .click()
   await expect.poll(() => mutations).toBe(1)
   await expect(row).toContainText('ระงับการใช้งาน')

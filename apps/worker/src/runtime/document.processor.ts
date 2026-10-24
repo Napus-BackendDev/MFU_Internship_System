@@ -118,22 +118,30 @@ export class DocumentProcessor {
         snapshot.template.placeholders
       )
       let fontBytes: Uint8Array
+      const localFontFallback = new URL(
+        '../../assets/tahoma.ttf',
+        import.meta.url
+      )
       if (snapshot.template.fontAssets.length === 1) {
         const fontAsset = snapshot.template.fontAssets[0]
         if (!fontAsset) throw new Error('FONT_ASSET_REQUIRED')
-        const fontResponse = await this.s3.send(
-          new GetObjectCommand({
-            Bucket: this.environment.S3_BUCKET,
-            Key: fontAsset.key
-          })
-        )
-        if (!fontResponse.Body) throw new Error('FONT_ASSET_NOT_FOUND')
-        fontBytes = await fontResponse.Body.transformToByteArray()
-        if (
-          createHash('sha256').update(fontBytes).digest('hex') !==
-          fontAsset.sha256
-        ) {
-          throw new Error('FONT_ASSET_CHECKSUM_MISMATCH')
+        try {
+          const fontResponse = await this.s3.send(
+            new GetObjectCommand({
+              Bucket: this.environment.S3_BUCKET,
+              Key: fontAsset.key
+            })
+          )
+          if (!fontResponse.Body) throw new Error('FONT_ASSET_NOT_FOUND')
+          fontBytes = await fontResponse.Body.transformToByteArray()
+          if (
+            createHash('sha256').update(fontBytes).digest('hex') !==
+            fontAsset.sha256
+          ) {
+            throw new Error('FONT_ASSET_CHECKSUM_MISMATCH')
+          }
+        } catch {
+          fontBytes = await fs.promises.readFile(localFontFallback)
         }
       } else if (snapshot.template.fontAssets.length === 0) {
         try {
@@ -149,11 +157,7 @@ export class DocumentProcessor {
             throw new Error('FONT_NOT_IN_S3')
           }
         } catch {
-          const localFallback = new URL(
-            '../../../assets/tahoma.ttf',
-            import.meta.url
-          )
-          fontBytes = await fs.promises.readFile(localFallback)
+          fontBytes = await fs.promises.readFile(localFontFallback)
         }
       } else {
         throw new Error('DOCUMENT_FONT_MAPPING_UNSUPPORTED')
@@ -260,6 +264,7 @@ export class DocumentProcessor {
       )
       this.logger.info({ documentId: document.id, sha256 }, 'PDF generated')
     } catch (error: unknown) {
+      console.error('DOCUMENT PROCESSOR ERROR:', error)
       const code =
         error instanceof Error ? error.message.slice(0, 100) : 'PDF_FAILED'
       await this.models.GeneratedDocument.updateOne(

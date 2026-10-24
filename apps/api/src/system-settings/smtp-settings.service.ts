@@ -1,22 +1,17 @@
-import { randomUUID } from 'node:crypto'
-import {
-  decryptSmtpSecret,
-  encryptSmtpSecret,
-  type AppEnvironment
-} from '@internship/config'
+import { encryptSmtpSecret, type AppEnvironment } from '@internship/config'
 import type { AuthenticatedActor } from '@internship/shared-types'
 import { InjectQueue } from '@nestjs/bullmq'
 import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   UnprocessableEntityException
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { InjectModel } from '@nestjs/mongoose'
 import type { Queue } from 'bullmq'
 import type { HydratedDocument, Model } from 'mongoose'
-import nodemailer from 'nodemailer'
 
 import {
   SmtpSettingRecord,
@@ -168,7 +163,6 @@ export class SmtpSettingsService {
       createdBy: actor.id
     })) as SmtpTestDocument
 
-    let queuedInBullMq = false
     try {
       await this.emailQueue.add(
         'test-smtp',
@@ -181,158 +175,24 @@ export class SmtpSettingsService {
           removeOnFail: 200
         }
       )
-      queuedInBullMq = true
     } catch {
-      // BullMQ offline/incompatible fallback (e.g. Windows Redis < 5.0)
-    }
-
-    if (
-      (!queuedInBullMq ||
-        this.config.get('NODE_ENV', { infer: true }) === 'development') &&
-      process.env.NODE_ENV !== 'test'
-    ) {
-      await this.dispatchTestDirect(test.id).catch(() => undefined)
-    }
-
-    const refreshed = await this.tests.findById(test.id).exec()
-    return this.toTestResponse(refreshed || test)
-  }
-
-  public async dispatchTestDirect(testId: string): Promise<void> {
-    const test = await this.tests.findOneAndUpdate(
-      {
-        _id: testId,
-        status: { $in: ['queued', 'failed', 'sending'] }
-      },
-      {
-        $set: { status: 'sending' },
-        $unset: { failureCode: 1, completedAt: 1 }
-      },
-      { returnDocument: 'after' }
-    )
-    if (!test || test.status === 'sent') return
-
-    try {
-      const setting = await this.readSetting()
-      let host: string
-      let port: number
-      let secure: boolean
-      let username: string | undefined
-      let password: string | undefined
-      let from: string
-      let source: 'database' | 'environment'
-
-      if (setting && setting.enabled) {
-        source = 'database'
-        host = setting.host
-        port = setting.port ?? 587
-        secure = Boolean(setting.secure)
-        username = setting.username || undefined
-        if (
-          setting.passwordCiphertext &&
-          setting.passwordIv &&
-          setting.passwordAuthTag
-        ) {
-          const encKey = this.config.get('SMTP_SETTINGS_ENCRYPTION_KEY', {
-            infer: true
-          })
-          if (encKey) {
-            password = decryptSmtpSecret(
-              {
-                ciphertext: setting.passwordCiphertext,
-                iv: setting.passwordIv,
-                authTag: setting.passwordAuthTag
-              },
-              encKey
-            )
-          }
-        }
-        from = setting.from || 'Internship Transcript <no-reply@localhost>'
-      } else {
-        source = 'environment'
-        host = this.config.get('SMTP_HOST', { infer: true }) || 'localhost'
-        port = this.config.get('SMTP_PORT', { infer: true }) || 1025
-        secure = Boolean(this.config.get('SMTP_SECURE', { infer: true }))
-        username = this.config.get('SMTP_USER', { infer: true }) || undefined
-        password = this.config.get('SMTP_PASSWORD', { infer: true }) || undefined
-        from =
-          this.config.get('SMTP_FROM', { infer: true }) ||
-          'Internship Transcript Dev <no-reply@localhost>'
-      }
-
-      const transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure,
-        ...(username && password
-          ? { auth: { user: username, pass: password } }
-          : {}),
-        connectionTimeout: 5000,
-        greetingTimeout: 5000,
-        socketTimeout: 8000
-      })
-
-      let providerMessageId = ''
-      try {
-        const sendResult = await transporter.sendMail({
-          from,
-          to: test.recipientEmail,
-          subject: 'ทดสอบระบบอีเมล Internship Transcript',
-          text: [
-            'ระบบเชื่อมต่อ SMTP และส่งอีเมลทดสอบสำเร็จ',
-            `เวลา: ${new Date().toISOString()}`,
-            `แหล่งการตั้งค่า: ${source}`,
-            `โฮสต์: ${host}:${port}`
-          ].join('\n')
-        })
-        providerMessageId =
-          (sendResult as { messageId?: string })?.messageId ||
-          `<sent-test-${Date.now()}@direct>`
-      } catch (smtpErr: unknown) {
-        const errorMsg =
-          smtpErr instanceof Error ? smtpErr.message : 'SMTP_SEND_FAILED'
-        const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(
-          host.toLowerCase()
-        )
-        const displayError = isLocalHost
-          ? `${errorMsg} (ไม่สามารถเชื่อมต่อ SMTP ที่ ${host}:${port} ได้ กรุณาเปิด Mailpit หรือตั้งค่า SMTP ผู้ให้บริการจริง เช่น Gmail)`
-          : errorMsg
-        await this.tests.updateOne(
-          { _id: test.id },
-          {
-            $set: {
-              status: 'failed',
-              failureCode: displayError,
-              completedAt: new Date()
-            }
-          }
-        )
-        return
-      }
-
-      await this.tests.updateOne(
-        { _id: test.id },
-        {
-          $set: {
-            status: 'sent',
-            providerMessageId,
-            completedAt: new Date()
-          },
-          $unset: { failureCode: 1 }
-        }
-      )
-    } catch (err: unknown) {
       await this.tests.updateOne(
         { _id: test.id },
         {
           $set: {
             status: 'failed',
-            failureCode: err instanceof Error ? err.message : 'UNKNOWN_ERROR',
+            failureCode: 'SMTP_TEST_QUEUE_UNAVAILABLE',
             completedAt: new Date()
           }
         }
       )
+      throw new ServiceUnavailableException({
+        code: 'SMTP_TEST_QUEUE_UNAVAILABLE'
+      })
     }
+
+    const refreshed = await this.tests.findById(test.id).exec()
+    return this.toTestResponse(refreshed || test)
   }
 
   public async getTest(testId: string): Promise<unknown> {
@@ -360,6 +220,30 @@ export class SmtpSettingsService {
     return {
       enabled: setting?.enabled ?? false,
       source,
+      deliveryMode: this.config.get('MAIL_DELIVERY_MODE', { infer: true }),
+      effectiveConnection: {
+        host:
+          source === 'database'
+            ? setting!.host
+            : this.config.get('SMTP_HOST', { infer: true }),
+        port:
+          source === 'database'
+            ? setting!.port
+            : this.config.get('SMTP_PORT', { infer: true }),
+        secure:
+          source === 'database'
+            ? setting!.secure
+            : this.config.get('SMTP_SECURE', { infer: true }),
+        from:
+          source === 'database'
+            ? setting!.from
+            : this.config.get('SMTP_FROM', { infer: true }),
+        usernameConfigured:
+          source === 'database'
+            ? Boolean(setting!.username)
+            : Boolean(this.config.get('SMTP_USER', { infer: true })),
+        version: source === 'database' ? setting!.version : 0
+      },
       host: setting?.host ?? this.config.get('SMTP_HOST', { infer: true }),
       port: setting?.port ?? this.config.get('SMTP_PORT', { infer: true }),
       secure:

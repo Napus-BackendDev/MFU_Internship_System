@@ -126,6 +126,9 @@ function projectTemplateEditorMetadata(
   ) {
     summary.backgroundType = source.backgroundType
   }
+  if (typeof source.customBgUrl === 'string') {
+    summary.customBgUrl = source.customBgUrl
+  }
   if (
     typeof source.bgOpacity === 'number' &&
     Number.isFinite(source.bgOpacity) &&
@@ -369,7 +372,7 @@ export class DocumentsService {
       ...(canManageGlobally && filters.status
         ? { status: filters.status }
         : canManageGlobally
-          ? {}
+          ? { status: { $ne: 'archived' } }
           : { status: 'active' as const }),
       ...(!canManageGlobally
         ? { _id: { $in: publishedTemplateIds ?? [] } }
@@ -982,7 +985,8 @@ export class DocumentsService {
           removeOnFail: 1000
         }
       )
-    } catch {
+    } catch (error: unknown) {
+      console.error('FAILED TO ENQUEUE PDF:', error)
       await this.documents.updateOne(
         { _id: document.id, status: 'queued' },
         { $set: { status: 'failed', failureCode: 'QUEUE_ENQUEUE_FAILED' } }
@@ -1162,6 +1166,35 @@ export class DocumentsService {
       throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
     }
     return document
+  }
+
+  public async getDocumentView(
+    actor: AuthenticatedActor,
+    id: string,
+    requestId = 'unknown'
+  ): Promise<unknown> {
+    const document = await this.getDocument(actor, id, requestId)
+    const version = await this.versions
+      .findById(document.templateVersionId)
+      .select('templateId')
+      .lean()
+      .exec()
+    const template = version
+      ? await this.templates
+          .findById(version.templateId)
+          .select('documentType')
+          .lean()
+          .exec()
+      : null
+    const documentType = template?.documentType ?? null
+    return {
+      ...(document.toJSON() as Record<string, unknown>),
+      documentType,
+      documentNumber:
+        document.status === 'ready' && documentType
+          ? `MFU-${documentType === 'certificate' ? 'CERT' : 'TR'}-${id.toUpperCase()}`
+          : null
+    }
   }
 
   public async downloadUrl(
@@ -1355,7 +1388,7 @@ export class DocumentsService {
       .findOne({
         _id: placementId,
         studentId: { $in: [student.id, student.studentId] },
-        status: 'completed'
+        status: { $in: ['active', 'completed'] }
       })
       .exec()
     if (!placement) {

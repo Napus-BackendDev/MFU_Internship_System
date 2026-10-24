@@ -207,6 +207,7 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
       header: 1,
       defval: null,
       raw: true,
+      range: 0,
       blankrows: true
     })
     const headerRowIndex = grid.slice(0, 10).findIndex(
@@ -353,14 +354,6 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
         } else {
           semester = ''
         }
-      } else if (!/^\S+@\S+\.\S+$/.test(email)) {
-        for (const val of Object.values(record)) {
-          const str = toText(val)
-          if (/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(str)) {
-            email = str.toLowerCase()
-            break
-          }
-        }
       }
 
       const rowQuestionFields = Object.keys(record).filter((header) =>
@@ -368,7 +361,7 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
       )
       rowQuestionFields.forEach((header) => questionFields.add(header))
 
-      const rowNumber = index + 2
+      const rowNumber = index + 1
       const issues: StudentImportIssue[] = []
       if (
         evaluatorEmail &&
@@ -563,6 +556,13 @@ function pick(
 }
 
 function isExcludedSubmatch(key: string, target: string): boolean {
+  if (
+    ['name', 'ชื่อ', 'email', 'อีเมล'].includes(target) &&
+    /eval(?:uator|uter)|advisor|ผู้ประเมิน|อาจารย์|ผู้ประสานงาน|contact|ผู้ติดต่อ|organization|organisation|company|สถานประกอบการ/.test(
+      key
+    )
+  )
+    return true
   if (
     target === 'id' &&
     (key.includes('student') ||

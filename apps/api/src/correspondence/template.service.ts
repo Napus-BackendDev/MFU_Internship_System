@@ -132,9 +132,11 @@ export function extractPlaceholders(
   ...content: readonly string[]
 ): readonly string[] {
   const matches = content.flatMap((value) =>
-    [...value.matchAll(/{{\s*([a-z_]+)\s*}}/g)].map((match) => match[1] ?? '')
+    [...value.matchAll(/\{\{\s*([^{}]*?)\s*\}\}/gu)].map((match) =>
+      (match[1] ?? '').trim()
+    )
   )
-  return [...new Set(matches.filter(Boolean))]
+  return [...new Set(matches)]
 }
 
 function isDuplicateKeyError(error: unknown): boolean {

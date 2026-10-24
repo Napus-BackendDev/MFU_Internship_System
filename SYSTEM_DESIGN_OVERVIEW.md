@@ -1,4 +1,5 @@
 # System Design & Technical Architecture Reference Manual
+
 ## Internship Transcript System V2 (Mae Fah Luang University)
 
 **Document Version:** 2.0.0 (Production Architecture Specification)  
@@ -62,6 +63,7 @@ The **Internship Transcript System V2** is Mae Fah Luang University's (MFU) ente
 5. **Auditing & Analytical Reporting**: Append-only security audit trail recording all privileged operations, accompanied by asynchronous background export of analytical reports to Microsoft Excel (`.xlsx`) and CSV with formula-injection defenses.
 
 ### Core Problems Solved
+
 - **Elimination of Template Drift**: Competency rubrics are frozen at the exact instant an evaluation assignment is generated (`questionSnapshot`), ensuring that retroactive curriculum changes never distort historical evaluation integrity.
 - **Worker Starvation & Decoupling**: CPU-heavy PDF document synthesis and I/O-heavy SMTP network communications are entirely offloaded from the NestJS HTTP event loop into a dedicated BullMQ worker cluster backed by distributed lease locking.
 - **Zero-Trust Security Posture**: Every API route enforces a default-deny policy; external evaluators authenticate without full university accounts via cryptographically salted HMAC-SHA256 PINs; and SMTP passwords stored in MongoDB are encrypted at rest using AES-256-GCM.
@@ -207,6 +209,7 @@ sequenceDiagram
 The codebase is organized as a high-performance **pnpm Workspace** governed by `pnpm-workspace.yaml` and Node.js 24 LTS (`24.14.0`). It avoids heavy monorepo orchestrators (such as Nx or Turborepo) in favor of deterministic pnpm filter pipelines and centralized dependency cataloging.
 
 #### Workspace Topology (`pnpm-workspace.yaml`)
+
 ```yaml
 packages:
   - apps/*
@@ -239,18 +242,18 @@ catalog:
 
 ### 3.2 Pipeline Scripts & Quality Gates
 
-| Pipeline Script | Target Workspaces | Operational Description |
-|---|---|---|
-| `pnpm predev` | `packages/*` | Compiles shared libraries in topological order: `@internship/config` $\rightarrow$ `@internship/shared-types` $\rightarrow$ `@internship/validation` $\rightarrow$ `@internship/api-client` $\rightarrow$ `@internship/design-tokens`. |
-| `pnpm dev` | `apps/*` | Launches parallel development runtimes for `@internship/web` (Nuxt dev), `@internship/api` (NestJS watch), and `@internship/worker` (Node tsx watch). |
-| `pnpm build` | All | Executes recursive builds across all workspaces adhering to dependency topological ordering. |
-| `pnpm typecheck` | All | Executes `tsc -p tsconfig.json --noEmit` and `nuxt typecheck` across all projects using strict NodeNext module resolution. |
-| `pnpm lint` | All | Executes project-wide ESLint Flat config (`eslint.config.mjs`) targeting JavaScript, TypeScript, and Vue SFCs. |
-| `pnpm openapi:generate`| `packages/api-client` | Compiles `docs/api/openapi.yaml` into strongly-typed TypeScript definitions in `packages/api-client/src/generated/openapi.ts`. |
-| `pnpm openapi:check` | Root | Enforces contract synchronization between OpenAPI YAML documentation and TypeScript client definitions. |
-| `pnpm infra:up` | `infrastructure` | Provisions local Docker dependencies: MongoDB 8.0 (Replica Set `rs0`), Redis 8.2 (AOF enabled), MinIO (S3), and Mailpit (SMTP). |
-| `pnpm infra:full` | `infrastructure` | Boots the full platform stack within Docker Compose using the `full` profile. |
-| `pnpm verify` | All | Executes comprehensive pre-commit verification pipeline: formatting check $\rightarrow$ OpenAPI check $\rightarrow$ ESLint $\rightarrow$ Typecheck $\rightarrow$ Unit tests $\rightarrow$ E2E tests $\rightarrow$ OpenAPI lint $\rightarrow$ Build. |
+| Pipeline Script         | Target Workspaces     | Operational Description                                                                                                                                                                                                                             |
+| ----------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm predev`           | `packages/*`          | Compiles shared libraries in topological order: `@internship/config` $\rightarrow$ `@internship/shared-types` $\rightarrow$ `@internship/validation` $\rightarrow$ `@internship/api-client` $\rightarrow$ `@internship/design-tokens`.              |
+| `pnpm dev`              | `apps/*`              | Launches parallel development runtimes for `@internship/web` (Nuxt dev), `@internship/api` (NestJS watch), and `@internship/worker` (Node tsx watch).                                                                                               |
+| `pnpm build`            | All                   | Executes recursive builds across all workspaces adhering to dependency topological ordering.                                                                                                                                                        |
+| `pnpm typecheck`        | All                   | Executes `tsc -p tsconfig.json --noEmit` and `nuxt typecheck` across all projects using strict NodeNext module resolution.                                                                                                                          |
+| `pnpm lint`             | All                   | Executes project-wide ESLint Flat config (`eslint.config.mjs`) targeting JavaScript, TypeScript, and Vue SFCs.                                                                                                                                      |
+| `pnpm openapi:generate` | `packages/api-client` | Compiles `docs/api/openapi.yaml` into strongly-typed TypeScript definitions in `packages/api-client/src/generated/openapi.ts`.                                                                                                                      |
+| `pnpm openapi:check`    | Root                  | Enforces contract synchronization between OpenAPI YAML documentation and TypeScript client definitions.                                                                                                                                             |
+| `pnpm infra:up`         | `infrastructure`      | Provisions local Docker dependencies: MongoDB 8.0 (Replica Set `rs0`), Redis 8.2 (AOF enabled), MinIO (S3), and Mailpit (SMTP).                                                                                                                     |
+| `pnpm infra:full`       | `infrastructure`      | Boots the full platform stack within Docker Compose using the `full` profile.                                                                                                                                                                       |
+| `pnpm verify`           | All                   | Executes comprehensive pre-commit verification pipeline: formatting check $\rightarrow$ OpenAPI check $\rightarrow$ ESLint $\rightarrow$ Typecheck $\rightarrow$ Unit tests $\rightarrow$ E2E tests $\rightarrow$ OpenAPI lint $\rightarrow$ Build. |
 
 ### 3.3 Module Dependency Graph
 
@@ -286,6 +289,7 @@ catalog:
 `apps/api` is built on **NestJS 11.2.1** utilizing `@nestjs/platform-express`. It serves as the single source of truth for business invariants, permissions, and database operations.
 
 #### Bootstrap Sequence (`apps/api/src/main.ts`)
+
 1. **Node Runtime Assertion**: `assertSupportedNodeRuntime(process.versions.node)` verifies that the process is executing on Node 24.x.
 2. **Nest Application Factory**: Instantiates application via `NestFactory.create(AppModule, { abortOnError: true, bufferLogs: true })`.
 3. **Structured Logging**: Attaches `Logger` from `nestjs-pino`, configuring log levels from `LOG_LEVEL` (`debug` in dev, `info` in prod).
@@ -302,6 +306,7 @@ catalog:
 8. **Network Binding**: Listens on `0.0.0.0` at port `PORT` (default: 8081).
 
 #### Middleware, Guards & Interceptor Pipeline
+
 - **`RequestIdMiddleware`**: Extracts incoming `x-request-id` header or generates a fresh `UUIDv4`. Sets the ID on the request context and mirrors it into the response header for end-to-end tracing.
 - **`AuthRateLimitGuard` (`APP_GUARD` 1)**: Intercepts sensitive public endpoints (`/public/evaluations/verify-pin`, `/auth/login`, `/students/import-preview`). Executes an atomic Redis Lua script enforcing fixed-window rate limits (e.g. 10 attempts per 15 minutes for PIN checks).
 - **`CsrfGuard` (`APP_GUARD` 2)**: Intercepts mutating HTTP methods (`POST`, `PUT`, `PATCH`, `DELETE`). If cookie authentication (`its_access`) is present, mandates the header `X-Requested-With: XMLHttpRequest` and validates the origin against `CORS_ORIGINS`.
@@ -321,115 +326,115 @@ catalog:
 
 #### Complete Controller & Route Inventory (13 Controllers)
 
-| Controller Class | Route Path Prefix | HTTP Method & Path | Permissions / Decorator | Functional Description |
-|---|---|---|---|---|
-| **HealthController** | `/health` | `GET /health` | `@Public()` | Basic process liveness probe |
-| | | `GET /health/live` | `@Public()` | Kubernetes liveness probe |
-| | | `GET /health/ready` | `@Public()` | Readiness probe checking MongoDB transactions & Redis ping |
-| **AuthController** | `/auth` | `GET /auth/login` | `@Public()` | Initiates MFU OIDC PKCE flow, sets `its_oidc` cookie |
-| | | `GET /auth/callback` | `@Public()` | Handles OIDC IdP code exchange, issues session cookies |
-| | | `GET /auth/me` | `@Authenticated()` | Returns authenticated actor profile and scoped permissions |
-| | | `POST /auth/refresh` | `@Public()` | Rotates refresh token (`its_refresh`), issues new token pair |
-| | | `POST /auth/logout` | `@Authenticated()` | Revokes MongoDB session, clears authentication cookies |
-| **DevAuthController** | `/auth/dev` | `POST /auth/dev/login` | `@Public()` | Mock login for dev/test (Disabled in production) |
-| **UsersController** | `/users` | `GET /users` | `users.read` | Paginated search of user accounts filtered by school/role |
-| | | `GET /users/summary` | `users.manage` | User distribution metrics by role and active status |
-| | | `POST /users` | `users.manage` | Provisions new user account with role assignments |
-| | | `PATCH /users/:id` | `users.manage` | Modifies user details, status, or role assignments |
-| | | `POST /users/:id/oidc-link` | `users.manage` | Links local user account to MFU OIDC identity |
-| | | `DELETE /users/:id` | `users.manage` | Archives user account (blocks sole admin deletion) |
-| **AcademicController**| `/academic` | `GET /academic/schools` | `academic.read` | List university schools |
-| | | `POST /academic/schools` | `academic.manage` | Create new school |
-| | | `PATCH /academic/schools/:id`| `academic.manage` | Update school |
-| | | `GET /academic/programs`| `academic.read` | List degree programs |
-| | | `POST /academic/programs`| `academic.manage` | Create degree program |
-| | | `PATCH /academic/programs/:id`| `academic.manage`| Update degree program |
-| | | `GET /academic/courses` | `academic.read` | List internship courses |
-| | | `POST /academic/courses` | `academic.manage` | Create internship course |
-| | | `PATCH /academic/courses/:id`| `academic.manage`| Update internship course |
-| | | `GET /academic/terms` | `academic.read` | List academic terms |
-| | | `POST /academic/terms` | `academic.manage` | Create academic term |
-| | | `PATCH /academic/terms/:id` | `academic.manage` | Update academic term |
-| **MembersController** | `/students`, `/organizations`, `/evaluators`, `/placements` | `POST /students/import-preview`| `students.import` | Uploads Excel/CSV file to validate staging import batch |
-| | | `GET /students/imports/:batchId`| `students.import` | Retrieve import batch preview, validation issues, diffs |
-| | | `POST /students/imports/:batchId/commit`| `students.import` | Atomically commits staged import rows to database |
-| | | `GET /students` | `students.read` | Search students with school, program, and status filters |
-| | | `GET /students/:id` | `students.read` | Retrieve student profile and placement history |
-| | | `POST /students` | `students.manage` | Create single student record |
-| | | `PATCH /students/:id` | `students.manage` | Update student profile |
-| | | `DELETE /students/:id` | `students.manage` | Archive student record |
-| | | `GET /organizations` | `organizations.read` | List partner companies and internship enterprises |
-| | | `POST /organizations` | `organizations.manage` | Create partner company record |
-| | | `GET /evaluators` | `organizations.read` | List external mentors and workplace evaluators |
-| | | `POST /evaluators` | `organizations.manage` | Create external mentor record |
-| | | `GET /placements` | `placements.read` | List student placement pairings |
-| | | `POST /placements` | `placements.manage` | Assign student to organization for an academic term |
-| **EvaluationsController**| `/competency-sets`, `/evaluation-cycles`, `/evaluation-assignments`, `/evaluations` | `GET /competency-sets` | `competencies.read` | List competency rubric sets |
-| | | `POST /competency-sets`| `competencies.manage`| Create competency rubric set |
-| | | `POST /competency-sets/:id/versions`| `competencies.manage`| Create new draft version of competency rubric |
-| | | `GET /competency-sets/:id/versions`| `competencies.read` | List rubric versions |
-| | | `GET /competency-set-versions/:id` | `competencies.read` | Get rubric version details |
-| | | `PATCH /competency-set-versions/:id`| `competencies.manage`| Modify draft rubric questions |
-| | | `POST /competency-set-versions/:id/publish`| `competencies.publish`| Publishes and permanently freezes rubric version |
-| | | `GET /evaluation-cycles`| `cycles.read` | List evaluation cycles |
-| | | `POST /evaluation-cycles`| `cycles.manage` | Create evaluation cycle |
-| | | `GET /evaluation-cycles/:id/preview`| `cycles.manage` | Preview assignments for cycle |
-| | | `POST /evaluation-cycles/:id/activate`| `cycles.manage` | Activates evaluation cycle |
-| | | `POST /evaluation-cycles/:id/close` | `cycles.manage` | Closes cycle and expires incomplete assignments |
-| | | `GET /evaluation-assignments`| `evaluations.read` | List evaluation assignments |
-| | | `POST /evaluation-assignments`| `cycles.manage` | Generate assignments and freeze `questionSnapshot` |
-| | | `GET /evaluations/:id` | `evaluations.read` | Retrieve completed evaluation record |
-| | | `PUT /evaluations/:id/draft`| `evaluations.draft` | Autosave evaluation draft with optimistic revision lock |
-| | | `POST /evaluations/:id/submit`| `evaluations.submit` | Finalizes evaluation, computes scores, locks record |
-| | | `POST /evaluations/:id/reopen`| `evaluations.reopen` | Blocked at runtime (`reopen(): never`) |
-| **CorrespondenceController**| `/email-templates`, `/campaigns`, `/deliveries`, `/public` | `GET /email-templates/system`| `emailTemplates.read`| List system default email templates |
-| | | `PUT /email-templates/system/:code`| `emailTemplates.manage`| Modify system email template content |
-| | | `POST /email-templates/system/:code/reset`| `emailTemplates.manage`| Reset template to system defaults |
-| | | `GET /email-templates` | `emailTemplates.read`| List custom email templates |
-| | | `POST /email-templates` | `emailTemplates.manage`| Create custom email template |
-| | | `POST /email-template-versions/:id/publish`| `emailTemplates.publish`| Publish and freeze email template version |
-| | | `POST /campaigns/preview`| `campaigns.send` | Preview rendered email campaign variables |
-| | | `POST /campaigns` | `campaigns.send` | Dispatches invitation campaign to MongoDB outbox & BullMQ |
-| | | `GET /campaigns/:id` | `campaigns.read` | Campaign execution status and delivery counters |
-| | | `POST /campaigns/send-targeted`| `campaigns.send` | Send targeted reminder email to specific assignments |
-| | | `POST /campaigns/send-student-invitation`| `campaigns.send`| Send student onboarding invitation |
-| | | `POST /evaluation-assignments/:id/invitation/reissue`| `campaigns.send`| Reissues evaluation invitation token and rotates PIN |
-| | | `GET /deliveries` | `campaigns.read` | View delivery outbox logs and statuses |
-| | | `POST /deliveries/:id/retry`| `deliveries.retry` | Re-queues failed email delivery |
-| | | `POST /public/invitations/exchange`| `@Public()` | Exchange URL token for evaluator session cookie |
-| | | `POST /public/evaluations/verify-pin`| `@Public()` | Verify 16-digit PIN and issue evaluator session |
-| **DocumentsController** | `/document-assets`, `/document-templates`, `/generated-documents` | `POST /document-assets` | `documentTemplates.manage`| Upload font/emblem/signature asset to S3 |
-| | | `GET /document-assets` | `documentTemplates.manage`| List registered document assets |
-| | | `GET /document-templates`| `documentTemplates.read` | List transcript/certificate templates |
-| | | `POST /document-templates`| `documentTemplates.manage`| Create document template |
-| | | `POST /document-templates/:id/activate`| `documentTemplates.manage`| Activate template (Enforces exactly 1 active per type) |
-| | | `POST /document-templates/:id/deactivate`| `documentTemplates.manage`| Deactivate template |
-| | | `GET /document-templates/:id/versions`| `documentTemplates.read` | List template Canvas layout versions |
-| | | `POST /document-templates/:id/versions`| `documentTemplates.manage`| Create template Canvas JSON layout version |
-| | | `GET /document-template-versions/:id`| `documentTemplates.read` | Get layout version AST |
-| | | `PATCH /document-template-versions/:id`| `documentTemplates.manage`| Modify draft layout AST |
-| | | `POST /document-template-versions/:id/publish`| `documentTemplates.publish`| Publish and freeze document layout version |
-| | | `POST /generated-documents`| `documents.generate*`| Freezes snapshot and queues PDF generation job |
-| | | `GET /generated-documents`| `documents.read*` | List generated transcripts/certificates |
-| | | `GET /generated-documents/:id`| `documents.read*` | Get document metadata |
-| | | `GET /generated-documents/:id/download-url`| `documents.read*` | Issue 300s presigned S3 download URL |
-| **ReportsController** | `/reports` | `GET /reports/overview` | `reports.read` | High-level internship and evaluation metrics |
-| | | `GET /reports/programs` | `reports.read` | Academic program-specific completion metrics |
-| | | `POST /reports/exports` | `exports.create` | Enqueue background CSV/XLSX export job |
-| | | `GET /reports/exports/:id`| `exports.download` | Check export status |
-| | | `GET /reports/exports/:id/download-url`| `exports.download` | Issue 300s presigned S3 download URL |
-| **AuditController** | `/audit-logs` | `GET /audit-logs` | `audit.read` | Paginated security audit trail search |
-| **GeneralSettingsController**| `/system-settings` | `GET /system-settings/provinces`| `@Authenticated()` | List Thailand provinces and regions |
-| | | `POST /system-settings/provinces`| `system.config.manage`| Add province |
-| | | `PATCH /system-settings/provinces/:id`| `system.config.manage`| Modify province |
-| | | `DELETE /system-settings/provinces/:id`| `system.config.manage`| Delete province |
-| | | `POST /system-settings/provinces/reset`| `system.config.manage`| Reset provinces to standard 77 Thai provinces |
-| | | `GET /system-settings/general`| `@Authenticated()` | Retrieve general university configurations |
-| | | `PUT /system-settings/general`| `system.config.manage`| Update general university configurations |
-| **SmtpSettingsController** | `/system-settings/smtp` | `GET /system-settings/smtp`| `system.config.manage`| View SMTP server settings (Password redacted) |
-| | | `PUT /system-settings/smtp`| `system.config.manage`| Save SMTP settings (Encrypts password via AES-256-GCM) |
-| | | `POST /system-settings/smtp/test`| `system.config.manage`| Enqueue test email to verify SMTP configuration |
-| | | `GET /system-settings/smtp/tests/:id`| `system.config.manage`| Retrieve status of SMTP test delivery |
+| Controller Class              | Route Path Prefix                                                                   | HTTP Method & Path                                    | Permissions / Decorator     | Functional Description                                       |
+| ----------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------- | ------------------------------------------------------------ |
+| **HealthController**          | `/health`                                                                           | `GET /health`                                         | `@Public()`                 | Basic process liveness probe                                 |
+|                               |                                                                                     | `GET /health/live`                                    | `@Public()`                 | Kubernetes liveness probe                                    |
+|                               |                                                                                     | `GET /health/ready`                                   | `@Public()`                 | Readiness probe checking MongoDB transactions & Redis ping   |
+| **AuthController**            | `/auth`                                                                             | `GET /auth/login`                                     | `@Public()`                 | Initiates MFU OIDC PKCE flow, sets `its_oidc` cookie         |
+|                               |                                                                                     | `GET /auth/callback`                                  | `@Public()`                 | Handles OIDC IdP code exchange, issues session cookies       |
+|                               |                                                                                     | `GET /auth/me`                                        | `@Authenticated()`          | Returns authenticated actor profile and scoped permissions   |
+|                               |                                                                                     | `POST /auth/refresh`                                  | `@Public()`                 | Rotates refresh token (`its_refresh`), issues new token pair |
+|                               |                                                                                     | `POST /auth/logout`                                   | `@Authenticated()`          | Revokes MongoDB session, clears authentication cookies       |
+| **DevAuthController**         | `/auth/dev`                                                                         | `POST /auth/dev/login`                                | `@Public()`                 | Mock login for dev/test (Disabled in production)             |
+| **UsersController**           | `/users`                                                                            | `GET /users`                                          | `users.read`                | Paginated search of user accounts filtered by school/role    |
+|                               |                                                                                     | `GET /users/summary`                                  | `users.manage`              | User distribution metrics by role and active status          |
+|                               |                                                                                     | `POST /users`                                         | `users.manage`              | Provisions new user account with role assignments            |
+|                               |                                                                                     | `PATCH /users/:id`                                    | `users.manage`              | Modifies user details, status, or role assignments           |
+|                               |                                                                                     | `POST /users/:id/oidc-link`                           | `users.manage`              | Links local user account to MFU OIDC identity                |
+|                               |                                                                                     | `DELETE /users/:id`                                   | `users.manage`              | Archives user account (blocks sole admin deletion)           |
+| **AcademicController**        | `/academic`                                                                         | `GET /academic/schools`                               | `academic.read`             | List university schools                                      |
+|                               |                                                                                     | `POST /academic/schools`                              | `academic.manage`           | Create new school                                            |
+|                               |                                                                                     | `PATCH /academic/schools/:id`                         | `academic.manage`           | Update school                                                |
+|                               |                                                                                     | `GET /academic/programs`                              | `academic.read`             | List degree programs                                         |
+|                               |                                                                                     | `POST /academic/programs`                             | `academic.manage`           | Create degree program                                        |
+|                               |                                                                                     | `PATCH /academic/programs/:id`                        | `academic.manage`           | Update degree program                                        |
+|                               |                                                                                     | `GET /academic/courses`                               | `academic.read`             | List internship courses                                      |
+|                               |                                                                                     | `POST /academic/courses`                              | `academic.manage`           | Create internship course                                     |
+|                               |                                                                                     | `PATCH /academic/courses/:id`                         | `academic.manage`           | Update internship course                                     |
+|                               |                                                                                     | `GET /academic/terms`                                 | `academic.read`             | List academic terms                                          |
+|                               |                                                                                     | `POST /academic/terms`                                | `academic.manage`           | Create academic term                                         |
+|                               |                                                                                     | `PATCH /academic/terms/:id`                           | `academic.manage`           | Update academic term                                         |
+| **MembersController**         | `/students`, `/organizations`, `/evaluators`, `/placements`                         | `POST /students/import-preview`                       | `students.import`           | Uploads Excel/CSV file to validate staging import batch      |
+|                               |                                                                                     | `GET /students/imports/:batchId`                      | `students.import`           | Retrieve import batch preview, validation issues, diffs      |
+|                               |                                                                                     | `POST /students/imports/:batchId/commit`              | `students.import`           | Atomically commits staged import rows to database            |
+|                               |                                                                                     | `GET /students`                                       | `students.read`             | Search students with school, program, and status filters     |
+|                               |                                                                                     | `GET /students/:id`                                   | `students.read`             | Retrieve student profile and placement history               |
+|                               |                                                                                     | `POST /students`                                      | `students.manage`           | Create single student record                                 |
+|                               |                                                                                     | `PATCH /students/:id`                                 | `students.manage`           | Update student profile                                       |
+|                               |                                                                                     | `DELETE /students/:id`                                | `students.manage`           | Archive student record                                       |
+|                               |                                                                                     | `GET /organizations`                                  | `organizations.read`        | List partner companies and internship enterprises            |
+|                               |                                                                                     | `POST /organizations`                                 | `organizations.manage`      | Create partner company record                                |
+|                               |                                                                                     | `GET /evaluators`                                     | `organizations.read`        | List external mentors and workplace evaluators               |
+|                               |                                                                                     | `POST /evaluators`                                    | `organizations.manage`      | Create external mentor record                                |
+|                               |                                                                                     | `GET /placements`                                     | `placements.read`           | List student placement pairings                              |
+|                               |                                                                                     | `POST /placements`                                    | `placements.manage`         | Assign student to organization for an academic term          |
+| **EvaluationsController**     | `/competency-sets`, `/evaluation-cycles`, `/evaluation-assignments`, `/evaluations` | `GET /competency-sets`                                | `competencies.read`         | List competency rubric sets                                  |
+|                               |                                                                                     | `POST /competency-sets`                               | `competencies.manage`       | Create competency rubric set                                 |
+|                               |                                                                                     | `POST /competency-sets/:id/versions`                  | `competencies.manage`       | Create new draft version of competency rubric                |
+|                               |                                                                                     | `GET /competency-sets/:id/versions`                   | `competencies.read`         | List rubric versions                                         |
+|                               |                                                                                     | `GET /competency-set-versions/:id`                    | `competencies.read`         | Get rubric version details                                   |
+|                               |                                                                                     | `PATCH /competency-set-versions/:id`                  | `competencies.manage`       | Modify draft rubric questions                                |
+|                               |                                                                                     | `POST /competency-set-versions/:id/publish`           | `competencies.publish`      | Publishes and permanently freezes rubric version             |
+|                               |                                                                                     | `GET /evaluation-cycles`                              | `cycles.read`               | List evaluation cycles                                       |
+|                               |                                                                                     | `POST /evaluation-cycles`                             | `cycles.manage`             | Create evaluation cycle                                      |
+|                               |                                                                                     | `GET /evaluation-cycles/:id/preview`                  | `cycles.manage`             | Preview assignments for cycle                                |
+|                               |                                                                                     | `POST /evaluation-cycles/:id/activate`                | `cycles.manage`             | Activates evaluation cycle                                   |
+|                               |                                                                                     | `POST /evaluation-cycles/:id/close`                   | `cycles.manage`             | Closes cycle and expires incomplete assignments              |
+|                               |                                                                                     | `GET /evaluation-assignments`                         | `evaluations.read`          | List evaluation assignments                                  |
+|                               |                                                                                     | `POST /evaluation-assignments`                        | `cycles.manage`             | Generate assignments and freeze `questionSnapshot`           |
+|                               |                                                                                     | `GET /evaluations/:id`                                | `evaluations.read`          | Retrieve completed evaluation record                         |
+|                               |                                                                                     | `PUT /evaluations/:id/draft`                          | `evaluations.draft`         | Autosave evaluation draft with optimistic revision lock      |
+|                               |                                                                                     | `POST /evaluations/:id/submit`                        | `evaluations.submit`        | Finalizes evaluation, computes scores, locks record          |
+|                               |                                                                                     | `POST /evaluations/:id/reopen`                        | `evaluations.reopen`        | Blocked at runtime (`reopen(): never`)                       |
+| **CorrespondenceController**  | `/email-templates`, `/campaigns`, `/deliveries`, `/public`                          | `GET /email-templates/system`                         | `emailTemplates.read`       | List system default email templates                          |
+|                               |                                                                                     | `PUT /email-templates/system/:code`                   | `emailTemplates.manage`     | Modify system email template content                         |
+|                               |                                                                                     | `POST /email-templates/system/:code/reset`            | `emailTemplates.manage`     | Reset template to system defaults                            |
+|                               |                                                                                     | `GET /email-templates`                                | `emailTemplates.read`       | List custom email templates                                  |
+|                               |                                                                                     | `POST /email-templates`                               | `emailTemplates.manage`     | Create custom email template                                 |
+|                               |                                                                                     | `POST /email-template-versions/:id/publish`           | `emailTemplates.publish`    | Publish and freeze email template version                    |
+|                               |                                                                                     | `POST /campaigns/preview`                             | `campaigns.send`            | Preview rendered email campaign variables                    |
+|                               |                                                                                     | `POST /campaigns`                                     | `campaigns.send`            | Dispatches invitation campaign to MongoDB outbox & BullMQ    |
+|                               |                                                                                     | `GET /campaigns/:id`                                  | `campaigns.read`            | Campaign execution status and delivery counters              |
+|                               |                                                                                     | `POST /campaigns/send-targeted`                       | `campaigns.send`            | Send targeted reminder email to specific assignments         |
+|                               |                                                                                     | `POST /campaigns/send-student-invitation`             | `campaigns.send`            | Send student onboarding invitation                           |
+|                               |                                                                                     | `POST /evaluation-assignments/:id/invitation/reissue` | `campaigns.send`            | Reissues evaluation invitation token and rotates PIN         |
+|                               |                                                                                     | `GET /deliveries`                                     | `campaigns.read`            | View delivery outbox logs and statuses                       |
+|                               |                                                                                     | `POST /deliveries/:id/retry`                          | `deliveries.retry`          | Re-queues failed email delivery                              |
+|                               |                                                                                     | `POST /public/invitations/exchange`                   | `@Public()`                 | Exchange URL token for evaluator session cookie              |
+|                               |                                                                                     | `POST /public/evaluations/verify-pin`                 | `@Public()`                 | Verify 16-digit PIN and issue evaluator session              |
+| **DocumentsController**       | `/document-assets`, `/document-templates`, `/generated-documents`                   | `POST /document-assets`                               | `documentTemplates.manage`  | Upload font/emblem/signature asset to S3                     |
+|                               |                                                                                     | `GET /document-assets`                                | `documentTemplates.manage`  | List registered document assets                              |
+|                               |                                                                                     | `GET /document-templates`                             | `documentTemplates.read`    | List transcript/certificate templates                        |
+|                               |                                                                                     | `POST /document-templates`                            | `documentTemplates.manage`  | Create document template                                     |
+|                               |                                                                                     | `POST /document-templates/:id/activate`               | `documentTemplates.manage`  | Activate template (Enforces exactly 1 active per type)       |
+|                               |                                                                                     | `POST /document-templates/:id/deactivate`             | `documentTemplates.manage`  | Deactivate template                                          |
+|                               |                                                                                     | `GET /document-templates/:id/versions`                | `documentTemplates.read`    | List template Canvas layout versions                         |
+|                               |                                                                                     | `POST /document-templates/:id/versions`               | `documentTemplates.manage`  | Create template Canvas JSON layout version                   |
+|                               |                                                                                     | `GET /document-template-versions/:id`                 | `documentTemplates.read`    | Get layout version AST                                       |
+|                               |                                                                                     | `PATCH /document-template-versions/:id`               | `documentTemplates.manage`  | Modify draft layout AST                                      |
+|                               |                                                                                     | `POST /document-template-versions/:id/publish`        | `documentTemplates.publish` | Publish and freeze document layout version                   |
+|                               |                                                                                     | `POST /generated-documents`                           | `documents.generate*`       | Freezes snapshot and queues PDF generation job               |
+|                               |                                                                                     | `GET /generated-documents`                            | `documents.read*`           | List generated transcripts/certificates                      |
+|                               |                                                                                     | `GET /generated-documents/:id`                        | `documents.read*`           | Get document metadata                                        |
+|                               |                                                                                     | `GET /generated-documents/:id/download-url`           | `documents.read*`           | Issue 300s presigned S3 download URL                         |
+| **ReportsController**         | `/reports`                                                                          | `GET /reports/overview`                               | `reports.read`              | High-level internship and evaluation metrics                 |
+|                               |                                                                                     | `GET /reports/programs`                               | `reports.read`              | Academic program-specific completion metrics                 |
+|                               |                                                                                     | `POST /reports/exports`                               | `exports.create`            | Enqueue background CSV/XLSX export job                       |
+|                               |                                                                                     | `GET /reports/exports/:id`                            | `exports.download`          | Check export status                                          |
+|                               |                                                                                     | `GET /reports/exports/:id/download-url`               | `exports.download`          | Issue 300s presigned S3 download URL                         |
+| **AuditController**           | `/audit-logs`                                                                       | `GET /audit-logs`                                     | `audit.read`                | Paginated security audit trail search                        |
+| **GeneralSettingsController** | `/system-settings`                                                                  | `GET /system-settings/provinces`                      | `@Authenticated()`          | List Thailand provinces and regions                          |
+|                               |                                                                                     | `POST /system-settings/provinces`                     | `system.config.manage`      | Add province                                                 |
+|                               |                                                                                     | `PATCH /system-settings/provinces/:id`                | `system.config.manage`      | Modify province                                              |
+|                               |                                                                                     | `DELETE /system-settings/provinces/:id`               | `system.config.manage`      | Delete province                                              |
+|                               |                                                                                     | `POST /system-settings/provinces/reset`               | `system.config.manage`      | Reset provinces to standard 77 Thai provinces                |
+|                               |                                                                                     | `GET /system-settings/general`                        | `@Authenticated()`          | Retrieve general university configurations                   |
+|                               |                                                                                     | `PUT /system-settings/general`                        | `system.config.manage`      | Update general university configurations                     |
+| **SmtpSettingsController**    | `/system-settings/smtp`                                                             | `GET /system-settings/smtp`                           | `system.config.manage`      | View SMTP server settings (Password redacted)                |
+|                               |                                                                                     | `PUT /system-settings/smtp`                           | `system.config.manage`      | Save SMTP settings (Encrypts password via AES-256-GCM)       |
+|                               |                                                                                     | `POST /system-settings/smtp/test`                     | `system.config.manage`      | Enqueue test email to verify SMTP configuration              |
+|                               |                                                                                     | `GET /system-settings/smtp/tests/:id`                 | `system.config.manage`      | Retrieve status of SMTP test delivery                        |
 
 ---
 
@@ -438,6 +443,7 @@ catalog:
 `apps/web` is implemented on **Nuxt 4.5.2** (Vue 3.5.41) running under the Nuxt 4 forward compatibility architecture (`future: { compatibilityVersion: 4 }`).
 
 #### Routing Hierarchy (`app/pages`)
+
 - `/index.vue`: Root landing page; auto-redirects authenticated users to `/app` and unauthenticated users to `/login`.
 - `/login.vue`: Institutional login page supporting both MFU OIDC SSO redirect and local development login.
 - `/evaluate.vue`: Public assessment interface for workplace mentors. Houses the PIN entry gate and autosaving evaluation form.
@@ -460,7 +466,9 @@ catalog:
     - `smtp.vue`: SMTP server configuration (Restricted to `systemAdmin`).
 
 #### Client-Side Role Route Guard (`app/middleware/auth.ts`)
+
 The Nuxt route middleware intercepts client navigation against `ROUTE_ROLE_PERMISSIONS`:
+
 ```typescript
 const ROUTE_ROLE_PERMISSIONS: Readonly<Record<string, readonly RoleKey[]>> = {
   '/app/users': ['systemAdmin', 'internshipStaff'],
@@ -473,14 +481,28 @@ const ROUTE_ROLE_PERMISSIONS: Readonly<Record<string, readonly RoleKey[]>> = {
   '/app/settings/general': ['systemAdmin', 'internshipStaff'],
   '/app/evaluations/cycles': ['systemAdmin', 'internshipStaff'],
   '/app/students': ['systemAdmin', 'internshipStaff', 'coordinator', 'auditor'],
-  '/app/documents': ['systemAdmin', 'internshipStaff', 'coordinator', 'auditor'],
-  '/app/evaluations': ['systemAdmin', 'internshipStaff', 'coordinator', 'auditor', 'evaluator']
-};
+  '/app/documents': [
+    'systemAdmin',
+    'internshipStaff',
+    'coordinator',
+    'auditor'
+  ],
+  '/app/evaluations': [
+    'systemAdmin',
+    'internshipStaff',
+    'coordinator',
+    'auditor',
+    'evaluator'
+  ]
+}
 ```
+
 Unauthenticated users navigating to protected `/app/*` routes are redirected to `/login`. Users lacking required roles are redirected back to the dashboard `/app`.
 
 #### API Client Composable & Single-Flight 401 Refresh Queue (`app/composables/useApi.ts`)
+
 The `useApi()` composable manages all HTTP interactions between Nuxt and NestJS:
+
 1. **Dual Base URL Handling**:
    - **SSR Context**: Connects directly to internal service endpoint `config.apiInternalBaseUrl` (`http://127.0.0.1:8081/api/v2`), forwarding browser cookies and `x-request-id` headers via `useRequestHeaders(['cookie', 'x-request-id'])`.
    - **Browser Context**: Issues requests to `config.public.apiBaseUrl` (`/api/v2`) via the local Nitro proxy.
@@ -499,16 +521,19 @@ The `useApi()` composable manages all HTTP interactions between Nuxt and NestJS:
 `apps/worker` runs as a standalone Node.js 24 process (`apps/worker/src/main.ts`) orchestrating background tasks via **BullMQ 6.2.0** connected to Redis 8.x.
 
 #### Queue Topology & Concurrency Configuration (`apps/worker/src/runtime/worker-runtime.ts`)
+
 All BullMQ queues share the unified Redis key prefix `'internship-transcript-v2'`:
 
-| Queue Name | Processor Instance | Concurrency | Job Name | Retry Policy & Backoff | Job Retention |
-|---|---|:---:|---|---|---|
-| **`email`** | `EmailProcessor` | 5 | `send-delivery`<br>`test-smtp` | 5 attempts, exponential (delay: 5000ms)<br>3 attempts, exponential (delay: 3000ms) | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
-| **`documents`** | `DocumentProcessor` | 2 | `generate-pdf` | 3 attempts, exponential (delay: 10000ms) | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
-| **`report-exports`**| `ReportExportProcessor`| 2 | `generate-report` | 3 attempts, exponential (delay: 5000ms) | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
+| Queue Name           | Processor Instance      | Concurrency | Job Name                       | Retry Policy & Backoff                                                             | Job Retention                                   |
+| -------------------- | ----------------------- | :---------: | ------------------------------ | ---------------------------------------------------------------------------------- | ----------------------------------------------- |
+| **`email`**          | `EmailProcessor`        |      5      | `send-delivery`<br>`test-smtp` | 5 attempts, exponential (delay: 5000ms)<br>3 attempts, exponential (delay: 3000ms) | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
+| **`documents`**      | `DocumentProcessor`     |      2      | `generate-pdf`                 | 3 attempts, exponential (delay: 10000ms)                                           | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
+| **`report-exports`** | `ReportExportProcessor` |      2      | `generate-report`              | 3 attempts, exponential (delay: 5000ms)                                            | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
 
 #### Distributed Leasing & Heartbeat Protocol
+
 To ensure high availability and prevent race conditions when multiple worker containers operate in parallel:
+
 1. **Pessimistic Lease via MongoDB Conditional Update**: When a job starts, the worker executes `findOneAndUpdate` matching status `'queued'` (or `'processing'` with an expired lease), updating:
    - `status: 'sending'` (email) or `'processing'` (documents/reports)
    - `processingStartedAt: new Date()`
@@ -518,14 +543,18 @@ To ensure high availability and prevent race conditions when multiple worker con
 3. **Idempotent Completion**: Once finished, the record is transitioned to `'sent'` or `'ready'`, and the lease token is cleared.
 
 #### Self-Healing 60-Second Crash Recovery Loop
+
 The worker runtime executes a periodic sweep every 60,000ms (`apps/worker/src/runtime/worker-runtime.ts:176-190`):
+
 - `email.recoverExpiredDeliveries()`: Sweeps deliveries stuck in `'sending'` with expired leases. Classifies failures into pre-transmission (re-enqueued) versus post-transmission (marked `'uncertain'`).
 - `documents.recoverStuckDocuments()`: Resets stuck document rendering tasks back to `'queued'`.
 - `reportExports.recoverQueuedExports()`: Recovers stalled analytical report generation tasks.
 - `reportExports.expireExports()`: Scans for reports exceeding their 24-hour TTL, issuing `DeleteObjectCommand` to S3 and setting database status to `'expired'`.
 
 #### Worker Health Probe Server
+
 The worker exports a lightweight HTTP probe server on port `WORKER_HEALTH_PORT` (default: 8082, bound to `127.0.0.1`):
+
 - `GET /health/live`: Returns `200 OK` as long as the worker process is not shutting down (`!this.closing`).
 - `GET /health/ready`: Returns `200 OK` when:
   1. MongoDB connection is healthy and supports transactions.
@@ -560,6 +589,7 @@ The worker exports a lightweight HTTP probe server on port `WORKER_HEALTH_PORT` 
 Production deployments implement Defense in Depth across container runtimes and image supply chains:
 
 #### Multi-Stage Dockerfile Architecture (`infrastructure/docker/`)
+
 - **Base Image**: `node:24.14.0-bookworm-slim`
 - **Builder Stage**:
   1. Activates Corepack and enforces `pnpm@11.0.7`.
@@ -573,13 +603,16 @@ Production deployments implement Defense in Depth across container runtimes and 
   3. No package managers or build compilers exist within the runtime container.
 
 #### Production Runtime Hardening (`infrastructure/compose.production.yaml`)
+
 - `read_only: true`: Container root filesystem is mounted strictly read-only, preventing attackers from writing executable files to disk.
 - `tmpfs: - /tmp`: Ephemeral in-memory tmpfs mount for transient operations.
 - `security_opt: - no-new-privileges:true`: Restricts child processes from gaining elevated Linux capabilities.
 - `cap_drop: - ALL`: Strips all Linux kernel capabilities.
 
 #### Image Signature & Cosign Attestation (`infrastructure/validate-production-images.mjs`)
+
 Prior to booting production containers, an automated verification script executes:
+
 1. Verifies image registries match GitHub Container Registry: `ghcr.io/napus-backenddev/mfu-internship-system-{api,worker,web}`.
 2. Mandates immutable digest pinning: `@sha256:<64-hex>`.
 3. Executes digital signature verification using **Cosign** (`cosign verify`), asserting that the container image was cryptographically signed by the official GitHub Actions workflow via OIDC identity `https://token.actions.githubusercontent.com`.
@@ -591,6 +624,7 @@ Prior to booting production containers, an automated verification script execute
 ### 4.1 Primary Storage Engine (MongoDB 8.x Replica Set `rs0` & Mongoose 9.x)
 
 The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) paired with **Mongoose 9.x** (`mongoose: 9.9.3`).
+
 - **Mongoose Configuration**: Models are defined using NestJS `@Schema` decorators with options `{ timestamps: true }` (except `auditLogs` which sets `{ timestamps: { createdAt: true, updatedAt: false } }`).
 - **Transform Serialization**: All schemas implement `toJSON: { virtuals: true, transform: ... }` to map internal `_id` to string `id`, delete `__v`, and strip sensitive cryptographic fields (passwords, salts, PINs, tokens) from API responses.
 - **Production Indexing Gate**: `autoIndex` is disabled in production environments (`NODE_ENV === 'production'`). Production indexes are managed deterministically via dedicated migration scripts.
@@ -602,51 +636,52 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
 > **Collection Inventory Clarification (36 Mongoose Models + 1 Native Direct Collection = 37 Collections):**  
 > While there are 36 formal Mongoose `@Schema` models defined across the 10 domain modules (cataloged below), the system touches a 37th collection `systemInvariants` accessed directly via native MongoDB collection in `apps/api/src/auth/users.service.ts:825, 857` for the active admin mutex (`ACTIVE_ADMIN_MUTEX_ID`).
 
-| Domain Index | Functional Domain | MongoDB Collection Name | Mongoose Model | Primary Key & Identifiers | Key Indexes & Constraints |
-|:---:|---|---|---|---|---|
-| **D1** | **Identity & Access** | `users` | `UserRecord` | `_id`, `email`, `oidcSubject` | Unique: `(oidcIssuer, oidcSubject)`<br>Single: `email`, `oidcIssuer` |
-| **D1** | **Identity & Access** | `sessions` | `SessionRecord` | `_id`, `tokenHash` | Unique: `tokenHash`<br>TTL: `expiresAt` (0s)<br>Single: `actorId`, `assignmentId` |
-| **D2** | **Academic Master** | `schools` | `SchoolRecord` | `_id`, `schoolCode` | Unique: `schoolCode`<br>Single: `status` |
-| **D2** | **Academic Master** | `programs` | `ProgramRecord` | `_id`, `programCode` | Unique: `(schoolId, programCode)`<br>Single: `schoolId`, `status` |
-| **D2** | **Academic Master** | `courses` | `CourseRecord` | `_id`, `courseCode` | Unique: `courseCode`<br>Single: `programIds`, `status` |
-| **D2** | **Academic Master** | `academicTerms` | `AcademicTermRecord` | `_id`, `code` | Unique: `code` |
-| **D3** | **Membership & Placements**| `students` | `StudentRecord` | `_id`, `studentId` | Unique: `studentId`<br>Compound: `(schoolId, programId, status)`<br>Single: `email` |
-| **D3** | **Membership & Placements**| `organizations` | `OrganizationRecord` | `_id`, `organizationCode` | Unique: `organizationCode`<br>Single: `status` |
-| **D3** | **Membership & Placements**| `evaluators` | `EvaluatorRecord` | `_id`, `email` | Unique: `(organizationId, email)`<br>Single: `organizationId`, `email`, `status` |
-| **D3** | **Membership & Placements**| `placements` | `PlacementRecord` | `_id` | Unique: `(studentId, academicTermId)`<br>Single: `studentId`, `organizationId` |
-| **D4** | **Batch Staging Import** | `studentImportBatches` | `StudentImportBatchRecord` | `_id` | TTL: `expiresAt` (0s)<br>Single: `actorId` |
-| **D4** | **Batch Staging Import** | `studentImportRows` | `StudentImportRowRecord` | `_id` | Unique: `(batchId, rowKey)`<br>TTL: `expiresAt` (0s)<br>Single: `batchId` |
-| **D4** | **Batch Staging Import** | `studentImportCommits` | `StudentImportCommitRecord` | `_id`, `idempotencyScopeKey` | Unique: `idempotencyScopeKey`<br>Compound: `(batchId, actorId)` |
-| **D5** | **Competencies & Rubrics** | `competencySets` | `CompetencySetRecord` | `_id`, `code` | Unique: `code` |
-| **D5** | **Competencies & Rubrics** | `competencySetVersions`| `CompetencyVersionRecord` | `_id` | Unique: `(competencySetId, versionNumber)`<br>Single: `competencySetId`, `status` |
-| **D6** | **Evaluations & Assessment**| `evaluationCycles` | `EvaluationCycleRecord` | `_id`, `code` | Unique: `code`<br>Single: `academicTermId`, `status` |
-| **D6** | **Evaluations & Assessment**| `evaluationAssignments`| `EvaluationAssignmentRecord`| `_id` | Unique: `(cycleId, placementId)`<br>Unique: `(cycleId, studentId)`<br>Single: `cycleId`, `evaluatorId`, `status` |
-| **D6** | **Evaluations & Assessment**| `evaluationDrafts` | `EvaluationDraftRecord` | `_id`, `assignmentId` | Unique: `assignmentId` |
-| **D6** | **Evaluations & Assessment**| `evaluations` | `EvaluationRecord` | `_id` | Unique: `(assignmentId, version)`<br>Unique: `(assignmentId, idempotencyKey)`<br>Sparse Unique: `(assignmentId, idempotencyScopeKey)` |
-| **D7** | **Correspondence & Outbox** | `emailTemplates` | `EmailTemplateRecord` | `_id`, `code` | Unique: `code` (simple collation) |
-| **D7** | **Correspondence & Outbox** | `emailTemplateVersions`| `EmailTemplateVersionRecord`| `_id` | Unique: `(templateId, versionNumber)` (simple collation) |
-| **D7** | **Correspondence & Outbox** | `campaigns` | `CampaignRecord` | `_id`, `idempotencyScopeKey` | Sparse Unique: `idempotencyScopeKey` |
-| **D7** | **Correspondence & Outbox** | `deliveries` | `DeliveryRecord` | `_id` | Unique: `(campaignId, assignmentId)`<br>Compound Lease: `(status, processingLeaseUntil)` |
-| **D7** | **Correspondence & Outbox** | `deliveryRetryRequests`| `DeliveryRetryRequestRecord`| `_id` | Single: `deliveryId` |
-| **D7** | **Correspondence & Outbox** | `invitations` | `InvitationRecord` | `_id`, `assignmentId` | Unique: `assignmentId`<br>Single: `evaluatorId`, `accessPinHash` (sparse) |
-| **D8** | **Documents & Certificates**| `documentTemplates` | `DocumentTemplateRecord` | `_id`, `code` | Unique: `code` |
-| **D8** | **Documents & Certificates**| `documentTemplateVersions`| `DocumentTemplateVersionRecord`| `_id`| Unique: `(templateId, versionNumber)` |
-| **D8** | **Documents & Certificates**| `documentAssets` | `DocumentAssetRecord` | `_id`, `key` | Unique: `key`<br>Compound: `(assetType, status, createdAt: -1)` |
-| **D8** | **Documents & Certificates**| `generatedDocuments` | `GeneratedDocumentRecord` | `_id`, `idempotencyScopeKey` | Sparse Unique: `idempotencyScopeKey`<br>Compound: `(studentId, createdAt: -1)` |
-| **D9** | **Reporting & Exports** | `reportExports` | `ReportExportRecord` | `_id` | Compound: `(status, processingLeaseUntil, expiresAt)`<br>Single: `expiresAt` |
-| **D9** | **Reporting & Exports** | `reportExportSnapshots` | `ReportExportSnapshotRecord`| `_id` | TTL: `expiresAt` (0s)<br>Compound: `(exportId, schoolId, programId)` |
-| **D10**| **Settings & Auditing** | `auditLogs` | `AuditLogRecord` | `_id`, `requestId` | Append-Only (No update)<br>Compound: `(createdAt: -1, actorId: 1)`, `(action: 1, createdAt: -1)` |
-| **D10**| **Settings & Auditing** | `system_provinces` | `ProvinceRecord` | `_id`, `code` | Unique: `code`<br>Compound: `(region, nameTh)` |
-| **D10**| **Settings & Auditing** | `system_general_configs`| `GeneralConfigRecord` | `_id`, `key: 'general'` | Unique: `key` (Singleton pattern) |
-| **D10**| **Settings & Auditing** | `smtpSettings` | `SmtpSettingRecord` | `_id`, `key: 'smtp'` | Unique: `key` (Singleton pattern)<br>Secret fields: `passwordCiphertext` (select: false) |
-| **D10**| **Settings & Auditing** | `smtpTestDeliveries` | `SmtpTestDeliveryRecord` | `_id` | Compound: `(status: 1, createdAt: -1)` |
-| **D10**| **Settings & Auditing** | `systemInvariants` (Native) | *(None — Direct Native Driver)* | `_id: ACTIVE_ADMIN_MUTEX_ID` | Direct native collection for active admin mutex (`users.service.ts:825, 857`) |
+| Domain Index | Functional Domain            | MongoDB Collection Name     | Mongoose Model                  | Primary Key & Identifiers     | Key Indexes & Constraints                                                                                                             |
+| :----------: | ---------------------------- | --------------------------- | ------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+|    **D1**    | **Identity & Access**        | `users`                     | `UserRecord`                    | `_id`, `email`, `oidcSubject` | Unique: `(oidcIssuer, oidcSubject)`<br>Single: `email`, `oidcIssuer`                                                                  |
+|    **D1**    | **Identity & Access**        | `sessions`                  | `SessionRecord`                 | `_id`, `tokenHash`            | Unique: `tokenHash`<br>TTL: `expiresAt` (0s)<br>Single: `actorId`, `assignmentId`                                                     |
+|    **D2**    | **Academic Master**          | `schools`                   | `SchoolRecord`                  | `_id`, `schoolCode`           | Unique: `schoolCode`<br>Single: `status`                                                                                              |
+|    **D2**    | **Academic Master**          | `programs`                  | `ProgramRecord`                 | `_id`, `programCode`          | Unique: `(schoolId, programCode)`<br>Single: `schoolId`, `status`                                                                     |
+|    **D2**    | **Academic Master**          | `courses`                   | `CourseRecord`                  | `_id`, `courseCode`           | Unique: `courseCode`<br>Single: `programIds`, `status`                                                                                |
+|    **D2**    | **Academic Master**          | `academicTerms`             | `AcademicTermRecord`            | `_id`, `code`                 | Unique: `code`                                                                                                                        |
+|    **D3**    | **Membership & Placements**  | `students`                  | `StudentRecord`                 | `_id`, `studentId`            | Unique: `studentId`<br>Compound: `(schoolId, programId, status)`<br>Single: `email`                                                   |
+|    **D3**    | **Membership & Placements**  | `organizations`             | `OrganizationRecord`            | `_id`, `organizationCode`     | Unique: `organizationCode`<br>Single: `status`                                                                                        |
+|    **D3**    | **Membership & Placements**  | `evaluators`                | `EvaluatorRecord`               | `_id`, `email`                | Unique: `(organizationId, email)`<br>Single: `organizationId`, `email`, `status`                                                      |
+|    **D3**    | **Membership & Placements**  | `placements`                | `PlacementRecord`               | `_id`                         | Unique: `(studentId, academicTermId)`<br>Single: `studentId`, `organizationId`                                                        |
+|    **D4**    | **Batch Staging Import**     | `studentImportBatches`      | `StudentImportBatchRecord`      | `_id`                         | TTL: `expiresAt` (0s)<br>Single: `actorId`                                                                                            |
+|    **D4**    | **Batch Staging Import**     | `studentImportRows`         | `StudentImportRowRecord`        | `_id`                         | Unique: `(batchId, rowKey)`<br>TTL: `expiresAt` (0s)<br>Single: `batchId`                                                             |
+|    **D4**    | **Batch Staging Import**     | `studentImportCommits`      | `StudentImportCommitRecord`     | `_id`, `idempotencyScopeKey`  | Unique: `idempotencyScopeKey`<br>Compound: `(batchId, actorId)`                                                                       |
+|    **D5**    | **Competencies & Rubrics**   | `competencySets`            | `CompetencySetRecord`           | `_id`, `code`                 | Unique: `code`                                                                                                                        |
+|    **D5**    | **Competencies & Rubrics**   | `competencySetVersions`     | `CompetencyVersionRecord`       | `_id`                         | Unique: `(competencySetId, versionNumber)`<br>Single: `competencySetId`, `status`                                                     |
+|    **D6**    | **Evaluations & Assessment** | `evaluationCycles`          | `EvaluationCycleRecord`         | `_id`, `code`                 | Unique: `code`<br>Single: `academicTermId`, `status`                                                                                  |
+|    **D6**    | **Evaluations & Assessment** | `evaluationAssignments`     | `EvaluationAssignmentRecord`    | `_id`                         | Unique: `(cycleId, placementId)`<br>Unique: `(cycleId, studentId)`<br>Single: `cycleId`, `evaluatorId`, `status`                      |
+|    **D6**    | **Evaluations & Assessment** | `evaluationDrafts`          | `EvaluationDraftRecord`         | `_id`, `assignmentId`         | Unique: `assignmentId`                                                                                                                |
+|    **D6**    | **Evaluations & Assessment** | `evaluations`               | `EvaluationRecord`              | `_id`                         | Unique: `(assignmentId, version)`<br>Unique: `(assignmentId, idempotencyKey)`<br>Sparse Unique: `(assignmentId, idempotencyScopeKey)` |
+|    **D7**    | **Correspondence & Outbox**  | `emailTemplates`            | `EmailTemplateRecord`           | `_id`, `code`                 | Unique: `code` (simple collation)                                                                                                     |
+|    **D7**    | **Correspondence & Outbox**  | `emailTemplateVersions`     | `EmailTemplateVersionRecord`    | `_id`                         | Unique: `(templateId, versionNumber)` (simple collation)                                                                              |
+|    **D7**    | **Correspondence & Outbox**  | `campaigns`                 | `CampaignRecord`                | `_id`, `idempotencyScopeKey`  | Sparse Unique: `idempotencyScopeKey`                                                                                                  |
+|    **D7**    | **Correspondence & Outbox**  | `deliveries`                | `DeliveryRecord`                | `_id`                         | Unique: `(campaignId, assignmentId)`<br>Compound Lease: `(status, processingLeaseUntil)`                                              |
+|    **D7**    | **Correspondence & Outbox**  | `deliveryRetryRequests`     | `DeliveryRetryRequestRecord`    | `_id`                         | Single: `deliveryId`                                                                                                                  |
+|    **D7**    | **Correspondence & Outbox**  | `invitations`               | `InvitationRecord`              | `_id`, `assignmentId`         | Unique: `assignmentId`<br>Single: `evaluatorId`, `accessPinHash` (sparse)                                                             |
+|    **D8**    | **Documents & Certificates** | `documentTemplates`         | `DocumentTemplateRecord`        | `_id`, `code`                 | Unique: `code`                                                                                                                        |
+|    **D8**    | **Documents & Certificates** | `documentTemplateVersions`  | `DocumentTemplateVersionRecord` | `_id`                         | Unique: `(templateId, versionNumber)`                                                                                                 |
+|    **D8**    | **Documents & Certificates** | `documentAssets`            | `DocumentAssetRecord`           | `_id`, `key`                  | Unique: `key`<br>Compound: `(assetType, status, createdAt: -1)`                                                                       |
+|    **D8**    | **Documents & Certificates** | `generatedDocuments`        | `GeneratedDocumentRecord`       | `_id`, `idempotencyScopeKey`  | Sparse Unique: `idempotencyScopeKey`<br>Compound: `(studentId, createdAt: -1)`                                                        |
+|    **D9**    | **Reporting & Exports**      | `reportExports`             | `ReportExportRecord`            | `_id`                         | Compound: `(status, processingLeaseUntil, expiresAt)`<br>Single: `expiresAt`                                                          |
+|    **D9**    | **Reporting & Exports**      | `reportExportSnapshots`     | `ReportExportSnapshotRecord`    | `_id`                         | TTL: `expiresAt` (0s)<br>Compound: `(exportId, schoolId, programId)`                                                                  |
+|   **D10**    | **Settings & Auditing**      | `auditLogs`                 | `AuditLogRecord`                | `_id`, `requestId`            | Append-Only (No update)<br>Compound: `(createdAt: -1, actorId: 1)`, `(action: 1, createdAt: -1)`                                      |
+|   **D10**    | **Settings & Auditing**      | `system_provinces`          | `ProvinceRecord`                | `_id`, `code`                 | Unique: `code`<br>Compound: `(region, nameTh)`                                                                                        |
+|   **D10**    | **Settings & Auditing**      | `system_general_configs`    | `GeneralConfigRecord`           | `_id`, `key: 'general'`       | Unique: `key` (Singleton pattern)                                                                                                     |
+|   **D10**    | **Settings & Auditing**      | `smtpSettings`              | `SmtpSettingRecord`             | `_id`, `key: 'smtp'`          | Unique: `key` (Singleton pattern)<br>Secret fields: `passwordCiphertext` (select: false)                                              |
+|   **D10**    | **Settings & Auditing**      | `smtpTestDeliveries`        | `SmtpTestDeliveryRecord`        | `_id`                         | Compound: `(status: 1, createdAt: -1)`                                                                                                |
+|   **D10**    | **Settings & Auditing**      | `systemInvariants` (Native) | _(None — Direct Native Driver)_ | `_id: ACTIVE_ADMIN_MUTEX_ID`  | Direct native collection for active admin mutex (`users.service.ts:825, 857`)                                                         |
 
 ---
 
 ### 4.3 Detailed Domain Schema Specifications & Constraints
 
 #### Domain 1: Identity & Access Management (`apps/api/src/auth/user.schema.ts`)
+
 - **`UserRecord` (`users`)**:
   - `oidcSubject`: `string` (required). Subject identifier from MFU Central OIDC IdP.
   - `oidcIssuer`: `string` (optional, indexed). Issuer URL (e.g. `https://sso.mfu.ac.th`).
@@ -670,6 +705,7 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
   - `revokedAt`: `Date` (optional). Explicit revocation timestamp.
 
 #### Domain 2: Academic Master Data (`apps/api/src/academic/academic.schema.ts`)
+
 - **Embedded Subdocument `LocalizedText`**: `{ th: string, en: string }` with `_id: false`.
 - **`SchoolRecord` (`schools`)**: `schoolCode` (required, uppercase, unique), `name` (`LocalizedText`), `status` (`'active'` | `'archived'`).
 - **`ProgramRecord` (`programs`)**: `schoolId` (required, indexed), `programCode` (required, uppercase), `name` (`LocalizedText`), `status` (`'active'` | `'archived'`). Compound unique index on `{ schoolId: 1, programCode: 1 }`.
@@ -677,6 +713,7 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
 - **`AcademicTermRecord` (`academicTerms`)**: `code` (required, unique, e.g. `'2026-1'`), `academicYear` (`number`), `semester` (`string`), `startsAt` (`Date`), `endsAt` (`Date`), `timezone` (default: `'Asia/Bangkok'`), `status` (`'planned'` | `'open'` | `'closed'` | `'archived'`).
 
 #### Domain 3: Membership & Placements (`apps/api/src/members/members.schema.ts`)
+
 - **`StudentRecord` (`students`)**:
   - `studentId`: `string` (required, unique). University student matriculation ID (e.g. `'6631503016'`).
   - `name`: `string | LocalizedText` (required).
@@ -695,11 +732,13 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
   - Compound Unique Index: `{ studentId: 1, academicTermId: 1 }`.
 
 #### Domain 4: Batch Student Import Pipeline (`apps/api/src/members/student-import.schema.ts`)
+
 - **`StudentImportBatchRecord` (`studentImportBatches`)**: `actorId` (indexed), `sourceName` (`string`), `checksum` (SHA-256), `expiresAt` (`Date`, TTL index `expireAfterSeconds: 0`), `sourceRowCount` (`number`), `status` (`'preview'` | `'committed'`).
 - **`StudentImportRowRecord` (`studentImportRows`)**: `batchId` (indexed), `rowKey` (`string`), `sourceRowHash` (`string`), `action` (`'create'` | `'update'` | `'unchanged'` | `'invalid'`), `payload` (`Mixed`), `issues` (`Array`), `expiresAt` (`Date`, TTL index). Compound unique index on `{ batchId: 1, rowKey: 1 }`.
 - **`StudentImportCommitRecord` (`studentImportCommits`)**: `batchId` (indexed), `actorId` (indexed), `idempotencyScopeKey` (required, unique), `requestHash` (`string`), `decisions` (`Array`), `status` (`'processing'` | `'completed'`). Compound index on `{ batchId: 1, actorId: 1 }`.
 
 #### Domain 5: Competencies & Rubrics (`apps/api/src/evaluations/evaluation.schema.ts`)
+
 - **Subdocuments `QuestionRecord` & `SectionRecord`**:
   - `QuestionRecord`: `id` (`string`), `label` (`LocalizedText`), `type` (`'rating'` | `'text'` | `'boolean'`), `required` (`boolean`), `weight` (`number`), `scaleMin` (`number`), `scaleMax` (`number`).
   - `SectionRecord`: `id` (`string`), `title` (`LocalizedText`), `category` (`'general'` | `'special'` | `'suggestion'`), `questions` (`QuestionRecord[]`).
@@ -707,6 +746,7 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
 - **`CompetencyVersionRecord` (`competencySetVersions`)**: `competencySetId` (indexed), `versionNumber` (`number`), `status` (`'draft'` | `'published'` | `'retired'`), `sections` (`SectionRecord[]`). Compound unique index on `{ competencySetId: 1, versionNumber: 1 }`.
 
 #### Domain 6: Evaluations & Assessment (`apps/api/src/evaluations/evaluation.schema.ts`)
+
 - **`EvaluationCycleRecord` (`evaluationCycles`)**: `code` (required, unique), `name` (`LocalizedText`), `competencySetVersionId` (`string`), `academicTermId` (indexed), `opensAt` (`Date`), `closesAt` (`Date`), `status` (`'draft'` | `'active'` | `'closed'`).
 - **`EvaluationAssignmentRecord` (`evaluationAssignments`)**:
   - `cycleId`, `placementId`, `evaluatorId`, `studentId`, `schoolId`, `programId`: `string` (required, indexed).
@@ -730,6 +770,7 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
   - Compound Unique Indexes: `{ assignmentId: 1, version: 1 }` and `{ assignmentId: 1, idempotencyKey: 1 }`.
 
 #### Domain 7: Correspondence & Outbox (`apps/api/src/correspondence/correspondence.schema.ts`)
+
 - **`EmailTemplateRecord` (`emailTemplates`)**: `code` (required, unique with simple collation), `audience` (`'evaluator'` | `'student'` | `'staff'`), `status` (`'active'` | `'archived'`).
 - **`EmailTemplateVersionRecord` (`emailTemplateVersions`)**: `templateId` (indexed), `versionNumber` (`number`), `status` (`'draft'` | `'published'` | `'retired'`), `subject` (`string`), `html` (`string`, sanitized), `text` (`string`), `placeholders` (`string[]`). Compound unique index on `{ templateId: 1, versionNumber: 1 }` with simple collation.
 - **`CampaignRecord` (`campaigns`)**: `idempotencyKey` (`string`), `idempotencyScopeKey` (sparse unique indexed), `type` (`'invitation'` | `'reminder'`), `templateVersionId` (`string`), `assignmentIds` (`string[]`), `status` (`'queued'` | `'processing'` | `'completed'` | `'partial'`).
@@ -748,6 +789,7 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
 - **`InvitationRecord` (`invitations`)**: `assignmentId` (required, unique, indexed), `evaluatorId` (indexed), `email` (`string`), `expiresAt` (`Date`), `version` (`number`), `status` (`'active'` | `'revoked'` | `'expired'`), `accessPinHash` (sparse indexed).
 
 #### Domain 8: Documents & Certificates (`apps/api/src/documents/document.schema.ts`)
+
 - **`DocumentAssetRecord` (`documentAssets`)**: `key` (required, unique S3 key), `assetType` (`'font'` | `'emblem'` | `'signature'` | `'background'`), `originalName` (`string`), `contentType` (`'font/ttf'` | `'font/otf'` | `'image/png'`), `size` (`number`, max 8MB), `sha256` (`string`, regex 64-hex), `rightsBasis` (`string`), `rightsConfirmedBy` (`string`), `status` (`'active'` | `'revoked'`). Compound index on `{ assetType: 1, status: 1, createdAt: -1 }`.
 - **`DocumentTemplateRecord` (`documentTemplates`)**: `code` (required, unique), `name` (`string`), `documentType` (`'transcript'` | `'certificate'`), `status` (`'active'` | `'archived'`).
 - **`DocumentTemplateVersionRecord` (`documentTemplateVersions`)**: `templateId` (indexed), `versionNumber` (`number`), `schemaVersion` (`1` | `2`), `status` (`'draft'` | `'published'` | `'retired'`), `canonicalJson` (`Record<string, unknown>`, Canvas AST), `fontAssetKeys` (`string[]`). Compound unique index on `{ templateId: 1, versionNumber: 1 }`.
@@ -765,6 +807,7 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
   - Compound Index: `{ studentId: 1, createdAt: -1 }`.
 
 #### Domain 9: Reporting & Analytical Exports (`apps/api/src/reports/report-export.schema.ts`)
+
 - **`ReportExportRecord` (`reportExports`)**:
   - `requestedBy`: `string` (required actor ID).
   - `requestHash`: `string` (required 64-hex SHA-256 payload digest).
@@ -781,6 +824,7 @@ The database layer utilizes **MongoDB 8.0** running as a Replica Set (`rs0`) pai
 - **`ReportExportSnapshotRecord` (`reportExportSnapshots`)**: `exportId` (`string`, indexed), `schoolId` (`string`), `programId` (`string`), `values` (`Record<string, string | number>`, select: false), `expiresAt` (`Date`). TTL index `report_export_snapshot_expiry` on `{ expiresAt: 1 }` (`expireAfterSeconds: 0`). Compound index `report_export_scope` on `{ exportId: 1, schoolId: 1, programId: 1 }`.
 
 #### Domain 10: System Settings & Auditing (`apps/api/src/audit/audit.schema.ts`, `apps/api/src/system-settings/*.schema.ts`)
+
 - **`AuditLogRecord` (`auditLogs`)**:
   - Model Options: `{ timestamps: { createdAt: true, updatedAt: false } }`. Append-only; mutation and deletion operations are strictly prohibited.
   - `requestId`: `string` (required, indexed UUIDv4).
@@ -835,24 +879,26 @@ To prevent database table locking or silent failure during production deployment
 ### 4.5 Redis 8.x & BullMQ Queue Specifications
 
 #### Engine Connection & Capability Gate
+
 - **Connection**: Managed via `REDIS_URL`. Enforces `maxRetriesPerRequest: null` on all BullMQ queue and worker instances.
 - **Engine Capability Gate (`packages/config/src/redis-capability.ts`)**: Evaluates `INFO server` and validates `redis_version >= 5.0.0` to reject outdated Windows Redis 3.x forks. API and Worker readiness probes fail closed if Redis capabilities fail.
 - **Key Prefix**: Unified namespace `'internship-transcript-v2'`.
 
 #### Queue Job Specifications
 
-| Queue Name | Job Name | Payload Schema | Retry & Backoff Policy | Max Retention |
-|---|---|---|---|---|
-| **`email`** | `send-delivery` | `{ deliveryId: string, invitationId: string }` | 5 attempts, exponential backoff (delay: 5000ms) | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
-| **`email`** | `test-smtp` | `{ testId: string }` | 3 attempts, exponential backoff (delay: 3000ms) | `removeOnComplete: 100`<br>`removeOnFail: 200` |
-| **`documents`** | `generate-pdf` | `{ documentId: string }` | 3 attempts, exponential backoff (delay: 10000ms) | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
-| **`report-exports`**| `generate-report`| `{ exportId: string }` | 3 attempts, exponential backoff (delay: 5000ms) | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
+| Queue Name           | Job Name          | Payload Schema                                 | Retry & Backoff Policy                           | Max Retention                                   |
+| -------------------- | ----------------- | ---------------------------------------------- | ------------------------------------------------ | ----------------------------------------------- |
+| **`email`**          | `send-delivery`   | `{ deliveryId: string, invitationId: string }` | 5 attempts, exponential backoff (delay: 5000ms)  | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
+| **`email`**          | `test-smtp`       | `{ testId: string }`                           | 3 attempts, exponential backoff (delay: 3000ms)  | `removeOnComplete: 100`<br>`removeOnFail: 200`  |
+| **`documents`**      | `generate-pdf`    | `{ documentId: string }`                       | 3 attempts, exponential backoff (delay: 10000ms) | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
+| **`report-exports`** | `generate-report` | `{ exportId: string }`                         | 3 attempts, exponential backoff (delay: 5000ms)  | `removeOnComplete: 500`<br>`removeOnFail: 1000` |
 
 ---
 
 ### 4.6 MinIO / AWS S3 Object Storage Architecture
 
 #### Security & Access Control
+
 - Storage accessed via `@aws-sdk/client-s3`.
 - Bucket specified via `S3_BUCKET` (e.g. `internship-transcript-dev` in development).
 - Configured with `S3_FORCE_PATH_STYLE: true` for local MinIO; set to `false` for AWS S3.
@@ -860,6 +906,7 @@ To prevent database table locking or silent failure during production deployment
 - All buckets are private. No public read ACLs exist.
 
 #### Object Key Hierarchies & Retention
+
 1. **Document Design Assets (`documentAssets`)**:
    - Key: `document-assets/${uuid}.${ext}` (or static `approved-fonts/tahoma.ttf`).
    - Content Types: `font/ttf`, `font/otf`, `image/png`. Max size: 8MB.
@@ -875,7 +922,9 @@ To prevent database table locking or silent failure during production deployment
    - Retention: 24 hours (`EXPORT_TTL_MS = 86_400_000`). Automatically purged from S3 by worker cleanup pass.
 
 #### Ephemeral Presigned URLs
+
 All client file downloads are brokered through short-lived presigned URLs generated via `@aws-sdk/s3-request-presigner` (`getSignedUrl` on `GetObjectCommand`):
+
 - **Generated PDF Transcripts & Certificates**: Presigned URL TTL is strictly capped at **300 seconds (5 minutes)** with forced content disposition (`attachment; filename="internship-document.pdf"`).
 - **Report Exports (CSV/XLSX)**: Presigned URL TTL is calculated as `Math.min(300, Math.floor((expiresAt - now) / 1000))` (capped at **300 seconds**).
 
@@ -886,6 +935,7 @@ All client file downloads are brokered through short-lived presigned URLs genera
 ### 5.1 Authentication, Authorization & Role Lifecycle
 
 #### MFU Central OpenID Connect (OIDC) PKCE Flow
+
 The system does not implement direct LDAP or Active Directory binds. Instead, enterprise institutional authentication is anchored on **MFU Central OIDC** with **PKCE (Proof Key for Code Exchange, RFC 7636)**:
 
 ```
@@ -939,6 +989,7 @@ Browser               AuthController          OidcService              MFU Centr
    - Route `POST /api/v2/auth/dev/login` is strictly gated behind `NODE_ENV === 'development'` and `AUTH_MODE === 'development'`. In production, returns `404 RESOURCE_NOT_FOUND`.
 
 #### JWT Token Lifecycle & Refresh Token Rotation (RTR)
+
 - **Access Token**: Signed via `jose` HS256 with `AUTH_JWT_SECRET`. TTL: 900 seconds (15 minutes). Carries `actor` profile and `sessionId`. Transported via `its_access` cookie or `Authorization: Bearer <token>`.
 - **Refresh Token**: Signed via `jose` HS256. TTL: 28,800 seconds (8 hours; default up to 7 days). Carries unique `jti` (UUIDv4). Transported via `its_refresh` cookie.
 - **RTR Atomic Invalidation (`apps/api/src/auth/session.service.ts:98-106`)**:
@@ -952,22 +1003,23 @@ Browser               AuthController          OidcService              MFU Centr
     },
     { $set: { revokedAt: new Date() } },
     { returnDocument: 'after' }
-  );
+  )
   ```
   If no matching unrevoked session exists, the refresh request fails with `401 AUTHENTICATION_REQUIRED`, preventing replay attacks. A new session document and token pair are issued atomically.
 
 #### RBAC Role Hierarchy & Permission Scopes
 
-| Role Key | Description | Scoped Capabilities | Explicitly Prohibited Operations |
-|---|---|---|---|
-| **`systemAdmin`** | System Administrator | Platform-wide administrative authority across users, academic structures, templates, campaigns, and SMTP settings. | `evaluations.draft`, `evaluations.submit`, `evaluations.reopen`, `documents.generateOwn`, `documents.readOwn` |
-| **`internshipStaff`**| University CWIE Staff | Full operational lifecycle: student import, company/evaluator registration, placement assignment, rubric publication, campaign dispatches, document generation. | Evaluation drafting/submission, system-level SMTP secret overrides |
-| **`coordinator`** | School/Program Coordinator| Read-heavy scoped monitoring across students, placements, cycles, evaluations, campaigns, and analytical reports within assigned school/program. | User management, template mutation, campaign triggering |
-| **`student`** | Enrolled Student | Self-service inspection of own placements, competency sets, completed evaluations, and own transcript/certificate generation. | Administrative configuration, mutating other students' data |
-| **`evaluator`** | Workplace Supervisor | External assessment execution: viewing assigned student rubrics, saving drafts, and submitting final evaluation. | All administrative, template, or campaign routes |
-| **`auditor`** | Quality & Audit Inspector | Read-only inspection across all modules: audit logs, students, placements, evaluations, and analytical exports. | All mutating operations (Create, Update, Delete, Trigger) |
+| Role Key              | Description                | Scoped Capabilities                                                                                                                                             | Explicitly Prohibited Operations                                                                              |
+| --------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **`systemAdmin`**     | System Administrator       | Platform-wide administrative authority across users, academic structures, templates, campaigns, and SMTP settings.                                              | `evaluations.draft`, `evaluations.submit`, `evaluations.reopen`, `documents.generateOwn`, `documents.readOwn` |
+| **`internshipStaff`** | University CWIE Staff      | Full operational lifecycle: student import, company/evaluator registration, placement assignment, rubric publication, campaign dispatches, document generation. | Evaluation drafting/submission, system-level SMTP secret overrides                                            |
+| **`coordinator`**     | School/Program Coordinator | Read-heavy scoped monitoring across students, placements, cycles, evaluations, campaigns, and analytical reports within assigned school/program.                | User management, template mutation, campaign triggering                                                       |
+| **`student`**         | Enrolled Student           | Self-service inspection of own placements, competency sets, completed evaluations, and own transcript/certificate generation.                                   | Administrative configuration, mutating other students' data                                                   |
+| **`evaluator`**       | Workplace Supervisor       | External assessment execution: viewing assigned student rubrics, saving drafts, and submitting final evaluation.                                                | All administrative, template, or campaign routes                                                              |
+| **`auditor`**         | Quality & Audit Inspector  | Read-only inspection across all modules: audit logs, students, placements, evaluations, and analytical exports.                                                 | All mutating operations (Create, Update, Delete, Trigger)                                                     |
 
 #### Sole System Administrator Protection Mutex
+
 In `apps/api/src/auth/users.service.ts` (lines 809–853), `assertSystemAdministratorRemainsActive` utilizes a dedicated MongoDB invariant record (`systemInvariants: 'active-system-administrators'`). The system strictly blocks archiving or removing the `systemAdmin` role from the last remaining administrator, throwing `SYSTEM_ADMIN_TRANSFER_REQUIRED`.
 
 ---
@@ -1031,28 +1083,34 @@ In `apps/api/src/auth/users.service.ts` (lines 809–853), `assertSystemAdminist
 ```
 
 #### Placement Binding & Academic Reference Locking
+
 - Placements link a student to an organization, academic term, school, program, and date range (`apps/api/src/members/members.service.ts:2639-2750`).
 - Compound unique index `{ studentId: 1, academicTermId: 1 }` guarantees that a student cannot have overlapping concurrent placements within the same academic term.
 - `lockActiveAcademicScope` (`apps/api/src/academic/academic-reference-lock.ts:11-125`) executes optimistic version locks on school and program documents (`$inc: { __v: 1 }`), ensuring academic structures cannot be deleted or mutated while placements are being bound.
 
 #### Assignment Creation & Rubric Snapshotting
+
 - When assignments are created (`apps/api/src/evaluations/evaluations.service.ts:1543-1650`), the system copies the active competency rubric hierarchy (`SectionRecord[]` containing `QuestionRecord[]`) directly into `assignment.questionSnapshot`.
 - Subsequent edits to competency rubric sets never mutate active or historical evaluations.
 
 #### Evaluation Cycle Freeze Protocol (`assertCycleWritable`)
+
 Before any evaluation draft is updated or submitted, `assertCycleWritable` queries:
+
 ```typescript
 const cycle = await this.cycles.findOne({
   _id: cycleId,
   status: 'active',
   opensAt: { $lte: at },
   closesAt: { $gt: at }
-});
-if (!cycle) throw new ConflictException({ code: 'CYCLE_CLOSED' });
+})
+if (!cycle) throw new ConflictException({ code: 'CYCLE_CLOSED' })
 ```
+
 Optimistically increments `cycle.__v`. If concurrent closure occurs, the transaction aborts with `CYCLE_CLOSED`. When an administrator calls `closeCycle`, all remaining pending or in-progress assignments cascade to status `'expired'` (`evaluations.service.ts:1298-1305`).
 
 #### Evaluator PIN Generation & Salted HMAC-SHA256
+
 - **PIN Generation (`apps/api/src/correspondence/pin.ts:20-26`)**: Generates a 16-digit numeric string using `randomInt(0, 10)`.
 - **Normalization**: Strips non-alphanumeric characters and converts to uppercase: `value.replace(/[^A-Za-z0-9]/gu, '').toUpperCase()`.
 - **Cryptographic Hashing Formula**:
@@ -1060,7 +1118,9 @@ Optimistically increments `cycle.__v`. If concurrent closure occurs, the transac
 - **Storage**: Saved in MongoDB as `v2:${digest}` (67 characters). Plaintext PINs are never stored in the database.
 
 #### Public Evaluation Submission & Scoring Policy (`mfu-category-mean-v1`)
+
 In `apps/api/src/evaluations/evaluations.service.ts` (lines 1912–2060):
+
 1. **Idempotency Gate**: Computes `idempotencyScopeKey` (`evaluation:${assignmentId}`). If already processed, returns existing evaluation document.
 2. **Transaction**: Validates answers against snapshot rubric scales (`scaleMin` to `scaleMax`).
 3. **Scoring Policy (`evaluation.scoring.ts`)**:
@@ -1086,6 +1146,7 @@ In `apps/api/src/evaluations/evaluations.service.ts` (lines 1912–2060):
 ### 5.3 Email Correspondence Engine & Transactional Outbox
 
 #### Transactional Outbox Architecture
+
 To guarantee zero message loss during Redis restarts or network partitions, the system implements a **Transactional Outbox Pattern**:
 
 ```
@@ -1118,11 +1179,13 @@ apps/api (CampaignService)                         apps/worker (EmailProcessor)
 - Job ID is deduplicated: `delivery-${deliveryId}`.
 
 #### Worker Execution & Crash Recovery Uncertainty Classification
+
 In `apps/worker/src/runtime/email.processor.ts`:
+
 1. **Lease Acquisition**: Worker claims delivery for 2 minutes (`DELIVERY_LEASE_MS = 120_000`) with a 30s heartbeat timer.
 2. **Two-Stage Crash Classification (`recoverExpiredDeliveries`)**:
    - **Pre-Socket Crash (`providerAttemptStartedAt` is NOT set)**:
-     Worker died *before* initiating SMTP connection. Delivery is marked `status: 'failed'`, `lastErrorCode: 'WORKER_INTERRUPTED_BEFORE_SEND'`, and automatically re-enqueued.
+     Worker died _before_ initiating SMTP connection. Delivery is marked `status: 'failed'`, `lastErrorCode: 'WORKER_INTERRUPTED_BEFORE_SEND'`, and automatically re-enqueued.
    - **Post-Socket Crash (`providerAttemptStartedAt` IS set)**:
      Worker contacted the SMTP server but died before receiving the `providerMessageId`. The email may have already arrived in the recipient's mailbox. Delivery is marked `status: 'uncertain'`, `lastErrorCode: 'PROVIDER_STATE_UNCERTAIN'`. **Automatic resend is suppressed** to protect corporate mentors from receiving duplicate invitation emails.
 3. **Database SMTP Secret Resolution**:
@@ -1133,7 +1196,9 @@ In `apps/worker/src/runtime/email.processor.ts`:
 ### 5.4 Document & Report Generation Pipelines
 
 #### Deterministic PDF Rendering Engine
+
 Official transcripts and certificates are synthesized via `pdf-lib` and `@pdf-lib/fontkit` (`apps/worker/src/runtime/document.processor.ts`):
+
 1. **Pre-condition Gatekeeper**: The student's placement must be in `'completed'` status (`DOCUMENT_COMPLETED_PLACEMENT_REQUIRED`), and the template must be `'published'`.
 2. **Snapshotting (`createIssueSnapshot`)**: Freezes student names (Thai/English), school, program, host organization, position title, internship dates, and evaluation scores into `sourceSnapshot`.
 3. **Deterministic Rendering**:
@@ -1146,15 +1211,16 @@ Official transcripts and certificates are synthesized via `pdf-lib` and `@pdf-li
    - Downloads are delivered via short-lived presigned URLs with **300 seconds TTL**.
 
 #### Analytical Report Pipelines (Excel & CSV)
+
 - **Student Directory (`studentDirectory`)**: Synthesizes bilingual Microsoft Excel (`.xlsx`) workbooks using `xlsx` (SheetJS) with 19 columns covering student profiles, host organizations, evaluators, and hard/soft skill competency scores.
 - **Assignment Overview (`assignments`)**: Generates UTF-8 CSV files prepended with the UTF-8 Byte Order Mark (`\uFEFF`) to prevent character distortion in Microsoft Excel on Windows.
 - **CSV Injection Defenses**:
   ```typescript
   function escapeCsvCell(value: string): string {
-    const safeValue = /^[\s]*[=+\-@\t\r\n]/.test(value) ? `'${value}` : value;
+    const safeValue = /^[\s]*[=+\-@\t\r\n]/.test(value) ? `'${value}` : value
     return /[",\r\n]/.test(safeValue)
       ? `"${safeValue.replaceAll('"', '""')}"`
-      : safeValue;
+      : safeValue
   }
   ```
   Cells starting with formula trigger characters (`=`, `+`, `-`, `@`, tab, newline) are escaped with a leading single quote (`'`).
@@ -1165,15 +1231,15 @@ Official transcripts and certificates are synthesized via `pdf-lib` and `@pdf-li
 
 ### 6.1 Cryptographic Algorithms & Key Usage Matrix
 
-| Cryptographic Mechanism | Algorithm / Standard | Key / Secret Source | Key Length / Output | Target Protected Data | Location in Codebase |
-|---|---|---|---|---|---|
-| **Database SMTP Credential Encryption** | **AES-256-GCM** | `SMTP_SETTINGS_ENCRYPTION_KEY` | 256-bit key (64 hex characters), 12-byte IV, 16-byte auth tag | Outgoing SMTP server passwords stored in MongoDB | `packages/config/src/smtp-secret.ts`<br>`apps/api/src/system-settings/smtp-settings.service.ts` |
-| **Evaluator Access PIN Credentialing** | **HMAC-SHA256** (with domain prefix) | `INVITATION_TOKEN_PEPPER` | 256-bit pepper, 67-char output prefixed with `v2:` | 16-digit public evaluator access PINs | `apps/api/src/correspondence/pin.ts` |
-| **Session Tracking & RTR** | **SHA-256** | N/A (Cryptographic digest) | 256-bit hash (64 hex characters) | Refresh token UUID `jti` stored in `sessions.tokenHash` | `apps/api/src/auth/session.service.ts` |
-| **API & Session Tokens** | **JWT (HS256)** via `jose` | `AUTH_JWT_SECRET` | 512-bit / 64-byte secret recommended | Access tokens (15m TTL), Refresh tokens (8h TTL), Transient tokens | `apps/api/src/auth/token.service.ts` |
-| **OIDC Single Sign-On** | **PKCE S256** | High-entropy crypto random verifier | SHA-256 base64url challenge | MFU Central OIDC authorization code exchange | `apps/api/src/auth/oidc.service.ts` |
-| **Container Image Supply Chain** | **Cosign ECDSA / OIDC** | GitHub Actions OIDC Sigstore | Standard ECDSA P-256 signature | Docker production images in GitHub Container Registry | `infrastructure/validate-production-images.mjs` |
-| **Storage Asset Integrity** | **SHA-256** | File buffer content | 64-character hexadecimal digest | Document fonts, emblem images, generated PDFs, export files | `apps/worker/src/runtime/document.processor.ts`<br>`apps/api/src/documents/documents.service.ts` |
+| Cryptographic Mechanism                 | Algorithm / Standard                 | Key / Secret Source                 | Key Length / Output                                           | Target Protected Data                                              | Location in Codebase                                                                             |
+| --------------------------------------- | ------------------------------------ | ----------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| **Database SMTP Credential Encryption** | **AES-256-GCM**                      | `SMTP_SETTINGS_ENCRYPTION_KEY`      | 256-bit key (64 hex characters), 12-byte IV, 16-byte auth tag | Outgoing SMTP server passwords stored in MongoDB                   | `packages/config/src/smtp-secret.ts`<br>`apps/api/src/system-settings/smtp-settings.service.ts`  |
+| **Evaluator Access PIN Credentialing**  | **HMAC-SHA256** (with domain prefix) | `INVITATION_TOKEN_PEPPER`           | 256-bit pepper, 67-char output prefixed with `v2:`            | 16-digit public evaluator access PINs                              | `apps/api/src/correspondence/pin.ts`                                                             |
+| **Session Tracking & RTR**              | **SHA-256**                          | N/A (Cryptographic digest)          | 256-bit hash (64 hex characters)                              | Refresh token UUID `jti` stored in `sessions.tokenHash`            | `apps/api/src/auth/session.service.ts`                                                           |
+| **API & Session Tokens**                | **JWT (HS256)** via `jose`           | `AUTH_JWT_SECRET`                   | 512-bit / 64-byte secret recommended                          | Access tokens (15m TTL), Refresh tokens (8h TTL), Transient tokens | `apps/api/src/auth/token.service.ts`                                                             |
+| **OIDC Single Sign-On**                 | **PKCE S256**                        | High-entropy crypto random verifier | SHA-256 base64url challenge                                   | MFU Central OIDC authorization code exchange                       | `apps/api/src/auth/oidc.service.ts`                                                              |
+| **Container Image Supply Chain**        | **Cosign ECDSA / OIDC**              | GitHub Actions OIDC Sigstore        | Standard ECDSA P-256 signature                                | Docker production images in GitHub Container Registry              | `infrastructure/validate-production-images.mjs`                                                  |
+| **Storage Asset Integrity**             | **SHA-256**                          | File buffer content                 | 64-character hexadecimal digest                               | Document fonts, emblem images, generated PDFs, export files        | `apps/worker/src/runtime/document.processor.ts`<br>`apps/api/src/documents/documents.service.ts` |
 
 ---
 
@@ -1190,6 +1256,7 @@ Official transcripts and certificates are synthesized via `pdf-lib` and `@pdf-li
 ### 6.3 Redis Fixed-Window Lua Rate Limiter
 
 The authentication and public evaluation endpoints are protected by an atomic Lua script executed in Redis (`apps/api/src/auth/auth-rate-limit.store.ts`):
+
 ```lua
 local limit = tonumber(ARGV[1])
 local windowMs = tonumber(ARGV[2])
@@ -1210,6 +1277,7 @@ for _, key in ipairs(KEYS) do
 end
 return { limited, retryAfterMs }
 ```
+
 - **Key Namespace**: `internship-transcript-v2:${NODE_ENV}:auth-rate-limit:v1:${fingerprint}`.
 - **Fingerprinting**: `createHmac('sha256', AUTH_JWT_SECRET).update(logicalKey).digest('hex')`. Logical keys combine client IP addresses and route endpoints.
 - **Limits**: Public evaluator PIN verification is restricted to **10 attempts per 15 minutes**. When exceeded, the system responds with `429 RATE_LIMITED` and a `Retry-After` header.
@@ -1227,49 +1295,50 @@ return { limited, retryAfterMs }
 
 ### 7.1 Comprehensive Variable Matrix (Dev vs. Prod Constraints)
 
-| Environment Variable | Description & Purpose | Development Default | Production Requirement & Constraints |
-|---|---|---|---|
-| `NODE_ENV` | Runtime environment mode | `development` | Must be `production` |
-| `CONTAINERIZED` | Container environment flag | `false` | Set to `true` inside Docker containers |
-| `PORT` | API HTTP listening port | `8081` | Default `8081` (Bound to `127.0.0.1` via Compose) |
-| `MONGODB_URI` | MongoDB connection URI string | `mongodb://localhost:27017/internship_transcript_v2_dev` | Production replica set URI with TLS (`ssl=true&replicaSet=...`) |
-| `REDIS_URL` | Redis connection URI string | `redis://localhost:6379` | Remote Redis URI (Requires Redis `>=5.0.0`) |
-| `TRUSTED_PROXY_CIDRS` | Comma-separated CIDR proxy IP ranges | `""` (Empty; trusts loopback in dev) | Explicit load balancer / reverse proxy CIDR ranges |
-| `PUBLIC_WEB_URL` | Canonical public web URL | `http://localhost:8080` | Public production domain (`https://...`) |
-| `NUXT_PUBLIC_API_BASE_URL` | Client-side API base URL | `http://localhost:8081/api/v2` | Public API domain (`https://.../api/v2`) |
-| `API_INTERNAL_BASE_URL` | Internal SSR API base URL | `http://localhost:8081/api/v2` | Internal Docker DNS route (`http://api:8081/api/v2`) |
-| `CORS_ORIGINS` | Permitted CORS origins (comma-separated)| `http://localhost:8080,http://127.0.0.1:8080`| Explicit public web domain (`https://...`) |
-| `AUTH_MODE` | Authentication mode | `development` (Enables `/auth/dev/login`) | Must be `oidc` in production |
-| `AUTH_JWT_SECRET` | HS256 secret for signing JWTs | Insecure development string | 64-character high-entropy secret from Secret Manager |
-| `INVITATION_TOKEN_PEPPER` | HMAC-SHA256 pepper for PIN hashing | Insecure development string | 64-character high-entropy pepper from Secret Manager |
-| `ACCESS_TOKEN_TTL_SECONDS` | Access token lifespan in seconds | `900` (15 minutes) | `900` (15 minutes) |
-| `REFRESH_TOKEN_TTL_SECONDS`| Refresh token lifespan in seconds | `28800` (8 hours) | `28800` (8 hours; up to 604800 / 7 days) |
-| `OIDC_ISSUER_URL` | MFU Central OIDC IdP Issuer URL | `""` | Official MFU OIDC discovery URL (`https://...`) |
-| `OIDC_CLIENT_ID` | MFU OIDC OAuth Client ID | `""` | Provisioned institutional Client ID |
-| `OIDC_CLIENT_SECRET` | MFU OIDC OAuth Client Secret | `""` | Injected securely from Secret Manager |
-| `OIDC_REDIRECT_URI` | MFU OIDC OAuth Callback URL | `""` | `https://<API_DOMAIN>/api/v2/auth/callback` |
-| `COOKIE_SECURE` | Enforces Secure flag on HTTP cookies | `false` | Must be `true` |
-| `MAIL_DELIVERY_MODE` | Email delivery mechanism | `capture` (Routes to local Mailpit) | Must be `smtp` |
-| `SMTP_HOST` | Fallback SMTP relay hostname | `localhost` | Production institutional SMTP relay |
-| `SMTP_PORT` | Fallback SMTP relay port | `1025` (Mailpit SMTP) | `587` (Submission) or `465` (SMTPS) |
-| `SMTP_SECURE` | Fallback SMTP TLS flag | `false` | `false` for STARTTLS (587), `true` for SMTPS (465) |
-| `SMTP_USER` | Fallback SMTP username | `""` | Injected securely from Secret Manager |
-| `SMTP_PASSWORD` | Fallback SMTP password | `""` | Injected securely from Secret Manager |
-| `SMTP_FROM` | Fallback default email sender header | `Internship Transcript Dev <no-reply@localhost>`| Official university sender header |
-| `S3_ENDPOINT` | MinIO / AWS S3 endpoint URL | `http://localhost:9000` | Production S3 endpoint (`https://...`) |
-| `S3_REGION` | S3 region identifier | `ap-southeast-1` | Cloud region (e.g. `ap-southeast-1`) |
-| `S3_BUCKET` | S3 private storage bucket name | `internship-transcript-dev` | Private production bucket name |
-| `S3_ACCESS_KEY_ID` | S3 IAM access key ID | `minioadmin` | Injected securely from Secret Manager |
-| `S3_SECRET_ACCESS_KEY` | S3 IAM secret access key | `minioadmin` | Injected securely from Secret Manager |
-| `S3_FORCE_PATH_STYLE` | Enforces path-style S3 URL format | `true` (Mandatory for MinIO) | `false` (For AWS S3) |
-| `LOG_LEVEL` | Pino logger verbosity | `debug` | `info` or `warn` |
-| `SMTP_SETTINGS_ENCRYPTION_KEY`| AES-256-GCM hex encryption key | `0123456789abcdef...` (64 hex characters) | 64-character hexadecimal key from Secret Manager |
+| Environment Variable           | Description & Purpose                    | Development Default                                      | Production Requirement & Constraints                            |
+| ------------------------------ | ---------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
+| `NODE_ENV`                     | Runtime environment mode                 | `development`                                            | Must be `production`                                            |
+| `CONTAINERIZED`                | Container environment flag               | `false`                                                  | Set to `true` inside Docker containers                          |
+| `PORT`                         | API HTTP listening port                  | `8081`                                                   | Default `8081` (Bound to `127.0.0.1` via Compose)               |
+| `MONGODB_URI`                  | MongoDB connection URI string            | `mongodb://localhost:27017/internship_transcript_v2_dev` | Production replica set URI with TLS (`ssl=true&replicaSet=...`) |
+| `REDIS_URL`                    | Redis connection URI string              | `redis://localhost:6379`                                 | Remote Redis URI (Requires Redis `>=5.0.0`)                     |
+| `TRUSTED_PROXY_CIDRS`          | Comma-separated CIDR proxy IP ranges     | `""` (Empty; trusts loopback in dev)                     | Explicit load balancer / reverse proxy CIDR ranges              |
+| `PUBLIC_WEB_URL`               | Canonical public web URL                 | `http://localhost:8080`                                  | Public production domain (`https://...`)                        |
+| `NUXT_PUBLIC_API_BASE_URL`     | Client-side API base URL                 | `http://localhost:8081/api/v2`                           | Public API domain (`https://.../api/v2`)                        |
+| `API_INTERNAL_BASE_URL`        | Internal SSR API base URL                | `http://localhost:8081/api/v2`                           | Internal Docker DNS route (`http://api:8081/api/v2`)            |
+| `CORS_ORIGINS`                 | Permitted CORS origins (comma-separated) | `http://localhost:8080,http://127.0.0.1:8080`            | Explicit public web domain (`https://...`)                      |
+| `AUTH_MODE`                    | Authentication mode                      | `development` (Enables `/auth/dev/login`)                | Must be `oidc` in production                                    |
+| `AUTH_JWT_SECRET`              | HS256 secret for signing JWTs            | Insecure development string                              | 64-character high-entropy secret from Secret Manager            |
+| `INVITATION_TOKEN_PEPPER`      | HMAC-SHA256 pepper for PIN hashing       | Insecure development string                              | 64-character high-entropy pepper from Secret Manager            |
+| `ACCESS_TOKEN_TTL_SECONDS`     | Access token lifespan in seconds         | `900` (15 minutes)                                       | `900` (15 minutes)                                              |
+| `REFRESH_TOKEN_TTL_SECONDS`    | Refresh token lifespan in seconds        | `28800` (8 hours)                                        | `28800` (8 hours; up to 604800 / 7 days)                        |
+| `OIDC_ISSUER_URL`              | MFU Central OIDC IdP Issuer URL          | `""`                                                     | Official MFU OIDC discovery URL (`https://...`)                 |
+| `OIDC_CLIENT_ID`               | MFU OIDC OAuth Client ID                 | `""`                                                     | Provisioned institutional Client ID                             |
+| `OIDC_CLIENT_SECRET`           | MFU OIDC OAuth Client Secret             | `""`                                                     | Injected securely from Secret Manager                           |
+| `OIDC_REDIRECT_URI`            | MFU OIDC OAuth Callback URL              | `""`                                                     | `https://<API_DOMAIN>/api/v2/auth/callback`                     |
+| `COOKIE_SECURE`                | Enforces Secure flag on HTTP cookies     | `false`                                                  | Must be `true`                                                  |
+| `MAIL_DELIVERY_MODE`           | Email delivery mechanism                 | `capture` (Routes to local Mailpit)                      | Must be `smtp`                                                  |
+| `SMTP_HOST`                    | Fallback SMTP relay hostname             | `localhost`                                              | Production institutional SMTP relay                             |
+| `SMTP_PORT`                    | Fallback SMTP relay port                 | `1025` (Mailpit SMTP)                                    | `587` (Submission) or `465` (SMTPS)                             |
+| `SMTP_SECURE`                  | Fallback SMTP TLS flag                   | `false`                                                  | `false` for STARTTLS (587), `true` for SMTPS (465)              |
+| `SMTP_USER`                    | Fallback SMTP username                   | `""`                                                     | Injected securely from Secret Manager                           |
+| `SMTP_PASSWORD`                | Fallback SMTP password                   | `""`                                                     | Injected securely from Secret Manager                           |
+| `SMTP_FROM`                    | Fallback default email sender header     | `Internship Transcript Dev <no-reply@localhost>`         | Official university sender header                               |
+| `S3_ENDPOINT`                  | MinIO / AWS S3 endpoint URL              | `http://localhost:9000`                                  | Production S3 endpoint (`https://...`)                          |
+| `S3_REGION`                    | S3 region identifier                     | `ap-southeast-1`                                         | Cloud region (e.g. `ap-southeast-1`)                            |
+| `S3_BUCKET`                    | S3 private storage bucket name           | `internship-transcript-dev`                              | Private production bucket name                                  |
+| `S3_ACCESS_KEY_ID`             | S3 IAM access key ID                     | `minioadmin`                                             | Injected securely from Secret Manager                           |
+| `S3_SECRET_ACCESS_KEY`         | S3 IAM secret access key                 | `minioadmin`                                             | Injected securely from Secret Manager                           |
+| `S3_FORCE_PATH_STYLE`          | Enforces path-style S3 URL format        | `true` (Mandatory for MinIO)                             | `false` (For AWS S3)                                            |
+| `LOG_LEVEL`                    | Pino logger verbosity                    | `debug`                                                  | `info` or `warn`                                                |
+| `SMTP_SETTINGS_ENCRYPTION_KEY` | AES-256-GCM hex encryption key           | `0123456789abcdef...` (64 hex characters)                | 64-character hexadecimal key from Secret Manager                |
 
 ---
 
 ### 7.2 Environment Isolation Invariants
 
 `packages/config/src/index.ts` enforces strict environment isolation invariants during application bootstrap:
+
 1. **Development Host Assertion**: In development (`NODE_ENV === 'development'`), `MONGODB_URI` is prohibited from connecting to remote cloud databases (e.g. Atlas) without explicit overrides, preventing accidental contamination of remote datasets.
 2. **Production Hygiene Assertion**: In production (`NODE_ENV === 'production'`), the system fails closed immediately if:
    - Any secret matches placeholder patterns (e.g. `<SET_...>`, `<CHANGE_ME>`, `development-only-...`).
@@ -1284,29 +1353,29 @@ return { limited, retryAfterMs }
 
 ### 8.1 Codebase Citations & Line-Level Audit Index
 
-| Subsystem / Invariant | File Path | Line Range | Architectural Verification Anchor |
-|---|---|---|---|
-| **Node Runtime Assertion** | `apps/api/src/main.ts` | 20–22 | `assertSupportedNodeRuntime(process.versions.node)` enforces Node 24 |
-| **API Default-Deny Guard** | `apps/api/src/auth/access.guard.ts` | 55–58 | Throws `403 PERMISSION_DENIED` if route lacks permission decorators |
-| **Dual Token Transport** | `apps/api/src/auth/access.guard.ts` | 60–64 | Reads `Authorization: Bearer` or cookie `its_access` |
-| **Refresh Token Rotation (RTR)**| `apps/api/src/auth/session.service.ts` | 98–106 | Atomic `findOneAndUpdate` revokes matched session via `tokenHash` |
-| **OIDC PKCE S256 Challenge** | `apps/api/src/auth/oidc.service.ts` | 40–69 | Generates `codeVerifier`, `calculatePKCECodeChallenge`, transient JWT |
-| **Dev Auth Sandboxing** | `apps/api/src/auth/dev-auth.controller.ts`| 36–41 | Throws `404 RESOURCE_NOT_FOUND` if `NODE_ENV !== 'development'` |
-| **Last Admin Protection Mutex**| `apps/api/src/auth/users.service.ts` | 809–853 | Blocks deleting or demoting sole active `systemAdmin` |
-| **Unique Placement Index** | `apps/api/src/members/members.schema.ts` | 188–189 | Compound unique index `{ studentId: 1, academicTermId: 1 }` |
-| **16-Digit PIN Generation** | `apps/api/src/correspondence/pin.ts` | 20–26 | Generates 16 digits using `randomInt(0, 10)` |
-| **Salted HMAC-SHA256 PIN** | `apps/api/src/correspondence/pin.ts` | 11–18 | `v2:${createHmac('sha256', secret).update(...).digest('hex')}` |
-| **Evaluation Cycle Freeze** | `apps/api/src/evaluations/evaluations.service.ts` | 2085–2118 | `assertCycleWritable` checks date range and increments `__v` |
-| **Immutable Reopen Lock** | `apps/api/src/evaluations/evaluations.service.ts` | 2062–2067 | `reopen(): never` throws `REOPEN_POLICY_NOT_CONFIGURED` |
-| **Transactional Outbox** | `apps/api/src/correspondence/campaign.service.ts` | 530–535 | Outbox pattern: MongoDB durability with best-effort BullMQ queueing |
-| **Worker Queue Concurrency** | `apps/worker/src/runtime/worker-runtime.ts` | 124–147 | Queues `email` (5), `documents` (2), `report-exports` (2) |
-| **60s Recovery Heartbeat** | `apps/worker/src/runtime/worker-runtime.ts` | 176–190 | `setInterval(..., 60_000)` sweeps expired leases across all workers |
-| **Post-Socket Crash Safety** | `apps/worker/src/runtime/email.processor.ts` | 100–125 | Marks `providerAttemptStartedAt` crash as `'uncertain'` (No duplicate send) |
-| **AES-256-GCM SMTP Decryption**| `packages/config/src/smtp-secret.ts` | 44–59 | Authenticated decryption via `createDecipheriv('aes-256-gcm', ...)` |
-| **Deterministic PDF Engine** | `apps/worker/src/runtime/document.processor.ts`| 205–234 | `pdf-lib` + `fontkit`, embedded Tahoma TTF, metadata date = `new Date(0)` |
-| **Presigned URL 300s TTL** | `apps/api/src/documents/documents.service.ts` | 1195–1198 | `getSignedUrl(s3, command, { expiresIn: 300 })` |
-| **CSV Formula Escaping** | `apps/worker/src/runtime/report-export.csv.ts` | 15–25 | Prefixes formula triggers (`=`, `+`, `-`, `@`) with single quote (`'`) |
-| **Cosign Supply Chain Gate** | `infrastructure/validate-production-images.mjs`| 45–66 | Executes `cosign verify` against GitHub Actions OIDC identity (file total: 80 lines) |
+| Subsystem / Invariant            | File Path                                         | Line Range | Architectural Verification Anchor                                                    |
+| -------------------------------- | ------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------ |
+| **Node Runtime Assertion**       | `apps/api/src/main.ts`                            | 20–22      | `assertSupportedNodeRuntime(process.versions.node)` enforces Node 24                 |
+| **API Default-Deny Guard**       | `apps/api/src/auth/access.guard.ts`               | 55–58      | Throws `403 PERMISSION_DENIED` if route lacks permission decorators                  |
+| **Dual Token Transport**         | `apps/api/src/auth/access.guard.ts`               | 60–64      | Reads `Authorization: Bearer` or cookie `its_access`                                 |
+| **Refresh Token Rotation (RTR)** | `apps/api/src/auth/session.service.ts`            | 98–106     | Atomic `findOneAndUpdate` revokes matched session via `tokenHash`                    |
+| **OIDC PKCE S256 Challenge**     | `apps/api/src/auth/oidc.service.ts`               | 40–69      | Generates `codeVerifier`, `calculatePKCECodeChallenge`, transient JWT                |
+| **Dev Auth Sandboxing**          | `apps/api/src/auth/dev-auth.controller.ts`        | 36–41      | Throws `404 RESOURCE_NOT_FOUND` if `NODE_ENV !== 'development'`                      |
+| **Last Admin Protection Mutex**  | `apps/api/src/auth/users.service.ts`              | 809–853    | Blocks deleting or demoting sole active `systemAdmin`                                |
+| **Unique Placement Index**       | `apps/api/src/members/members.schema.ts`          | 188–189    | Compound unique index `{ studentId: 1, academicTermId: 1 }`                          |
+| **16-Digit PIN Generation**      | `apps/api/src/correspondence/pin.ts`              | 20–26      | Generates 16 digits using `randomInt(0, 10)`                                         |
+| **Salted HMAC-SHA256 PIN**       | `apps/api/src/correspondence/pin.ts`              | 11–18      | `v2:${createHmac('sha256', secret).update(...).digest('hex')}`                       |
+| **Evaluation Cycle Freeze**      | `apps/api/src/evaluations/evaluations.service.ts` | 2085–2118  | `assertCycleWritable` checks date range and increments `__v`                         |
+| **Immutable Reopen Lock**        | `apps/api/src/evaluations/evaluations.service.ts` | 2062–2067  | `reopen(): never` throws `REOPEN_POLICY_NOT_CONFIGURED`                              |
+| **Transactional Outbox**         | `apps/api/src/correspondence/campaign.service.ts` | 530–535    | Outbox pattern: MongoDB durability with best-effort BullMQ queueing                  |
+| **Worker Queue Concurrency**     | `apps/worker/src/runtime/worker-runtime.ts`       | 124–147    | Queues `email` (5), `documents` (2), `report-exports` (2)                            |
+| **60s Recovery Heartbeat**       | `apps/worker/src/runtime/worker-runtime.ts`       | 176–190    | `setInterval(..., 60_000)` sweeps expired leases across all workers                  |
+| **Post-Socket Crash Safety**     | `apps/worker/src/runtime/email.processor.ts`      | 100–125    | Marks `providerAttemptStartedAt` crash as `'uncertain'` (No duplicate send)          |
+| **AES-256-GCM SMTP Decryption**  | `packages/config/src/smtp-secret.ts`              | 44–59      | Authenticated decryption via `createDecipheriv('aes-256-gcm', ...)`                  |
+| **Deterministic PDF Engine**     | `apps/worker/src/runtime/document.processor.ts`   | 205–234    | `pdf-lib` + `fontkit`, embedded Tahoma TTF, metadata date = `new Date(0)`            |
+| **Presigned URL 300s TTL**       | `apps/api/src/documents/documents.service.ts`     | 1195–1198  | `getSignedUrl(s3, command, { expiresIn: 300 })`                                      |
+| **CSV Formula Escaping**         | `apps/worker/src/runtime/report-export.csv.ts`    | 15–25      | Prefixes formula triggers (`=`, `+`, `-`, `@`) with single quote (`'`)               |
+| **Cosign Supply Chain Gate**     | `infrastructure/validate-production-images.mjs`   | 45–66      | Executes `cosign verify` against GitHub Actions OIDC identity (file total: 80 lines) |
 
 ---
 
@@ -1340,4 +1409,4 @@ Select-String -Path "infrastructure/validate-production-images.mjs" -Pattern "co
 
 ---
 
-*This concludes the master technical reference document for the Internship Transcript System V2.*
+_This concludes the master technical reference document for the Internship Transcript System V2._

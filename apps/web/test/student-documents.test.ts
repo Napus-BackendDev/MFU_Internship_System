@@ -132,6 +132,36 @@ describe('student generated-document state', () => {
     ).toBeNull()
   })
 
+  it('allows a new request after the published template changes without losing prior files', () => {
+    const oldDocument = {
+      id: 'old-file',
+      documentType: 'transcript' as const,
+      evaluationIds: ['evaluation'],
+      templateVersionId: 'old-version',
+      status: 'ready' as const,
+      createdAt: '2026-09-01T00:00:00.000Z'
+    }
+    expect(
+      findDocumentForEvaluationSet(
+        [oldDocument],
+        'transcript',
+        ['evaluation'],
+        'new-version'
+      )
+    ).toBeNull()
+    expect(
+      findDocumentForEvaluationSet(
+        [oldDocument],
+        'transcript',
+        ['evaluation'],
+        'old-version'
+      )?.id
+    ).toBe('old-file')
+    expect(
+      getStudentDocumentState([oldDocument], 'transcript').downloadable?.id
+    ).toBe('old-file')
+  })
+
   it('creates stable scoped-generation keys for identical normalized inputs', async () => {
     const first = await createStudentDocumentIdempotencyKey({
       studentId: 'student-1',

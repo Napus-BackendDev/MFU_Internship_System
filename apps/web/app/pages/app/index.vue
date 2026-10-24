@@ -147,13 +147,13 @@ const {
   error: overviewError,
   pending: overviewPending,
   refresh: refreshOverview
-} = await useAsyncData(
+} = useAsyncData(
   'overview',
   () =>
     isStudent.value
       ? Promise.resolve(null)
       : api<Overview>('/reports/overview'),
-  { watch: [isStudent] }
+  { lazy: true, watch: [isStudent] }
 )
 
 // Student Dynamic Data
@@ -184,7 +184,8 @@ const certificateSourceDocument = computed(() =>
     ? findDocumentForEvaluationSet(
         studentDocs.value,
         'certificate',
-        documentSource.value.evaluationIds
+        documentSource.value.evaluationIds,
+        documentTemplateAvailability.value.certificate.versionId ?? ''
       )
     : null
 )
@@ -193,7 +194,8 @@ const transcriptSourceDocument = computed(() =>
     ? findDocumentForEvaluationSet(
         studentDocs.value,
         'transcript',
-        documentSource.value.evaluationIds
+        documentSource.value.evaluationIds,
+        documentTemplateAvailability.value.transcript.versionId ?? ''
       )
     : null
 )
@@ -363,7 +365,7 @@ async function loadStudentData(): Promise<void> {
         (placement) =>
           (placement.studentId === studentProfile.value?.id ||
             placement.studentId === studentProfile.value?.studentId) &&
-          placement.status === 'completed'
+          ['active', 'completed'].includes(placement.status)
       )
       .map((placement) => ({
         placement,
@@ -421,7 +423,7 @@ async function loadStudentData(): Promise<void> {
         'พบรอบฝึกงานที่จบแล้วและมีผลประเมินหลายรอบ กรุณาติดต่อเจ้าหน้าที่ให้ตรวจสอบก่อนออกเอกสาร'
     } else {
       documentSourceUnavailableReason.value =
-        'เอกสารจะออกได้เมื่อสถานประกอบการปิดรอบฝึกงานและส่งผลประเมินแล้ว'
+        'เอกสารจะออกได้เมื่อสถานประกอบการส่งผลประเมินเรียบร้อยแล้ว'
     }
 
     if (

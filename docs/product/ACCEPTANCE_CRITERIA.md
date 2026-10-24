@@ -300,6 +300,11 @@ Trace: `FR-EVL-002`, TOR `AT-03`
 **And** the system rejects direct edit or creates Draft version 2 through the documented operation  
 **And** existing assignments continue referencing version 1.
 
+Owner decision (2026-10-21): competency-set Thai and English names can be renamed;
+the set code remains fixed after creation. Renaming requires `competencies.manage`
+over every section in every version (or tenant management), records an audit event,
+and does not modify Published questions or assignment snapshots.
+
 ### AC-EVL-003 — Publish validates complete competency contract
 
 Trace: `FR-EVL-001`, `FR-EVL-002`

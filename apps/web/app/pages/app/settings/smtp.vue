@@ -14,6 +14,15 @@ interface SmtpSettings {
   readonly from: string
   readonly passwordConfigured: boolean
   readonly effectivePasswordConfigured: boolean
+  readonly deliveryMode?: 'capture' | 'smtp'
+  readonly effectiveConnection?: {
+    readonly host: string
+    readonly port: number
+    readonly secure: boolean
+    readonly from: string
+    readonly usernameConfigured: boolean
+    readonly version: number
+  }
   readonly version: number
   readonly updatedAt: string | null
   readonly updatedBy: string | null
@@ -37,7 +46,11 @@ const formSchema = z.object({
     .min(1, 'กรุณาระบุ SMTP host')
     .max(253)
     .regex(/^[a-zA-Z0-9.-]+$/, 'ระบุ hostname หรือ IP address เท่านั้น'),
-  port: z.coerce.number().int().min(1).max(65_535),
+  port: z.coerce
+    .number()
+    .int('พอร์ตต้องเป็นจำนวนเต็ม')
+    .min(1, 'พอร์ตต้องอยู่ระหว่าง 1–65535')
+    .max(65_535, 'พอร์ตต้องอยู่ระหว่าง 1–65535'),
   secure: z.boolean(),
   username: z.string().trim().max(320),
   password: z.string().max(1024),
@@ -56,11 +69,10 @@ type TestForm = z.infer<typeof testSchema>
 const api = useApi()
 const auth = useAuthStore()
 const toast = useToast()
-const runtimeConfig = useRuntimeConfig()
 const canManage = computed(() => auth.actor?.roles.includes('systemAdmin'))
-const isProduction = computed(
-  () =>
-    String(runtimeConfig.public.appEnvironment).toLowerCase() === 'production'
+const isCaptureMode = computed(() => settings.value?.deliveryMode === 'capture')
+const effectiveConnection = computed(
+  () => settings.value?.effectiveConnection ?? settings.value
 )
 
 const showPassword = ref(false)
@@ -136,11 +148,13 @@ const testColor = computed(() => {
 })
 
 const connectionLabel = computed(() =>
-  settings.value ? `${settings.value.host}:${settings.value.port}` : '—'
+  effectiveConnection.value
+    ? `${effectiveConnection.value.host}:${effectiveConnection.value.port}`
+    : '—'
 )
 
 const securityLabel = computed(() =>
-  settings.value?.secure
+  effectiveConnection.value?.secure
     ? 'TLS ตั้งแต่เริ่มเชื่อมต่อ'
     : 'TLS ตามความสามารถของเซิร์ฟเวอร์'
 )
@@ -149,7 +163,11 @@ const credentialLabel = computed(() => {
   if (settings.value?.effectivePasswordConfigured) {
     return 'ใช้ข้อมูลรับรองที่เข้ารหัส'
   }
-  if (settings.value?.username) return 'ระบุ Username โดยไม่มีรหัสผ่าน'
+  if (
+    settings.value?.effectiveConnection?.usernameConfigured ??
+    Boolean(settings.value?.username)
+  )
+    return 'ระบุ Username โดยไม่มีรหัสผ่าน'
   return 'ไม่ต้องยืนยันตัวตน'
 })
 
@@ -317,12 +335,9 @@ async function pollTest(testId: string): Promise<void> {
     if (result.status === 'sent') {
       toast.add({
         title: 'ส่งอีเมลทดสอบสำเร็จ',
-        description:
-          isProduction.value ||
-          (settings.value?.host !== 'localhost' &&
-            settings.value?.host !== 'mailpit')
-            ? 'ตรวจสอบกล่องจดหมายผู้รับ'
-            : 'ตรวจสอบอีเมลใน Mailpit ที่ localhost:8025',
+        description: isCaptureMode.value
+          ? 'ตรวจสอบอีเมลในระบบรับอีเมลทดสอบที่ตั้งค่าไว้'
+          : 'ตรวจสอบกล่องจดหมายผู้รับ',
         color: 'success',
         icon: 'i-lucide-send'
       })
@@ -464,24 +479,17 @@ function readApiError(error: unknown): string {
 
     <template v-else>
       <UAlert
-        :color="isProduction ? 'warning' : 'info'"
+        :color="isCaptureMode ? 'info' : 'warning'"
         :description="
-          isProduction ||
-          (settings?.host !== 'localhost' && settings?.host !== 'mailpit')
-            ? 'การส่งอีเมลทดสอบจะส่งไปยังผู้รับจริงผ่าน SMTP ที่กำหนด ตรวจสอบผู้รับและค่าการเชื่อมต่อก่อนกดส่ง'
-            : 'Development โหมด Localhost/Mailpit อีเมลจะถูกดักจับที่ Mailpit'
+          isCaptureMode
+            ? 'อีเมลจะส่งเข้าระบบรับอีเมลทดสอบบนเครือข่ายภายในตามการตั้งค่าเซิร์ฟเวอร์'
+            : 'การส่งอีเมลทดสอบจะส่งไปยังผู้รับจริงผ่าน SMTP ที่กำหนด ตรวจสอบผู้รับและค่าการเชื่อมต่อก่อนกดส่ง'
         "
-        :icon="
-          isProduction ||
-          (settings?.host !== 'localhost' && settings?.host !== 'mailpit')
-            ? 'i-lucide-send'
-            : 'i-lucide-flask-conical'
-        "
+        :icon="isCaptureMode ? 'i-lucide-flask-conical' : 'i-lucide-send'"
         :title="
-          isProduction ||
-          (settings?.host !== 'localhost' && settings?.host !== 'mailpit')
-            ? 'ระบบส่งอีเมล SMTP (ส่งออกจริง)'
-            : 'Development mail safety (Mailpit)'
+          isCaptureMode
+            ? 'โหมดรับอีเมลทดสอบ (Capture)'
+            : 'ระบบส่งอีเมล SMTP (ส่งออกจริง)'
         "
         variant="soft"
       />
@@ -647,7 +655,10 @@ function readApiError(error: unknown): string {
               </div>
 
               <UAlert
-                v-if="form.username.toLowerCase().includes('@gmail.com') && (form.host === 'localhost' || form.host === '127.0.0.1')"
+                v-if="
+                  form.username.toLowerCase().includes('@gmail.com') &&
+                  (form.host === 'localhost' || form.host === '127.0.0.1')
+                "
                 class="mb-4"
                 color="warning"
                 description="ตรวจพบว่าใช้บัญชี Gmail แต่ SMTP Host ยังเป็น localhost แนะนำให้คลิกเปลี่ยนเป็น smtp.gmail.com (พอร์ต 587) ด้านล่าง"
@@ -910,7 +921,7 @@ function readApiError(error: unknown): string {
                 </div>
                 <UBadge
                   color="neutral"
-                  :label="`Version ${settings?.version ?? 0}`"
+                  :label="`Version ${effectiveConnection?.version ?? 0}`"
                   variant="soft"
                 />
               </div>
@@ -940,14 +951,14 @@ function readApiError(error: unknown): string {
                 <dd
                   class="mt-1 [overflow-wrap:anywhere] font-medium text-highlighted"
                 >
-                  {{ settings?.from ?? '—' }}
+                  {{ effectiveConnection?.from ?? '—' }}
                 </dd>
               </div>
               <div class="grid grid-cols-2 gap-4 py-3">
                 <div>
                   <dt class="text-xs font-medium text-muted">Version</dt>
                   <dd class="mt-1 font-mono font-semibold text-highlighted">
-                    {{ settings?.version ?? 0 }}
+                    {{ effectiveConnection?.version ?? 0 }}
                   </dd>
                 </div>
                 <div>
@@ -1000,9 +1011,9 @@ function readApiError(error: unknown): string {
             >
               <UFormField
                 :description="
-                  settings?.host === 'localhost' || settings?.host === 'mailpit'
-                    ? 'Development จะส่งเข้า Mailpit (localhost:8025)'
-                    : `ส่งออกไปยังผู้รับจริงผ่าน ${settings?.host}`
+                  isCaptureMode
+                    ? `ส่งเข้าระบบรับอีเมลทดสอบผ่าน ${connectionLabel}`
+                    : `ส่งออกไปยังผู้รับจริงผ่าน ${connectionLabel}`
                 "
                 label="อีเมลผู้รับ"
                 name="recipientEmail"

@@ -118,6 +118,9 @@ export class StudentRecord {
 
 export const StudentSchema = SchemaFactory.createForClass(StudentRecord)
 StudentSchema.index({ schoolId: 1, programId: 1, status: 1 })
+StudentSchema.index({ status: 1, studentId: -1, _id: -1 })
+StudentSchema.index({ academicYear: 1, semester: 1, status: 1 })
+StudentSchema.index({ academicTermId: 1, status: 1 })
 
 @Schema({ ...schemaOptions, collection: 'organizations' })
 export class OrganizationRecord {
@@ -211,3 +214,4 @@ export class PlacementRecord {
 
 export const PlacementSchema = SchemaFactory.createForClass(PlacementRecord)
 PlacementSchema.index({ studentId: 1, academicTermId: 1 }, { unique: true })
+PlacementSchema.index({ studentId: 1, status: 1, createdAt: -1 })

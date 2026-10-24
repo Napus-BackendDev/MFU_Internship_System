@@ -19,33 +19,34 @@ const selectedAction = ref('all')
 const actionFilterOptions = [
   { value: 'all', label: 'ทุก Action' },
   { value: 'auth', label: 'การเข้าสู่ระบบ (Auth)' },
-  { value: 'create', label: 'การสร้างข้อมูล (Create)' },
-  { value: 'update', label: 'การแก้ไขข้อมูล (Update)' },
-  { value: 'delete', label: 'การลบข้อมูล (Delete)' },
-  { value: 'patch', label: 'การปรับปรุง (Patch)' }
+  { value: 'create', label: 'คำขอ POST' },
+  { value: 'update', label: 'คำขอ PUT' },
+  { value: 'delete', label: 'คำขอ DELETE' },
+  { value: 'patch', label: 'คำขอ PATCH' }
 ]
 const page = ref(1)
 const pageSize = ref(5)
 
-const { data, error, pending, refresh } = await useAsyncData(
+const { data, error, pending, refresh } = useAsyncData(
   'audit',
   () =>
     api<AuditPage>('/audit-logs', {
       query: {
         page: page.value,
         pageSize: pageSize.value,
-        requestId: searchQuery.value.trim() || undefined
+        requestId: searchQuery.value.trim() || undefined,
+        actionCategory:
+          selectedAction.value === 'all' ? undefined : selectedAction.value
       }
     }),
-  { watch: [page, pageSize] }
+  { lazy: true, watch: [page, pageSize] }
 )
 
-const filteredItems = computed(() => {
-  const items = data.value?.items ?? []
-  if (selectedAction.value === 'all') return items
-  return items.filter((item) =>
-    item.action.toLowerCase().includes(selectedAction.value.toLowerCase())
-  )
+const filteredItems = computed(() => data.value?.items ?? [])
+
+watch(selectedAction, () => {
+  page.value = 1
+  void refresh()
 })
 
 const hasActiveFilters = computed(

@@ -1184,6 +1184,132 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
     })
   })
 
+  it('persists competency names without changing code or published questions and audits the change', async () => {
+    const admin: AuthenticatedActor = {
+      id: 'rename-admin',
+      email: 'qa@example.test',
+      displayName: 'QA',
+      roles: ['systemAdmin'],
+      scope: { tenant: true, schoolIds: [], programIds: [] }
+    }
+    const set = await competencySets.create({
+      code: 'FIXED-CODE',
+      name: { th: 'เดิม', en: 'Original' }
+    })
+    const version = await competencyVersions.create({
+      competencySetId: set.id,
+      versionNumber: 1,
+      status: 'published',
+      sections: questions
+    })
+    const name = { th: 'ชื่อใหม่', en: 'New name' }
+    await expect(
+      service.updateCompetencySet(admin, set.id, name, 'rename-request')
+    ).resolves.toMatchObject({ code: 'FIXED-CODE', name })
+    expect((await competencySets.findById(set.id))?.name).toMatchObject(name)
+    await competencySets.updateOne(
+      { _id: set.id },
+      { $set: { code: 'CHANGED-CODE' } }
+    )
+    expect((await competencySets.findById(set.id))?.code).toBe('FIXED-CODE')
+    expect(
+      (await competencyVersions.findById(version.id))?.sections[0]?.questions[0]
+        ?.label.en
+    ).toBe('Skill one')
+    expect(
+      await auditLogs.findOne({ requestId: 'rename-request' }).lean()
+    ).toMatchObject({
+      action: 'competencies.updated',
+      resourceScopes: [{ tenant: true }],
+      metadata: {
+        competencySetId: set.id,
+        before: { name: { en: 'Original' } },
+        after: { name }
+      }
+    })
+    await expect(
+      service.updateCompetencySet(
+        { ...admin, roles: ['auditor'] },
+        set.id,
+        name,
+        'rename-denied'
+      )
+    ).rejects.toMatchObject({ status: 403 })
+    const failedAudit = vi
+      .spyOn(auditService, 'record')
+      .mockRejectedValueOnce(new Error('audit unavailable'))
+    await expect(
+      service.updateCompetencySet(
+        admin,
+        set.id,
+        { th: 'ไม่บันทึก', en: 'Rejected' },
+        'rename-rollback'
+      )
+    ).rejects.toThrow('audit unavailable')
+    failedAudit.mockRestore()
+    expect((await competencySets.findById(set.id))?.name.en).toBe('New name')
+  })
+
+  it('allows scoped competency rename only when every version is entirely in the Staff scope', async () => {
+    const staff: AuthenticatedActor = {
+      id: 'rename-staff',
+      email: 'qa@example.test',
+      displayName: 'QA',
+      roles: ['internshipStaff'],
+      scope: {
+        tenant: false,
+        schoolIds: [testSchoolId],
+        programIds: [testProgramId]
+      }
+    }
+    const set = await competencySets.create({
+      code: 'SCOPED-NAME',
+      name: { th: 'เดิม', en: 'Original' }
+    })
+    await competencyVersions.create({
+      competencySetId: set.id,
+      versionNumber: 1,
+      status: 'published',
+      sections: [
+        { ...questions[0]!, schoolId: testSchoolId, programId: testProgramId }
+      ]
+    })
+    await expect(
+      service.updateCompetencySet(
+        staff,
+        set.id,
+        { th: 'ใหม่', en: 'Scoped name' },
+        'rename-scoped'
+      )
+    ).resolves.toMatchObject({ name: { en: 'Scoped name' } })
+    await competencyVersions.create({
+      competencySetId: set.id,
+      versionNumber: 2,
+      status: 'draft',
+      sections: [questions[1]!]
+    })
+    await expect(
+      service.updateCompetencySet(
+        staff,
+        set.id,
+        { th: 'ข้ามขอบเขต', en: 'Denied' },
+        'rename-shared'
+      )
+    ).rejects.toMatchObject({ status: 403 })
+    expect((await competencySets.findById(set.id))?.name.en).toBe('Scoped name')
+    await expect(
+      service.updateCompetencySet(
+        {
+          ...staff,
+          scope: { tenant: false, schoolIds: ['other'], programIds: ['other'] }
+        },
+        set.id,
+        { th: 'อื่น', en: 'Other' },
+        'rename-foreign'
+      )
+    ).rejects.toMatchObject({ status: 404 })
+  })
+
   it('prevents scoped Staff from editing a Draft competency version outside their scope', async () => {
     const competencySet = await competencySets.create({
       code: 'COMPETENCY-OUT-OF-SCOPE',

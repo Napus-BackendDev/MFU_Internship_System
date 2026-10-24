@@ -38,9 +38,16 @@ export function validateCompetencySections(
       ids.add(question.id)
       validateQuestion(question)
       if (question.type === 'rating' && section.category !== 'suggestion') {
-        if (question.weight !== undefined && question.weight !== 1) {
+        if (
+          question.weight !== undefined &&
+          (typeof question.weight !== 'number' ||
+            question.weight <= 0 ||
+            question.weight > 2 ||
+            !Number.isFinite(question.weight))
+        ) {
           throw new UnprocessableEntityException({
-            code: 'SCORING_WEIGHT_NOT_SUPPORTED'
+            code: 'SCORING_WEIGHT_NOT_SUPPORTED',
+            message: 'Question weight must not exceed 2.'
           })
         }
         const category = section.category === 'special' ? 'special' : 'general'

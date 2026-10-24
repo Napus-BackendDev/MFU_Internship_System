@@ -8,6 +8,7 @@ export interface StudentGeneratedDocument {
   readonly documentType: StudentDocumentType | null
   readonly documentNumber?: string | null
   readonly evaluationIds?: readonly string[]
+  readonly templateVersionId?: string
   readonly status: GeneratedDocumentStatus
   readonly createdAt: string
 }
@@ -47,12 +48,18 @@ export function findDocumentForEvaluationSet<
 >(
   documents: readonly T[],
   documentType: StudentDocumentType,
-  evaluationIds: readonly string[]
+  evaluationIds: readonly string[],
+  templateVersionId?: string
 ): T | null {
   const expected = [...new Set(evaluationIds)].sort()
   if (expected.length === 0) return null
   return (
     documents.find((document) => {
+      if (
+        templateVersionId !== undefined &&
+        document.templateVersionId !== templateVersionId
+      )
+        return false
       if (document.documentType !== documentType || !document.evaluationIds) {
         return false
       }

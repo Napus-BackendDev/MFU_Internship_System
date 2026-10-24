@@ -60,7 +60,10 @@ export class AccessGuard implements CanActivate {
     const authorization = request.headers.authorization
     const token = authorization?.startsWith('Bearer ')
       ? authorization.slice(7)
-      : readCookie(request, 'its_access')
+      : readCookie(request, 'its_access') ||
+        (typeof request.query?.token === 'string'
+          ? request.query.token
+          : undefined)
 
     if (!token) {
       throw new UnauthorizedException({ code: 'AUTHENTICATION_REQUIRED' })

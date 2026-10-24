@@ -229,6 +229,51 @@ describe('student import on an isolated MongoDB replica set', () => {
     }
   }
 
+  it('does not propose updates for equivalent semester labels after a manual edit', async () => {
+    const file = workbookBuffer([sourceRow()])
+    const initial = (await service.preview(
+      actor,
+      'students.xlsx',
+      file
+    )) as PreviewResponse
+    await service.commit(
+      actor,
+      initial.batchId,
+      'create-semester-test',
+      [{ rowId: initial.items[0]!.id, action: 'create' }],
+      'qa-semester'
+    )
+    await students.updateOne(
+      { studentId: '6631503001' },
+      { $set: { semester: '1' } }
+    )
+    const repeat = (await service.preview(
+      actor,
+      'students.xlsx',
+      file
+    )) as PreviewResponse
+    expect(repeat.items[0]).toMatchObject({
+      action: 'unchanged',
+      changes: [],
+      issues: []
+    })
+    await students.updateOne(
+      { studentId: '6631503001' },
+      { $set: { semester: '2' } }
+    )
+    const changed = (await service.preview(
+      actor,
+      'students.xlsx',
+      file
+    )) as PreviewResponse
+    expect(changed.items[0]).toMatchObject({ action: 'update' })
+    expect(changed.items[0]?.changes).toContainEqual({
+      field: 'semester',
+      before: '2',
+      after: 'ภาคการศึกษาต้น'
+    })
+  })
+
   it('previews and commits evaluator name and legacy-spelled email columns without creating access or sending mail', async () => {
     const preview = (await service.preview(
       actor,

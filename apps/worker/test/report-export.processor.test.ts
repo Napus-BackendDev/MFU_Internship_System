@@ -22,7 +22,7 @@ interface UpdateWrite {
 }
 
 interface ExportSnapshotRow {
-  readonly values: Readonly<Record<string, string | number>>
+  readonly values: Readonly<Record<string, unknown>>
 }
 
 interface ProcessorHarness {

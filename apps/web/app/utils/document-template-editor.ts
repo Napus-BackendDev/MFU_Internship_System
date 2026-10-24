@@ -40,6 +40,9 @@ function safeEditorMetadata(
   ) {
     metadata.backgroundType = input.backgroundType
   }
+  if (typeof input.customBgUrl === 'string') {
+    metadata.customBgUrl = input.customBgUrl
+  }
   if (
     typeof input.bgOpacity === 'number' &&
     Number.isFinite(input.bgOpacity) &&

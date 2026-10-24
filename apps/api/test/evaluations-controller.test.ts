@@ -6,6 +6,35 @@ import type { EvaluationsService } from '../src/evaluations/evaluations.service.
 import type { AuthenticatedRequest } from '../src/common/http.js'
 
 describe('EvaluationsController competency-set list contract', () => {
+  it('updates trimmed localized names and rejects code changes or empty locales', async () => {
+    const updateCompetencySet = vi.fn().mockResolvedValue({ id: 'form-1' })
+    const controller = new EvaluationsController({
+      updateCompetencySet
+    } as unknown as EvaluationsService)
+    const request = {
+      actor: { id: 'admin-1' },
+      requestId: 'rename-1'
+    } as AuthenticatedRequest
+    await controller.updateCompetencySet(request, 'form-1', {
+      name: { th: ' ชื่อใหม่ ', en: ' New name ' }
+    })
+    expect(updateCompetencySet).toHaveBeenCalledWith(
+      request.actor,
+      'form-1',
+      { th: 'ชื่อใหม่', en: 'New name' },
+      'rename-1'
+    )
+    for (const body of [
+      { code: 'CHANGED', name: { th: 'ใหม่', en: 'New' } },
+      { name: { th: ' ', en: 'New' } },
+      { name: { th: 'ใหม่', en: '' } }
+    ])
+      expect(() =>
+        controller.updateCompetencySet(request, 'form-1', body)
+      ).toThrow(ZodError)
+    expect(updateCompetencySet).toHaveBeenCalledTimes(1)
+  })
+
   it('parses bounded search and archived filter', async () => {
     const listCompetencySets = vi.fn().mockResolvedValue({ items: [] })
     const controller = new EvaluationsController({

@@ -76,19 +76,13 @@ for (const width of [360, 1280]) {
     await page.goto('/app/evaluations/forms')
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: 'สร้างแบบฟอร์มใหม่' }).click()
-    const dialog = page.getByRole('dialog')
-    await expect(dialog).toBeVisible()
-    await dialog.getByRole('button', { name: /จำลองมุมมองจริง/ }).click()
+    await expect(page).toHaveURL(/\/app\/evaluations\/forms\/create/)
+    await page.waitForLoadState('networkidle')
+    await page.getByRole('button', { name: /จำลองมุมมองจริง/ }).first().click()
     const simulator = page.getByTestId('form-simulator-scroll')
     await expect(simulator).toBeVisible()
-    expect(
-      await simulator.evaluate((el) => {
-        el.scrollTop = 300
-        return el.scrollTop
-      })
-    ).toBeGreaterThan(0)
-    await page.keyboard.press('Escape')
-    await expect(dialog).toHaveCount(0)
+    await page.getByRole('link', { name: 'กลับไปหน้ารายการแบบฟอร์ม' }).click()
+    await expect(page).toHaveURL(/\/app\/evaluations\/forms$/)
   })
 }
 
@@ -358,8 +352,11 @@ test('TC-ADM-031 repairs a legacy Published copy without deleting valid assets o
   await page.waitForLoadState('networkidle')
   await page.getByRole('button', { name: 'การจัดการเอกสาร' }).click()
   await page.getByRole('menuitem', { name: 'เปิดใน Designer' }).click()
-  page.on('dialog', (dialog) => dialog.accept())
   await page.getByRole('button', { name: 'ปรับสำเนาสำหรับ PDF' }).click()
+  await page
+    .getByRole('dialog', { name: 'ยืนยันปรับสำเนาสำหรับ PDF', exact: true })
+    .getByRole('button', { name: 'ยืนยัน', exact: true })
+    .click()
   const save = page.getByRole('button', { name: 'บันทึก Draft', exact: true })
   await expect(save).toBeEnabled()
   await save.click()

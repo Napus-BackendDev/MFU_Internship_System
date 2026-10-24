@@ -12,6 +12,7 @@ interface StudentItem {
   readonly email: string
   readonly schoolId: string
   readonly programId: string
+  readonly academicYear?: number
   readonly status: string
 }
 
@@ -120,6 +121,7 @@ interface DocumentTemplateEditorMetadata {
   readonly nameEn?: string
   readonly description?: string
   readonly backgroundType?: BackgroundType
+  readonly customBgUrl?: string
   readonly bgOpacity?: number
 }
 
@@ -304,6 +306,10 @@ function mapApiTemplate(
       : inferredDocType === 'certificate'
         ? 'certificate_pattern'
         : 'none',
+    customBgUrl:
+      typeof metadata.customBgUrl === 'string'
+        ? metadata.customBgUrl
+        : undefined,
     bgOpacity:
       typeof metadata.bgOpacity === 'number' &&
       metadata.bgOpacity >= 0 &&
@@ -339,7 +345,7 @@ const {
   error: templatesError,
   pending: templatesPending,
   refresh: refreshTemplates
-} = await useAsyncData('document-templates-list', fetchAllDocumentTemplates)
+} = useAsyncData('document-templates-list', fetchAllDocumentTemplates, { lazy: true })
 
 // Load dynamic data from system API
 const {
@@ -347,46 +353,61 @@ const {
   error: studentsError,
   pending: studentsPending,
   refresh: refreshStudents
-} = await useAsyncData('docs-students', () =>
-  loadAllPages(
-    (page, pageSize) =>
-      api<
-        PaginatedItems<
-          Omit<StudentItem, 'name'> & {
-            readonly name: string | StudentItem['name']
-          }
-        >
-      >('/students', {
-        query: { page, pageSize }
-      }).then((response) => ({
-        ...response,
-        items: response.items.map((student) => ({
-          ...student,
-          name:
-            typeof student.name === 'string'
-              ? { th: student.name, en: student.name }
-              : student.name
-        }))
-      })),
-    100
-  )
+} = useAsyncData(
+  'docs-students',
+  () =>
+    loadAllPages(
+      (page, pageSize) =>
+        api<
+          PaginatedItems<
+            Omit<StudentItem, 'name'> & {
+              readonly name: string | StudentItem['name']
+            }
+          >
+        >('/students', {
+          query: { page, pageSize }
+        }).then((response) => ({
+          ...response,
+          items: response.items.map((student) => ({
+            ...student,
+            name:
+              typeof student.name === 'string'
+                ? { th: student.name, en: student.name }
+                : student.name
+          }))
+        })),
+      100
+    ),
+  { lazy: true }
 )
 
-const activeStudentId = ref(studentsData.value?.items[0]?.studentId ?? '')
+const activeStudentId = ref('')
+watch(
+  () => studentsData.value?.items,
+  (items) => {
+    if (!activeStudentId.value && items && items.length > 0) {
+      activeStudentId.value = items[0]?.studentId ?? ''
+    }
+  },
+  { immediate: true }
+)
 
 const {
   data: schoolsData,
   error: schoolsError,
   pending: schoolsPending,
   refresh: refreshSchools
-} = await useAsyncData('docs-schools', () =>
-  loadAllPages(
-    (page, pageSize) =>
-      api<PaginatedItems<SchoolItem>>('/academic/schools', {
-        query: { page, pageSize }
-      }),
-    100
-  )
+} = useAsyncData(
+  'docs-schools',
+  () =>
+    loadAllPages(
+      (page, pageSize) =>
+        api<PaginatedItems<SchoolItem>>('/academic/schools', {
+          query: { page, pageSize }
+        }),
+      100
+    ),
+  { lazy: true }
 )
 
 const {
@@ -394,14 +415,17 @@ const {
   error: programsError,
   pending: programsPending,
   refresh: refreshPrograms
-} = await useAsyncData('docs-programs', () =>
-  loadAllPages(
-    (page, pageSize) =>
-      api<PaginatedItems<ProgramItem>>('/academic/programs', {
-        query: { page, pageSize }
-      }),
-    100
-  )
+} = useAsyncData(
+  'docs-programs',
+  () =>
+    loadAllPages(
+      (page, pageSize) =>
+        api<PaginatedItems<ProgramItem>>('/academic/programs', {
+          query: { page, pageSize }
+        }),
+      100
+    ),
+  { lazy: true }
 )
 
 const {
@@ -409,7 +433,7 @@ const {
   error: placementsError,
   pending: placementsPending,
   refresh: refreshPlacements
-} = await useAsyncData(
+} = useAsyncData(
   'docs-placements',
   async () => {
     if (!activeStudentId.value) return { items: [] as PlacementItem[] }
@@ -421,7 +445,7 @@ const {
       100
     )
   },
-  { watch: [activeStudentId] }
+  { lazy: true, watch: [activeStudentId] }
 )
 
 const {
@@ -429,14 +453,17 @@ const {
   error: organizationsError,
   pending: organizationsPending,
   refresh: refreshOrganizations
-} = await useAsyncData('docs-orgs', () =>
-  loadAllPages(
-    (page, pageSize) =>
-      api<PaginatedItems<OrganizationItem>>('/organizations', {
-        query: { page, pageSize }
-      }),
-    100
-  )
+} = useAsyncData(
+  'docs-orgs',
+  () =>
+    loadAllPages(
+      (page, pageSize) =>
+        api<PaginatedItems<OrganizationItem>>('/organizations', {
+          query: { page, pageSize }
+        }),
+      100
+    ),
+  { lazy: true }
 )
 
 const referenceDataError = computed(
@@ -1013,7 +1040,7 @@ watch(
 
 // Search & Filter state
 const searchQuery = ref('')
-const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
+const statusFilter = ref<'all' | 'active' | 'draft' | 'inactive'>('all')
 const typeFilter = ref<'all' | 'pdf' | 'certificate'>('all')
 
 const docTypeOptions = [
@@ -1023,9 +1050,10 @@ const docTypeOptions = [
 ]
 
 const docStatusOptions = [
-  { value: 'all', label: 'ทุกสถานะ' },
-  { value: 'active', label: 'เผยแพร่แล้ว' },
-  { value: 'inactive', label: 'ฉบับร่าง / เก็บถาวร' }
+  { value: 'all', label: 'ทั้งหมด' },
+  { value: 'active', label: 'เปิดใช้งานอยู่' },
+  { value: 'draft', label: 'ฉบับร่าง' },
+  { value: 'inactive', label: 'ปิดใช้งาน' }
 ]
 
 const filteredDocuments = computed(() => {
@@ -1037,8 +1065,15 @@ const filteredDocuments = computed(() => {
       doc.nameTh.toLowerCase().includes(q) ||
       doc.nameEn.toLowerCase().includes(q)
 
+    const docDisplayStatus =
+      doc.templateStatus === 'active' && doc.versionStatus === 'published'
+        ? 'active'
+        : doc.versionStatus === 'draft'
+          ? 'draft'
+          : 'inactive'
+
     const matchesStatus =
-      statusFilter.value === 'all' || doc.status === statusFilter.value
+      statusFilter.value === 'all' || docDisplayStatus === statusFilter.value
 
     const matchesType =
       typeFilter.value === 'all' || doc.docType === typeFilter.value
@@ -1077,6 +1112,27 @@ watch([searchQuery, statusFilter, typeFilter, pageSize], () => {
 // CANVA DESIGNER STUDIO STATE
 // =========================================================================
 const isCanvaStudioOpen = ref(false)
+const studioConfirmation = ref<{ title: string; description: string } | null>(
+  null
+)
+let resolveStudioConfirmation: ((confirmed: boolean) => void) | null = null
+function confirmStudioAction(
+  title: string,
+  description: string
+): Promise<boolean> {
+  if (studioConfirmation.value) return Promise.resolve(false)
+  studioConfirmation.value = { title, description }
+  return new Promise((resolve) => {
+    resolveStudioConfirmation = resolve
+  })
+}
+function finishStudioConfirmation(confirmed: boolean): void {
+  const resolve = resolveStudioConfirmation
+  resolveStudioConfirmation = null
+  studioConfirmation.value = null
+  resolve?.(confirmed)
+}
+onBeforeUnmount(() => finishStudioConfirmation(false))
 const activeEditingDoc = ref<DocumentTemplateItem | null>(null)
 const savedEditorState = ref<string | null>(null)
 function getDocumentCanvasSize(doc: DocumentTemplateItem): {
@@ -1183,6 +1239,10 @@ const dynamicStudentValues = computed(() => {
 
   return {
     student_id: std?.studentId || '[ไม่พบรหัสนักศึกษา]',
+    academic_year: std?.academicYear
+      ? String(std.academicYear)
+      : '[ไม่พบปีการศึกษา]',
+    student_name: std?.name?.th || std?.name?.en || '[ไม่พบชื่อนักศึกษา]',
     student_name_th: std?.name?.th || '[ไม่พบชื่อนักศึกษา]',
     student_name_en: std?.name?.en || '[ไม่พบชื่อภาษาอังกฤษ]',
     school_name: school
@@ -1194,12 +1254,18 @@ const dynamicStudentValues = computed(() => {
     organization_name: org
       ? `${org.name.th} (${org.name.en})`
       : '[ไม่พบสถานประกอบการ]',
+    company_name: org
+      ? `${org.name.th} (${org.name.en})`
+      : '[ไม่พบสถานประกอบการ]',
     position_title: placement?.positionTitle?.th || '[ไม่พบตำแหน่งฝึกงาน]',
     training_period: period,
     total_hours: '[ยังไม่มีข้อมูลชั่วโมงจากระบบ]',
     evaluation_grade: '[ไม่มีเกรดรวมตามนโยบาย MVP]',
     issue_date: '[กำหนดเมื่อออกเอกสารจริง]',
-    doc_number: '[กำหนดเลขที่โดยระบบเมื่อออกเอกสารจริง]'
+    doc_number: '[กำหนดเลขที่โดยระบบเมื่อออกเอกสารจริง]',
+    suggestion: 'มีความกระตือรือร้นในการเรียนรู้ และทำงานร่วมกับผู้อื่นได้ดีมาก',
+    evaluator_suggestion:
+      'มีความกระตือรือร้นในการเรียนรู้ และทำงานร่วมกับผู้อื่นได้ดีมาก'
   }
 })
 
@@ -1209,17 +1275,22 @@ function renderElementContent(text: string): string {
   const vals = dynamicStudentValues.value
   return text
     .replace(/\{\{student_id\}\}/g, vals.student_id)
+    .replace(/\{\{academic_year\}\}/g, vals.academic_year)
+    .replace(/\{\{student_name\}\}/g, vals.student_name)
     .replace(/\{\{student_name_th\}\}/g, vals.student_name_th)
     .replace(/\{\{student_name_en\}\}/g, vals.student_name_en)
     .replace(/\{\{school_name\}\}/g, vals.school_name)
     .replace(/\{\{program_name\}\}/g, vals.program_name)
     .replace(/\{\{organization_name\}\}/g, vals.organization_name)
+    .replace(/\{\{company_name\}\}/g, vals.company_name)
     .replace(/\{\{position_title\}\}/g, vals.position_title)
     .replace(/\{\{training_period\}\}/g, vals.training_period)
     .replace(/\{\{total_hours\}\}/g, vals.total_hours)
     .replace(/\{\{evaluation_grade\}\}/g, vals.evaluation_grade)
     .replace(/\{\{issue_date\}\}/g, vals.issue_date)
     .replace(/\{\{doc_number\}\}/g, vals.doc_number)
+    .replace(/\{\{suggestion\}\}/g, vals.suggestion)
+    .replace(/\{\{evaluator_suggestion\}\}/g, vals.evaluator_suggestion)
 }
 
 // Available Dynamic Variables Chips
@@ -1236,12 +1307,22 @@ const availableVariables = [
     label: 'Student Full Name (EN)',
     tag: '{{student_name_en}}'
   },
+  {
+    key: 'student_name',
+    label: 'ชื่อนักศึกษา (ทั่วไป)',
+    tag: '{{student_name}}'
+  },
   { key: 'school_name', label: 'สำนักวิชา', tag: '{{school_name}}' },
   { key: 'program_name', label: 'สาขาวิชา/หลักสูตร', tag: '{{program_name}}' },
   {
     key: 'organization_name',
     label: 'สถานประกอบการ',
     tag: '{{organization_name}}'
+  },
+  {
+    key: 'company_name',
+    label: 'ชื่อสถานประกอบการ (Company)',
+    tag: '{{company_name}}'
   },
   { key: 'position_title', label: 'ตำแหน่งงาน', tag: '{{position_title}}' },
   {
@@ -1250,6 +1331,16 @@ const availableVariables = [
     tag: '{{training_period}}'
   },
   { key: 'total_hours', label: 'จำนวนชั่วโมงรวม', tag: '{{total_hours}}' },
+  {
+    key: 'suggestion',
+    label: 'ข้อเสนอแนะ (Suggestion)',
+    tag: '{{suggestion}}'
+  },
+  {
+    key: 'evaluator_suggestion',
+    label: 'ข้อเสนอแนะผู้ประเมิน',
+    tag: '{{evaluator_suggestion}}'
+  },
   { key: 'issue_date', label: 'วันที่ออกเอกสาร', tag: '{{issue_date}}' },
   { key: 'doc_number', label: 'เลขที่เอกสาร', tag: '{{doc_number}}' }
 ]
@@ -1386,9 +1477,10 @@ async function prepareSupportedDocumentCopy(): Promise<void> {
   const doc = activeEditingDoc.value
   if (
     !doc ||
-    !confirm(
+    !(await confirmStudioAction(
+      'ยืนยันปรับสำเนาสำหรับ PDF',
       'ปรับสำเนานี้สำหรับ PDF: ใช้พื้นหลังว่าง ลบตรา/ลายเซ็นที่ยังไม่มีไฟล์รับรอง และใช้ Sarabun กับข้อความทั้งหมด ข้อความชั่วโมงที่ไม่มีข้อมูลจะแสดงข้อความแจ้งแทน ฉบับ Published เดิมจะไม่เปลี่ยน และการบันทึกจะสร้าง Draft ใหม่'
-    )
+    ))
   )
     return
   doc.backgroundType = 'none'
@@ -1603,6 +1695,7 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
         nameEn: doc.nameEn,
         description: doc.description,
         backgroundType: doc.backgroundType,
+        customBgUrl: doc.customBgUrl,
         bgOpacity: doc.bgOpacity,
         versionId: version.id,
         versionNumber: version.versionNumber,
@@ -1642,6 +1735,10 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
       backgroundType: isBackgroundType(metadata.backgroundType)
         ? metadata.backgroundType
         : doc.backgroundType,
+      customBgUrl:
+        typeof metadata.customBgUrl === 'string'
+          ? metadata.customBgUrl
+          : doc.customBgUrl,
       bgOpacity:
         typeof metadata.bgOpacity === 'number'
           ? metadata.bgOpacity
@@ -1786,18 +1883,20 @@ function buildCanonicalJson(
       nameEn: doc.nameEn,
       description: doc.description,
       backgroundType: doc.backgroundType,
+      customBgUrl: doc.customBgUrl,
       bgOpacity: doc.bgOpacity
     }
   }
 }
 
-function requestCloseStudio(): void {
+async function requestCloseStudio(): Promise<void> {
   if (isSavingTemplate.value || isPublishingTemplate.value) return
   if (
     hasUnsavedChanges.value &&
-    !window.confirm(
+    !(await confirmStudioAction(
+      'ยืนยันปิด Designer',
       'มีการแก้ไขที่ยังไม่บันทึก ต้องการปิดและทิ้งการแก้ไขหรือไม่?'
-    )
+    ))
   ) {
     return
   }
@@ -1844,9 +1943,10 @@ async function publishStudioDraft(): Promise<void> {
     return
   }
   if (
-    !window.confirm(
-      'ยืนยันเผยแพร่แม่แบบนี้หรือไม่? ฉบับ Published จะแก้ไขไม่ได้ และการออก PDF จริงยังปิดจนกว่าจะผ่านการตรวจรับอย่างเป็นทางการ'
-    )
+    !(await confirmStudioAction(
+      'ยืนยันเผยแพร่แม่แบบ',
+      'ฉบับ Published จะแก้ไขไม่ได้ ระบบจะใช้ version ที่เผยแพร่สำหรับออก PDF และเก็บฉบับเดิมไว้เป็นประวัติ'
+    ))
   ) {
     return
   }
@@ -1881,7 +1981,7 @@ async function publishStudioDraft(): Promise<void> {
     toast.add({
       title: 'เผยแพร่แม่แบบแล้ว',
       description:
-        'ระบบตรวจและล็อก version นี้แล้ว; การออก PDF ยังรอการตรวจรับอย่างเป็นทางการ',
+        'ระบบตรวจและล็อก version นี้แล้ว พร้อมใช้กับการออก PDF ตามสิทธิ์และเงื่อนไขการฝึกงาน',
       color: 'success'
     })
     void refreshTemplates().catch(() => {
@@ -1971,10 +2071,43 @@ async function confirmTemplateActivation(): Promise<void> {
   }
 }
 
+const templateToDeactivate = ref<DocumentTemplateItem | null>(null)
+const isDeactivatingTemplate = ref(false)
+
+function openDeactivateDocumentModal(doc: DocumentTemplateItem): void {
+  templateToDeactivate.value = doc
+}
+
+async function confirmDeactivateDocument(): Promise<void> {
+  if (!templateToDeactivate.value) return
+  isDeactivatingTemplate.value = true
+  const doc = templateToDeactivate.value
+  try {
+    await api(`/document-templates/${doc.id}`, { method: 'DELETE' })
+    toast.add({
+      title: 'ลบเทมเพลตสำเร็จ',
+      description: `ลบและเก็บถาวรเทมเพลต ${doc.nameTh || doc.nameEn} เรียบร้อยแล้ว`,
+      color: 'success'
+    })
+    templateToDeactivate.value = null
+    await refreshTemplates()
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'ไม่สามารถยกเลิกการใช้งานได้'
+    toast.add({
+      title: 'ไม่สามารถยกเลิกการใช้งานได้',
+      description: msg,
+      color: 'error'
+    })
+  } finally {
+    isDeactivatingTemplate.value = false
+  }
+}
+
 interface ActionMenuItem {
   readonly label: string
   readonly icon?: string
   readonly disabled?: boolean
+  readonly color?: 'error' | 'primary' | 'warning' | 'neutral'
   readonly onSelect?: () => void
 }
 
@@ -2016,7 +2149,19 @@ function getDocMenuItems(doc: DocumentTemplateItem): ActionMenuItem[][] {
     })
   }
 
-  return [items]
+  const deleteGroup: ActionMenuItem[] = [
+    {
+      label: 'ลบ / เก็บถาวรเทมเพลต...',
+      icon: 'i-lucide-trash-2',
+      color: 'error',
+      disabled: isCurrentlyActive,
+      onSelect: () => {
+        openDeactivateDocumentModal(doc)
+      }
+    }
+  ]
+
+  return [items, deleteGroup]
 }
 
 // Persist edits as versioned Drafts; PDF issuance remains disabled pending official UAT.
@@ -2040,15 +2185,6 @@ async function saveStudioChanges() {
       title: 'ไม่มีการแก้ไขใหม่',
       description: 'ไม่สร้าง version เพิ่ม เพราะเนื้อหาเหมือนฉบับที่บันทึกแล้ว',
       color: 'neutral'
-    })
-    return
-  }
-  if (doc.backgroundType === 'custom') {
-    toast.add({
-      title: 'ยังบันทึกพื้นหลังนี้ไม่ได้',
-      description:
-        'อัปโหลด asset ผ่านพื้นที่จัดเก็บส่วนตัวก่อน จึงจะบันทึกพื้นหลังแบบกำหนดเองได้',
-      color: 'warning'
     })
     return
   }
@@ -2372,7 +2508,7 @@ function addCustomTable(preset: 'competency' | 'hours_log' | 'blank_3x3') {
     }
   } else {
     tableData = {
-      headers: ['หมวดทักษะ', 'คะแนนเฉลี่ย', 'จำนวนข้อที่ตอบ'],
+      headers: ['หมวดทักษะ', 'คะแนนเฉลี่ย', 'คะแนนรวมทั้งหมด'],
       rows: [
         ['Hard Skill', '—', '—'],
         ['Soft Skill', '—', '—']
@@ -2551,7 +2687,7 @@ function handleStudioBgUpload(event: Event) {
       color="warning"
       icon="i-lucide-shield-check"
       title="บันทึกแม่แบบเป็น Draft ผ่านระบบแล้ว"
-      description="ผู้มีสิทธิ์เผยแพร่ Draft ที่ผ่านการตรวจของระบบได้; การออก PDF จริงยังปิดจนกว่า renderer, ฟอนต์, asset และลายเซ็นที่ได้รับอนุญาตจะผ่านการตรวจรับ"
+      description="เผยแพร่ Draft ที่ผ่านการตรวจ schema ฟอนต์และสิทธิ์ asset ก่อนใช้กับการออก PDF; ฉบับ Published และเอกสารที่ออกแล้วเก็บเป็นประวัติ"
       variant="soft"
     />
 
@@ -2942,8 +3078,27 @@ function handleStudioBgUpload(event: Event) {
               <td class="text-right">
                 <div
                   v-if="canManageDocumentTemplates"
-                  class="flex items-center justify-end"
+                  class="flex items-center justify-end gap-1"
                 >
+                  <UButton
+                    color="neutral"
+                    icon="i-lucide-layout-template"
+                    size="xs"
+                    title="เปิดใน Designer"
+                    variant="ghost"
+                    class="hidden sm:inline-flex cursor-pointer"
+                    @click="openCanvaStudio(doc)"
+                  />
+                  <UButton
+                    color="error"
+                    icon="i-lucide-trash-2"
+                    size="xs"
+                    title="ลบ / เก็บถาวรเทมเพลต"
+                    variant="ghost"
+                    :disabled="doc.templateStatus === 'active' && doc.versionStatus === 'published' && documents.filter((item) => item.docType === doc.docType && item.templateStatus === 'active' && item.versionStatus === 'published').length === 1"
+                    class="hidden sm:inline-flex cursor-pointer hover:bg-red-500/10 text-red-600 dark:text-red-400 disabled:opacity-30 disabled:pointer-events-none"
+                    @click="openDeactivateDocumentModal(doc)"
+                  />
                   <UDropdownMenu
                     :items="getDocMenuItems(doc)"
                     :content="{ align: 'end' }"
@@ -4473,7 +4628,7 @@ function handleStudioBgUpload(event: Event) {
                       >
                         <th class="py-2 pl-3">หมวดทักษะ</th>
                         <th class="py-2 text-center">คะแนนเฉลี่ย</th>
-                        <th class="py-2 pr-3 text-right">จำนวนข้อที่ตอบ</th>
+                        <th class="py-2 pr-3 text-right">คะแนนรวมทั้งหมด</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-200">
@@ -4896,6 +5051,30 @@ function handleStudioBgUpload(event: Event) {
       </div>
     </AppModal>
     <AppModal
+      v-if="studioConfirmation"
+      :open="Boolean(studioConfirmation)"
+      :title="studioConfirmation?.title ?? 'ยืนยันการดำเนินการ'"
+      :ui="{ overlay: 'z-[110]', content: 'z-[111]' }"
+      @update:open="
+        (open) => {
+          if (!open) finishStudioConfirmation(false)
+        }
+      "
+    >
+      <div class="p-6 space-y-4">
+        <h2 class="text-lg font-semibold">{{ studioConfirmation?.title }}</h2>
+        <p>{{ studioConfirmation?.description }}</p>
+        <div class="flex justify-end gap-3">
+          <UButton
+            label="ยกเลิก"
+            variant="ghost"
+            @click="finishStudioConfirmation(false)"
+          />
+          <UButton label="ยืนยัน" @click="finishStudioConfirmation(true)" />
+        </div>
+      </div>
+    </AppModal>
+    <AppModal
       :open="Boolean(activationTarget)"
       title="ยืนยันแม่แบบหลัก"
       :dismissible="!isActivatingTemplate"
@@ -4922,6 +5101,48 @@ function handleStudioBgUpload(event: Event) {
             label="ยืนยันเปิดใช้งาน"
             :loading="Boolean(isActivatingTemplate)"
             @click="confirmTemplateActivation"
+          />
+        </div>
+      </div>
+    </AppModal>
+    <!-- Modal: ยืนยันการยกเลิก/ลบเทมเพลตเอกสาร -->
+    <AppModal
+      v-if="templateToDeactivate"
+      :open="true"
+      title="ยืนยันการลบ / เก็บถาวรเทมเพลต"
+      @update:open="
+        (open) => {
+          if (!open) templateToDeactivate = null
+        }
+      "
+    >
+      <div class="space-y-4 p-6">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
+            <UIcon name="i-lucide-trash-2" class="size-6 text-red-600 dark:text-red-400" />
+          </div>
+          <div>
+            <h2 class="text-lg font-semibold text-foreground">ยืนยันการเก็บถาวรเทมเพลต</h2>
+            <p class="text-xs text-muted">เทมเพลตจะถูกเปลี่ยนสถานะเป็นปิดใช้งาน (Archived)</p>
+          </div>
+        </div>
+        <p class="text-sm text-foreground">
+          คุณต้องการยกเลิกการใช้งานและเก็บถาวรแม่แบบเอกสาร <strong class="font-medium text-red-600 dark:text-red-400">{{ templateToDeactivate.nameTh || templateToDeactivate.nameEn }}</strong> ใช่หรือไม่?
+        </p>
+        <div class="flex justify-end gap-2 pt-2 border-t border-default">
+          <UButton
+            label="ยกเลิก"
+            color="neutral"
+            variant="outline"
+            :disabled="isDeactivatingTemplate"
+            @click="templateToDeactivate = null"
+          />
+          <UButton
+            label="ยืนยันเก็บถาวร"
+            color="error"
+            icon="i-lucide-trash-2"
+            :loading="isDeactivatingTemplate"
+            @click="confirmDeactivateDocument"
           />
         </div>
       </div>

@@ -119,19 +119,48 @@ const selectedDisplayLabel = computed(() => {
   return props.modelValue
 })
 
+const lookupPageCache = new Map<string, { time: number; result: LookupPage }>()
+const inFlightLookups = new Map<string, Promise<LookupPage>>()
+
 async function loadPage(): Promise<void> {
   const version = ++requestVersion
   pending.value = true
   error.value = false
+  const cacheKey = `${props.apiPath}?${JSON.stringify({
+    ...props.query,
+    page: page.value,
+    pageSize: 25,
+    search: search.value.trim() || undefined
+  })}`
+
   try {
-    const result = await api<LookupPage>(props.apiPath, {
-      query: {
-        ...props.query,
-        page: page.value,
-        pageSize: 25,
-        search: search.value.trim() || undefined
+    const cached = lookupPageCache.get(cacheKey)
+    let result: LookupPage
+    if (cached && Date.now() - cached.time < 5000) {
+      result = cached.result
+    } else {
+      let fetchPromise = inFlightLookups.get(cacheKey)
+      if (!fetchPromise) {
+        fetchPromise = api<LookupPage>(props.apiPath, {
+          query: {
+            ...props.query,
+            page: page.value,
+            pageSize: 25,
+            search: search.value.trim() || undefined
+          }
+        })
+          .then((res) => {
+            lookupPageCache.set(cacheKey, { time: Date.now(), result: res })
+            return res
+          })
+          .finally(() => {
+            inFlightLookups.delete(cacheKey)
+          })
+        inFlightLookups.set(cacheKey, fetchPromise)
       }
-    })
+      result = await fetchPromise
+    }
+
     if (version !== requestVersion) return
     items.value = result.items
     total.value = result.meta.total

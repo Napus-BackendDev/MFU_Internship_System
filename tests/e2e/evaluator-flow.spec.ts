@@ -59,6 +59,100 @@ const questionSnapshot = [
   }
 ]
 
+test('clears all previous student answers when switching PIN assignments', async ({
+  page
+}) => {
+  let activeAssignment = 'student-a-assignment'
+  let authenticated = false
+  await page.route('**/api/v2/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname.replace('/api/v2', '')
+    if (path === '/auth/me')
+      return route.fulfill(
+        authenticated
+          ? {
+              json: {
+                actor: {
+                  ...actor,
+                  scope: { ...actor.scope, assignmentId: activeAssignment }
+                }
+              }
+            }
+          : { status: 401, json: { error: { code: 'UNAUTHENTICATED' } } }
+      )
+    if (path === '/auth/refresh')
+      return route.fulfill({
+        status: 401,
+        json: { error: { code: 'SESSION_NOT_FOUND' } }
+      })
+    if (path === '/auth/logout') {
+      authenticated = false
+      return route.fulfill({ json: {} })
+    }
+    if (path === '/public/evaluations/verify-pin') {
+      const body = request.postDataJSON() as { pin: string }
+      activeAssignment =
+        body.pin === pin ? 'student-a-assignment' : 'student-b-assignment'
+      authenticated = true
+      return route.fulfill({
+        json: {
+          actor: {
+            ...actor,
+            scope: { ...actor.scope, assignmentId: activeAssignment }
+          },
+          assignmentId: activeAssignment
+        }
+      })
+    }
+    if (path === `/evaluations/${activeAssignment}`)
+      return route.fulfill({
+        json: {
+          assignment: {
+            id: activeAssignment,
+            studentId: activeAssignment,
+            deadlineAt: '2027-12-31T23:59:59Z',
+            status: 'pending',
+            questionSnapshot
+          },
+          draft: null,
+          evaluations: [],
+          student: { studentId: activeAssignment, name: activeAssignment }
+        }
+      })
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto('/evaluate')
+  await page.getByRole('button', { name: 'เปลี่ยนเป็นแบบช่องเดียว' }).click()
+  await page.getByPlaceholder('กรอก PIN 16 หลัก').fill(pin)
+  await page
+    .getByRole('button', { name: 'ตรวจสอบรหัส PIN และเข้าสู่แบบฟอร์ม' })
+    .click()
+  await page
+    .getByRole('group')
+    .filter({ hasText: 'ทำงานเป็นทีมได้ดี' })
+    .getByRole('radio', { name: '4', exact: true })
+    .press('Space')
+  await page
+    .getByPlaceholder('พิมพ์ข้อเสนอแนะหรือความคิดเห็น...')
+    .fill('PRIVATE ANSWER FROM STUDENT A')
+  await page
+    .getByRole('button', { name: 'เปลี่ยนรหัส PIN / ออกจากฟอร์มนี้' })
+    .click()
+  await page.getByPlaceholder('กรอก PIN 16 หลัก').fill('BBBB2222CCCC3333')
+  await page
+    .getByRole('button', { name: 'ตรวจสอบรหัส PIN และเข้าสู่แบบฟอร์ม' })
+    .click()
+  await expect(
+    page.getByText('student-b-assignment (student-b-assignment)', {
+      exact: false
+    })
+  ).toBeVisible()
+  await expect(
+    page.getByPlaceholder('พิมพ์ข้อเสนอแนะหรือความคิดเห็น...')
+  ).toHaveValue('')
+  await expect(page.getByRole('radio', { checked: true })).toHaveCount(0)
+})
+
 test('evaluator verifies PIN, resumes draft, and submits final evaluation', async ({
   page
 }) => {

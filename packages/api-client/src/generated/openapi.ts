@@ -600,6 +600,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/competency-sets/{competencySetId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                competencySetId: components["parameters"]["CompetencySetId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename a competency set; its code remains immutable
+         * @description Requires management scope over every section of every version. Published questions remain unchanged. The name change is audited.
+         */
+        patch: operations["updateCompetencySet"];
+        trace?: never;
+    };
     "/competency-sets/{competencySetId}/versions": {
         parameters: {
             query?: never;
@@ -2074,17 +2096,25 @@ export interface components {
         };
         /** @enum {string} */
         TemplateStatus: "draft" | "published" | "retired";
+        CompetencySetNamePatch: {
+            name: components["schemas"]["LocalizedText"];
+        };
         CompetencySetInput: {
+            /** @description Immutable after creation. */
             code: string;
             name: components["schemas"]["LocalizedText"];
-            programIds: components["schemas"]["ObjectId"][];
+            /**
+             * @default active
+             * @enum {string}
+             */
+            status: "active" | "archived";
         };
         CompetencySet: components["schemas"]["CompetencySetInput"] & {
             id: components["schemas"]["ObjectId"];
-            latestVersion: number;
-            currentStatus?: components["schemas"]["TemplateStatus"];
             /** Format: date-time */
-            createdAt: string;
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
         };
         CompetencySetList: {
             items: components["schemas"]["CompetencySet"][];
@@ -2467,6 +2497,19 @@ export interface components {
             passwordConfigured: boolean;
             /** @description Whether the active source has a password without revealing it */
             effectivePasswordConfigured: boolean;
+            /**
+             * @description Server-configured delivery mode; never inferred from a hostname
+             * @enum {string}
+             */
+            deliveryMode: "capture" | "smtp";
+            effectiveConnection: {
+                host: string;
+                port: number;
+                secure: boolean;
+                from: string;
+                usernameConfigured: boolean;
+                version: number;
+            };
             version: number;
             /** Format: date-time */
             updatedAt: string | null;
@@ -4210,6 +4253,36 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    updateCompetencySet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                competencySetId: components["parameters"]["CompetencySetId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompetencySetNamePatch"];
+            };
+        };
+        responses: {
+            /** @description Competency set renamed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompetencySet"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
     listCompetencySetVersions: {
         parameters: {
             query?: never;
@@ -5262,6 +5335,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     getSmtpTest: {
@@ -5848,6 +5922,8 @@ export interface operations {
     listAuditLogs: {
         parameters: {
             query?: {
+                /** @description Filter before pagination. auth matches auth routes, public PIN verification, and invitation session exchange; create/update/delete/patch match POST/PUT/DELETE/PATCH respectively. */
+                actionCategory?: "auth" | "create" | "update" | "delete" | "patch";
                 page?: components["parameters"]["Page"];
                 pageSize?: number;
                 /** @description Applied only to System Administrator queries; ignored for other roles. */

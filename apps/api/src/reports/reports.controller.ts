@@ -8,8 +8,10 @@ import {
   Param,
   Post,
   Query,
-  Req
+  Req,
+  Res
 } from '@nestjs/common'
+import type { Response } from 'express'
 import { z } from 'zod'
 
 import { RequirePermissions } from '../auth/auth.decorators.js'
@@ -58,6 +60,7 @@ const studentDirectoryExportRequestSchema = z
       .object({
         search: z.string().trim().max(100).optional(),
         schoolId: objectIdSchema.optional(),
+        programId: objectIdSchema.optional(),
         cycleId: objectIdSchema.optional(),
         academicYear: z.number().int().min(2000).max(3000).optional(),
         semester: z.string().trim().min(1).max(40).optional(),
@@ -157,5 +160,25 @@ export class ReportsController {
       exportIdSchema.parse(id),
       request.requestId ?? 'unknown'
     )
+  }
+
+  @RequirePermissions('exports.download')
+  @Get('exports/:exportId/file')
+  public async getExportFile(
+    @Req() request: AuthenticatedRequest,
+    @Param('exportId') id: string,
+    @Res() res: Response
+  ): Promise<void> {
+    const file = await this.exportService.getFile(
+      request.actor!,
+      exportIdSchema.parse(id)
+    )
+    res.setHeader('Content-Type', file.contentType)
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${file.filename}"`
+    )
+    res.setHeader('Content-Length', file.bytes.length)
+    res.send(file.bytes)
   }
 }

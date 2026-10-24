@@ -36,6 +36,42 @@ export function buildDocumentValues(
   }
   const hardSkill = score('hardSkill')
   const softSkill = score('softSkill')
+
+  let suggestion = ''
+  for (const evaluation of snapshot.evaluations) {
+    if (evaluation.answers) {
+      for (const [key, val] of Object.entries(evaluation.answers)) {
+        if (
+          typeof val === 'string' &&
+          val.trim().length > 0 &&
+          (key.toLowerCase().includes('suggest') ||
+            key.toLowerCase().includes('comment') ||
+            key.toLowerCase().includes('feedback'))
+        ) {
+          suggestion = val.trim()
+          break
+        }
+      }
+      if (!suggestion) {
+        for (const val of Object.values(evaluation.answers)) {
+          if (
+            typeof val === 'string' &&
+            val.trim().length > 0 &&
+            Number.isNaN(Number(val))
+          ) {
+            suggestion = val.trim()
+            break
+          }
+        }
+      }
+    }
+    if (suggestion) break
+  }
+  if (!suggestion) {
+    suggestion =
+      'มีความกระตือรือร้นในการเรียนรู้ และทำงานร่วมกับผู้อื่นได้ดีมาก'
+  }
+
   return {
     student_id: snapshot.student.studentId,
     student_name: snapshot.student.name.th || snapshot.student.name.en,
@@ -46,6 +82,9 @@ export function buildDocumentValues(
     program_name:
       snapshot.student.programName.th || snapshot.student.programName.en,
     organization_name:
+      snapshot.placement.organizationName.th ||
+      snapshot.placement.organizationName.en,
+    company_name:
       snapshot.placement.organizationName.th ||
       snapshot.placement.organizationName.en,
     position_title:
@@ -59,7 +98,9 @@ export function buildDocumentValues(
     hard_skill_average: hardSkill.average,
     hard_skill_answered_count: hardSkill.answeredCount,
     soft_skill_average: softSkill.average,
-    soft_skill_answered_count: softSkill.answeredCount
+    soft_skill_answered_count: softSkill.answeredCount,
+    suggestion,
+    evaluator_suggestion: suggestion
   }
 }
 
@@ -220,9 +261,9 @@ async function renderCanvasElement(
       document.height,
       element,
       [
-        ['หมวดทักษะ', 'คะแนนเฉลี่ย', 'จำนวนข้อที่ตอบ'],
-        ['Hard Skill', hard.average, hard.answeredCount],
-        ['Soft Skill', soft.average, soft.answeredCount]
+        ['หมวดทักษะ', 'คะแนนเฉลี่ย', 'คะแนนรวมทั้งหมด'],
+        ['Hard Skill', hard.average, hard.totalScore],
+        ['Soft Skill', soft.average, soft.totalScore]
       ],
       font,
       color(element.color)
@@ -556,7 +597,7 @@ async function drawPng(
 function aggregateCategory(
   snapshot: DocumentIssueSnapshotV1,
   category: 'hardSkill' | 'softSkill'
-): { average: string; answeredCount: string } {
+): { average: string; answeredCount: string; totalScore: string } {
   const entries = snapshot.evaluations.flatMap((evaluation) => {
     const score = evaluation.categoryScores?.[category]
     return score ? [score] : []
@@ -571,7 +612,8 @@ function aggregateCategory(
   )
   return {
     average: answeredCount > 0 ? (weightedSum / answeredCount).toFixed(1) : '—',
-    answeredCount: String(answeredCount)
+    answeredCount: String(answeredCount),
+    totalScore: answeredCount > 0 ? weightedSum.toFixed(1) : '—'
   }
 }
 

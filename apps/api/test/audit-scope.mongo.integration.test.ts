@@ -82,6 +82,53 @@ describe('audit resource scopes', () => {
     await auditLogs.deleteMany({})
   })
 
+  it('includes PIN and invitation session exchanges in the authentication category', async () => {
+    const routes = [
+      '/api/v2/auth/login',
+      '/auth/logout',
+      '/api/v2/public/evaluations/verify-pin',
+      '/public/invitations/exchange',
+      '/api/v2/students',
+      '/api/v2/public/evaluations/verify-pin-export'
+    ]
+    await auditLogs.create(
+      routes.map((route, index) => ({
+        ...scopeLog(`auth-${index}`, scopedActor.id),
+        route
+      }))
+    )
+    const query = { page: 1, pageSize: 100, actionCategory: 'auth' as const }
+    const result = await service.list(scopedActor, query)
+    expect(new Set(result.items.map((item) => item.route))).toEqual(
+      new Set(routes.slice(0, 4))
+    )
+    expect(result.total).toBe(4)
+  })
+
+  it('filters action category before pagination and counts only visible matches', async () => {
+    await auditLogs.create([
+      {
+        ...scopeLog('visible-delete', 'other', [
+          { schoolIds: ['school-a'], programIds: ['program-a'] }
+        ]),
+        method: 'DELETE'
+      },
+      {
+        ...scopeLog('hidden-delete', 'other', [
+          { schoolIds: ['school-b'], programIds: ['program-b'] }
+        ]),
+        method: 'DELETE'
+      },
+      ...Array.from({ length: 8 }, (_, index) =>
+        scopeLog(`own-post-${index}`, scopedActor.id)
+      )
+    ])
+    const query = { page: 1, pageSize: 5, actionCategory: 'delete' as const }
+    const result = await service.list(scopedActor, query)
+    expect(result.total).toBe(1)
+    expect(result.items.map((item) => item.action)).toEqual(['visible-delete'])
+  })
+
   it('filters by each audit-enabled role scope without cross-pair expansion', async () => {
     await auditLogs.create([
       scopeLog('own-unscoped', 'staff-auditor'),

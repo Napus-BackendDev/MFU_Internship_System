@@ -320,6 +320,8 @@ export class UsersService {
     }
     if (filters.status) {
       conditions.push({ status: filters.status as UserRecord['status'] })
+    } else {
+      conditions.push({ status: { $ne: 'archived' } })
     }
     if (filters.schoolId) {
       conditions.push({ 'roleAssignments.schoolIds': filters.schoolId })

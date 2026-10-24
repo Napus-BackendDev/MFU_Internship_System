@@ -351,13 +351,14 @@ function scrollToDocumentsSection(): void {
                 />
                 <div class="text-xs sm:text-sm space-y-1">
                   <p class="font-semibold text-highlighted">
-                    ขั้นตอนที่ 3: จุดดาวน์โหลดเอกสารสำคัญ 2 ฉบับ (Word & PDF)
+                    ขั้นตอนที่ 3: จุดดาวน์โหลดเอกสารสำคัญ 2 ฉบับ (PDF)
                   </p>
                   <p class="text-muted leading-relaxed">
-                    ในหน้าแดชบอร์ด เลื่อนลงมาที่ส่วน
-                    <strong>"เอกสารสำคัญที่สามารถดาวน์โหลดได้"</strong>
-                    จะมีเอกสารให้คุณดาวน์โหลดและพิมพ์ใช้งาน 2
-                    ฉบับอย่างเป็นทางการ
+                    ในหน้าแดชบอร์ด กด
+                    <strong>"สถานะเอกสาร"</strong> เพื่อเปิดหน้าต่างเอกสาร
+                    เมื่อผู้ประเมินตอบแบบสอบถามครบและระบบปรับสถานะจบการฝึกงานอัตโนมัติแล้ว
+                    คุณจึงสร้างเอกสาร PDF ได้
+                    หากแม่แบบยังไม่พร้อมให้ติดต่อเจ้าหน้าที่
                   </p>
                 </div>
               </div>
@@ -382,11 +383,11 @@ function scrollToDocumentsSection(): void {
                   </div>
                   <div>
                     <h4 class="font-bold text-sm text-highlighted">
-                      ใบรับรองการฝึกงาน (Certification)
+                      ใบรับรองการฝึกงาน (Certificate)
                     </h4>
                     <p class="text-[11px] text-muted mt-0.5 leading-snug">
                       ออกให้โดยสำนักวิชาและมหาวิทยาลัย
-                      รับรองผลการฝึกงานและเกรดที่ได้รับ
+                      รับรองการฝึกงานและระยะเวลาที่ฝึกงานจริง
                     </p>
                   </div>
                 </div>
@@ -401,7 +402,7 @@ function scrollToDocumentsSection(): void {
                       class="size-3 text-blue-500"
                       name="i-lucide-file-text"
                     />
-                    Word (.doc)
+                    PDF (.pdf)
                   </span>
                   <span
                     class="inline-flex items-center gap-1 text-[10px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
@@ -415,7 +416,7 @@ function scrollToDocumentsSection(): void {
                 </div>
               </div>
 
-              <!-- Document 2: Official Referral Letter -->
+              <!-- Document 2: Internship Transcript -->
               <div
                 class="rounded-xl border border-default bg-default p-4 flex flex-col justify-between space-y-3"
               >
@@ -432,11 +433,11 @@ function scrollToDocumentsSection(): void {
                   </div>
                   <div>
                     <h4 class="font-bold text-sm text-highlighted">
-                      หนังสือส่งตัวนักศึกษาฝึกงาน (Referral Letter)
+                      ใบบันทึกผลการประเมินการฝึกงาน (Transcript)
                     </h4>
                     <p class="text-[11px] text-muted mt-0.5 leading-snug">
-                      หนังสือราชการจากผู้ดูแลระบบเพื่อส่งตัวเข้าฝึกงาน ณ
-                      สถานประกอบการ
+                      แสดงข้อมูลนักศึกษา การฝึกงาน และคะแนนประเมินทักษะ Hard
+                      Skill / Soft Skill จากผลที่ส่งในระบบ
                     </p>
                   </div>
                 </div>
@@ -451,7 +452,7 @@ function scrollToDocumentsSection(): void {
                       class="size-3 text-blue-500"
                       name="i-lucide-file-text"
                     />
-                    Word (.doc)
+                    PDF (.pdf)
                   </span>
                   <span
                     class="inline-flex items-center gap-1 text-[10px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
@@ -470,10 +471,11 @@ function scrollToDocumentsSection(): void {
               class="rounded-lg bg-neutral-100 dark:bg-neutral-800/60 p-3 text-xs text-muted flex items-center justify-between"
             >
               <span
-                >✨ คุณสามารถคลิก
-                <strong>"ดูตัวอย่างและพิมพ์"</strong> เพื่อตรวจสอบหน้ากระดาษ A4
-                เสมือนจริง หรือดาวน์โหลดเป็นไฟล์
-                <strong>Word (.doc)</strong> ได้ตลอดเวลา</span
+                >สร้างเอกสารแล้วรอระบบประมวลผล กด
+                <strong>"สถานะเอกสาร"</strong> เพื่อตรวจความคืบหน้า
+                เมื่อไฟล์พร้อมจึงกด
+                <strong>"ดาวน์โหลด PDF"</strong>
+                และเปิดไฟล์เพื่อตรวจข้อมูลก่อนพิมพ์</span
               >
             </div>
           </section>

@@ -61,7 +61,7 @@ const {
   pending: provincesPending,
   error: provincesError,
   refresh: refreshProvinces
-} = await useAsyncData(
+} = useAsyncData(
   'settings-provinces',
   () =>
     api<ProvinceResponse>('/system-settings/provinces', {
@@ -73,7 +73,7 @@ const {
           selectedStatus.value !== 'all' ? selectedStatus.value : undefined
       }
     }),
-  { watch: [selectedRegion, selectedStatus] }
+  { lazy: true, watch: [selectedRegion, selectedStatus] }
 )
 
 // Fetch general config
@@ -82,8 +82,10 @@ const {
   pending: configPending,
   error: configError,
   refresh: refreshConfig
-} = await useAsyncData('settings-general-config', () =>
-  api<GeneralConfig>('/system-settings/general')
+} = useAsyncData(
+  'settings-general-config',
+  () => api<GeneralConfig>('/system-settings/general'),
+  { lazy: true }
 )
 const auth = useAuthStore()
 const canManage = computed(

@@ -34,7 +34,12 @@ const labels = computed(() =>
 )
 
 const contacts = computed(() => {
-  const list: Array<{ label: string; name?: string; email?: string; icon: string }> = []
+  const list: Array<{
+    label: string
+    name?: string
+    email?: string
+    icon: string
+  }> = []
   if (props.mode === 'all' || props.mode === 'evaluator') {
     list.push({
       label: labels.value.evaluator,
@@ -118,9 +123,7 @@ const advisorContacts = computed(() => {
           </p>
         </div>
       </div>
-      <p v-else class="text-[11px] text-muted font-mono leading-tight">
-        —
-      </p>
+      <p v-else class="text-[11px] text-muted font-mono leading-tight">—</p>
     </template>
 
     <!-- กรณีทั่วไป / modal แสดงตามรายการปกติ -->
@@ -129,9 +132,16 @@ const advisorContacts = computed(() => {
         <div class="flex items-center gap-1 leading-tight">
           <UIcon :name="contact.icon" class="size-3 text-muted shrink-0" />
           <span class="text-muted text-[11px]">{{ contact.label }}:</span>
-          <span class="ml-1 text-highlighted font-medium text-[11px] truncate">{{ contact.name || '—' }}</span>
+          <span
+            class="ml-1 text-highlighted font-medium text-[11px] truncate"
+            >{{ contact.name || '—' }}</span
+          >
         </div>
-        <p class="break-all text-[10px] text-muted/80 pl-4 font-mono leading-tight">{{ contact.email || '—' }}</p>
+        <p
+          class="break-all text-[10px] text-muted/80 pl-4 font-mono leading-tight"
+        >
+          {{ contact.email || '—' }}
+        </p>
       </div>
     </template>
   </div>

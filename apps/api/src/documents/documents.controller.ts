@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
@@ -199,6 +200,19 @@ export class DocumentsController {
     )
   }
 
+  @RequirePermissions('documentTemplates.manage')
+  @Delete('document-templates/:templateId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  public async deleteTemplate(
+    @Req() request: AuthenticatedRequest,
+    @Param('templateId') templateId: string
+  ): Promise<void> {
+    await this.service.deactivateTemplate(
+      request.actor!,
+      objectIdSchema.parse(templateId)
+    )
+  }
+
   @RequirePermissions('documentTemplates.read')
   @Get('document-templates/:templateId/versions')
   public listVersions(
@@ -294,7 +308,7 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('documentId') id: string
   ): Promise<unknown> {
-    return this.service.getDocument(
+    return this.service.getDocumentView(
       request.actor!,
       objectIdSchema.parse(id),
       request.requestId ?? 'unknown'

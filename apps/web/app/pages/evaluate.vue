@@ -65,6 +65,19 @@ const submitted = ref(false)
 const confirming = ref(false)
 const errorMessage = ref('')
 const submitKey = ref('')
+let assignmentGeneration = 0
+
+function clearAssignmentState(): void {
+  assignmentGeneration += 1
+  view.value = undefined
+  for (const key of Object.keys(answers)) Reflect.deleteProperty(answers, key)
+  revision.value = 0
+  confirming.value = false
+  submitted.value = false
+  saving.value = false
+  submitting.value = false
+  submitKey.value = ''
+}
 
 // PIN Verification State
 const pinParts = ref<[string, string, string, string]>(['', '', '', ''])
@@ -248,10 +261,14 @@ async function verifyAndLoadPin(): Promise<void> {
 }
 
 async function loadAssignment(assignmentId: string): Promise<void> {
+  clearAssignmentState()
+  const generation = assignmentGeneration
   loading.value = true
   errorMessage.value = ''
   try {
-    view.value = await api<EvaluationView>(`/evaluations/${assignmentId}`)
+    const loadedView = await api<EvaluationView>(`/evaluations/${assignmentId}`)
+    if (generation !== assignmentGeneration) return
+    view.value = loadedView
     const existingAnswers =
       view.value.draft?.answers ??
       (view.value.evaluations && view.value.evaluations.length > 0
@@ -262,16 +279,17 @@ async function loadAssignment(assignmentId: string): Promise<void> {
     submitKey.value = crypto.randomUUID()
     submitted.value = view.value.assignment.status === 'submitted'
   } catch {
-    errorMessage.value =
-      'ไม่สามารถโหลดแบบฟอร์มได้ กรุณาตรวจสอบสิทธิ์หรือโหลดใหม่'
+    if (generation === assignmentGeneration)
+      errorMessage.value =
+        'ไม่สามารถโหลดแบบฟอร์มได้ กรุณาตรวจสอบสิทธิ์หรือโหลดใหม่'
   } finally {
-    loading.value = false
+    if (generation === assignmentGeneration) loading.value = false
   }
 }
 
 async function resetPinVerification(): Promise<void> {
-  view.value = undefined
-  submitted.value = false
+  clearAssignmentState()
+  loading.value = false
   pinParts.value = ['', '', '', '']
   singlePinInput.value = ''
   pinError.value = ''
@@ -336,24 +354,30 @@ onMounted(async () => {
 
 async function saveDraft(): Promise<void> {
   if (!view.value) return
+  const generation = assignmentGeneration
   saving.value = true
   errorMessage.value = ''
   try {
     const draft = await api<{ revision: number }>(
       `/evaluations/${view.value.assignment.id}/draft`,
-      { method: 'PUT', body: { answers, revision: revision.value } }
+      {
+        method: 'PUT',
+        body: { answers: { ...answers }, revision: revision.value }
+      }
     )
-    revision.value = draft.revision
+    if (generation === assignmentGeneration) revision.value = draft.revision
   } catch {
-    errorMessage.value =
-      'บันทึกร่างไม่สำเร็จ อาจมีข้อมูลเวอร์ชันใหม่กว่า กรุณาโหลดหน้าใหม่'
+    if (generation === assignmentGeneration)
+      errorMessage.value =
+        'บันทึกร่างไม่สำเร็จ อาจมีข้อมูลเวอร์ชันใหม่กว่า กรุณาโหลดหน้าใหม่'
   } finally {
-    saving.value = false
+    if (generation === assignmentGeneration) saving.value = false
   }
 }
 
 async function submitEvaluation(): Promise<void> {
   if (!view.value) return
+  const generation = assignmentGeneration
 
   // Validate required questions before submitting
   for (const section of view.value.assignment.questionSnapshot) {
@@ -374,19 +398,21 @@ async function submitEvaluation(): Promise<void> {
   try {
     await api(`/evaluations/${view.value.assignment.id}/submit`, {
       method: 'POST',
-      body: { answers },
+      body: { answers: { ...answers } },
       headers: { 'idempotency-key': submitKey.value }
     })
+    if (generation !== assignmentGeneration) return
     submitted.value = true
     confirming.value = false
   } catch (err: unknown) {
+    if (generation !== assignmentGeneration) return
     const msg =
       err instanceof Error
         ? err.message
         : 'ส่งไม่สำเร็จ กรุณาตรวจคำถามบังคับ กำหนดส่ง และสถานะ Assignment'
     errorMessage.value = msg
   } finally {
-    submitting.value = false
+    if (generation === assignmentGeneration) submitting.value = false
   }
 }
 

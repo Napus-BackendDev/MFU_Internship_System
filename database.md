@@ -336,6 +336,10 @@ Placement completion (2026-10-15): `POST /placements/:placementId/complete` uses
 
 เก็บ identity ที่คงที่ของชุดแบบประเมิน
 
+Owner decision (2026-10-21): `code` is immutable after creation, including Mongoose
+updates. Localized `name` remains editable through the audited master-name PATCH;
+Published version content and assignment snapshots remain unchanged.
+
 ```js
 {
   code: "SE-INTERNSHIP",

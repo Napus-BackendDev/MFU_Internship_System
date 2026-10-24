@@ -29,6 +29,8 @@ export interface StudentDirectoryExportSource {
   readonly province?: string
   readonly course?: string
   readonly advisor?: LocalizedText
+  readonly advisorName?: string
+  readonly siteVisitAdvisorName?: string
   readonly directoryRelations?: {
     readonly school?: { readonly name?: LocalizedText }
     readonly program?: { readonly name?: LocalizedText }
@@ -39,6 +41,7 @@ export interface StudentDirectoryExportSource {
       readonly academicYear: number
     }
     readonly assignments?: readonly {
+      readonly id?: string
       readonly cycleId?: string
       readonly placementId?: string
       readonly status?: string
@@ -52,6 +55,9 @@ export interface StudentDirectoryExportSource {
         readonly email?: string
         readonly position?: LocalizedText
       }
+      readonly answers?: Readonly<Record<string, unknown>>
+      readonly questionSnapshot?: readonly unknown[]
+      readonly submittedAt?: Date | string
     }[]
     readonly placements?: readonly {
       readonly id: string
@@ -202,16 +208,12 @@ function statusLabels(
   assignmentStatus: string | undefined,
   cycleSelected: boolean
 ): { readonly thai: string; readonly english: string } {
-  if (!cycleSelected) {
-    return {
-      thai: 'เลือกรอบฝึกงานเพื่อดูสถานะ',
-      english: 'Select an internship cycle'
-    }
-  }
   if (assignmentCount > 1) {
     return {
-      thai: 'พบ assignment ซ้ำในรอบนี้',
-      english: 'Duplicate assignments in this cycle'
+      thai: cycleSelected ? 'พบ assignment ซ้ำในรอบนี้' : 'พบ assignment ซ้ำ',
+      english: cycleSelected
+        ? 'Duplicate assignments in this cycle'
+        : 'Duplicate assignments'
     }
   }
   switch (assignmentStatus) {
@@ -243,12 +245,17 @@ function academicYears(year: number | undefined): {
 export function toStudentDirectoryExportValues(
   student: StudentDirectoryExportSource,
   cycleId: string | undefined,
-  locale: StudentDirectoryExportLocale
+  locale: StudentDirectoryExportLocale,
+  meta?: {
+    readonly issuedOn?: string
+    readonly pdfUrl?: string
+    readonly emailSent?: string
+  }
 ): StudentDirectoryExportValues {
   const assignments = student.directoryRelations?.assignments ?? []
   const cycleAssignments = cycleId
     ? assignments.filter((assignment) => assignment.cycleId === cycleId)
-    : []
+    : assignments
   const assignment =
     cycleAssignments.length === 1 ? cycleAssignments[0] : undefined
   const placements = student.directoryRelations?.placements ?? []
@@ -334,8 +341,12 @@ export function toStudentDirectoryExportValues(
     province: cycleSelected
       ? text(address?.province)
       : text(student.province || address?.province),
-    advisorTh: text(student.advisor?.th),
-    advisorEn: text(student.advisor?.en),
+    advisorTh: text(
+      student.advisorName || student.siteVisitAdvisorName || student.advisor?.th
+    ),
+    advisorEn: text(
+      student.advisorName || student.siteVisitAdvisorName || student.advisor?.en
+    ),
     evaluatorTh: text(evaluator?.name?.th),
     evaluatorEn: text(evaluator?.name?.en),
     evaluatorPositionTh: text(evaluator?.position?.th),
@@ -344,6 +355,66 @@ export function toStudentDirectoryExportValues(
     statusTh: status.thai,
     statusEn: status.english,
     hardSkillScore: formatScore(scores?.hardSkill, locale),
-    softSkillScore: formatScore(scores?.softSkill, locale)
+    softSkillScore: formatScore(scores?.softSkill, locale),
+    ...(() => {
+      let hardSkills: Array<{ index: number; titleTh: string; titleEn: string; score: number | null }> = []
+      let softSkills: Array<{ index: number; titleTh: string; titleEn: string; score: number | null }> = []
+      let issuedOn = meta?.issuedOn || '-'
+
+      if (assignment?.answers && assignment?.questionSnapshot) {
+        const answers = assignment.answers as Record<string, unknown>
+        const sections = assignment.questionSnapshot as Array<{
+          category?: string
+          title?: LocalizedText
+          questions?: Array<{
+            id: string
+            label?: LocalizedText
+          }>
+        }>
+
+        const hardSection = sections.find((s) => s.category === 'special')
+        if (hardSection?.questions) {
+          hardSkills = hardSection.questions.map((q, idx) => {
+            const val = answers[q.id]
+            const numVal = typeof val === 'number' && Number.isFinite(val) ? val : null
+            return {
+              index: idx + 1,
+              titleTh: q.label?.th || q.label?.en || `Hard Skill ${idx + 1}`,
+              titleEn: q.label?.en || q.label?.th || `Hard Skill ${idx + 1}`,
+              score: numVal
+            }
+          })
+        }
+
+        const softSection = sections.find((s) => s.category === 'general')
+        if (softSection?.questions) {
+          softSkills = softSection.questions.map((q, idx) => {
+            const val = answers[q.id]
+            const numVal = typeof val === 'number' && Number.isFinite(val) ? val : null
+            return {
+              index: idx + 1,
+              titleTh: q.label?.th || q.label?.en || `Soft Skill ${idx + 1}`,
+              titleEn: q.label?.en || q.label?.th || `Soft Skill ${idx + 1}`,
+              score: numVal
+            }
+          })
+        }
+      }
+
+      if (!meta?.issuedOn && assignment?.submittedAt) {
+        const d = new Date(assignment.submittedAt)
+        issuedOn = Number.isNaN(d.getTime()) ? '-' : d.toISOString().slice(0, 10)
+      }
+
+      return {
+        ...(hardSkills.length > 0 ? { hardSkills } : {}),
+        ...(softSkills.length > 0 ? { softSkills } : {}),
+        hardAverage: scores?.hardSkill?.average ?? null,
+        softAverage: scores?.softSkill?.average ?? null,
+        issuedOn,
+        pdfUrl: meta?.pdfUrl || '',
+        emailSent: meta?.emailSent || ''
+      }
+    })()
   }
 }

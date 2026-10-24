@@ -741,10 +741,10 @@ describe('production MVP flow across import, invitation, evaluation, and documen
     await expect(
       assignments.findById(invite.assignmentId).select('status').lean()
     ).resolves.toMatchObject({ status: 'submitted' })
-    await placements.updateOne(
-      { _id: placement.id },
-      { $set: { status: 'completed' } }
-    )
+    // Placement is now automatically completed upon evaluation submission
+    await expect(
+      placements.findById(placement.id).select('status').lean()
+    ).resolves.toMatchObject({ status: 'completed' })
 
     const documentTemplate = await documentTemplates.create({
       code: 'MVP-CERTIFICATE',

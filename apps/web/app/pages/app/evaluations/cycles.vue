@@ -174,7 +174,7 @@ const {
   error: cyclesError,
   pending: cyclesPending,
   refresh: refreshCycles
-} = await useAsyncData(
+} = useAsyncData(
   'evaluation-cycle-management',
   () =>
     api<PageResult<EvaluationCycle>>('/evaluation-cycles', {
@@ -185,7 +185,7 @@ const {
         status: cycleStatus.value || undefined
       }
     }),
-  { watch: [page, cycleSearchQuery, cycleStatus] }
+  { lazy: true, watch: [page, cycleSearchQuery, cycleStatus] }
 )
 
 const cycleProgramIds = computed(() =>
@@ -204,7 +204,7 @@ const {
   data: cyclePrograms,
   error: cycleProgramsError,
   refresh: refreshCyclePrograms
-} = await useAsyncData(
+} = useAsyncData(
   'evaluation-cycle-programs',
   async () => {
     const programIds = cycleProgramIds.value
@@ -215,50 +215,48 @@ const {
     })
     return result.items
   },
-  { watch: [cycleProgramIds] }
+  { lazy: true, watch: [cycleProgramIds] }
 )
 
-const [termsResult, schoolsResult, competencySetsResult] = await Promise.all([
-  useAsyncData(
-    'evaluation-cycle-term-options',
-    () =>
-      api<PageResult<AcademicTerm>>('/academic/terms', {
-        query: {
-          page: termPage.value,
-          pageSize: referencePageSize,
-          search: termSearchQuery.value || undefined,
-          archived: false
-        }
-      }),
-    { watch: [termPage, termSearchQuery] }
-  ),
-  useAsyncData(
-    'evaluation-cycle-school-options',
-    () =>
-      api<PageResult<School>>('/academic/schools', {
-        query: {
-          page: schoolPage.value,
-          pageSize: referencePageSize,
-          search: schoolSearchQuery.value || undefined,
-          archived: false
-        }
-      }),
-    { watch: [schoolPage, schoolSearchQuery] }
-  ),
-  useAsyncData(
-    'evaluation-cycle-competency-set-options',
-    () =>
-      api<PageResult<CompetencySet>>('/competency-sets', {
-        query: {
-          page: competencySetPage.value,
-          pageSize: referencePageSize,
-          search: competencySetSearchQuery.value || undefined,
-          archived: false
-        }
-      }),
-    { watch: [competencySetPage, competencySetSearchQuery] }
-  )
-])
+const termsResult = useAsyncData(
+  'evaluation-cycle-term-options',
+  () =>
+    api<PageResult<AcademicTerm>>('/academic/terms', {
+      query: {
+        page: termPage.value,
+        pageSize: referencePageSize,
+        search: termSearchQuery.value || undefined,
+        archived: false
+      }
+    }),
+  { lazy: true, watch: [termPage, termSearchQuery] }
+)
+const schoolsResult = useAsyncData(
+  'evaluation-cycle-school-options',
+  () =>
+    api<PageResult<School>>('/academic/schools', {
+      query: {
+        page: schoolPage.value,
+        pageSize: referencePageSize,
+        search: schoolSearchQuery.value || undefined,
+        archived: false
+      }
+    }),
+  { lazy: true, watch: [schoolPage, schoolSearchQuery] }
+)
+const competencySetsResult = useAsyncData(
+  'evaluation-cycle-competency-set-options',
+  () =>
+    api<PageResult<CompetencySet>>('/competency-sets', {
+      query: {
+        page: competencySetPage.value,
+        pageSize: referencePageSize,
+        search: competencySetSearchQuery.value || undefined,
+        archived: false
+      }
+    }),
+  { lazy: true, watch: [competencySetPage, competencySetSearchQuery] }
+)
 const termsData = termsResult.data
 const termsError = termsResult.error
 const termsPending = termsResult.pending
@@ -570,16 +568,31 @@ async function previewCycle(
   }
 }
 
-async function activateCycle(cycle: EvaluationCycle): Promise<void> {
+const cycleConfirmation = ref<{
+  cycle: EvaluationCycle
+  action: 'activate' | 'close'
+} | null>(null)
+
+async function confirmCycleOperation(): Promise<void> {
+  const confirmation = cycleConfirmation.value
+  cycleConfirmation.value = null
+  if (!confirmation) return
+  if (confirmation.action === 'activate')
+    await activateCycle(confirmation.cycle, true)
+  else await closeCycle(confirmation.cycle, true)
+}
+
+async function activateCycle(
+  cycle: EvaluationCycle,
+  confirmed = false
+): Promise<void> {
   let preview = previews[cycle.id]
   if (!preview) preview = await previewCycle(cycle)
   if (!preview?.valid) return
-  if (
-    !window.confirm(
-      `ยืนยันเปิดรอบ ${cycle.code}? การเปิดรอบจะสร้างขอบเขตงานสำหรับรอบนี้`
-    )
-  )
+  if (!confirmed) {
+    cycleConfirmation.value = { cycle, action: 'activate' }
     return
+  }
 
   operationCycleId.value = cycle.id
   try {
@@ -609,12 +622,12 @@ async function activateCycle(cycle: EvaluationCycle): Promise<void> {
   }
 }
 
-async function closeCycle(cycle: EvaluationCycle): Promise<void> {
-  if (
-    !window.confirm(
-      `ปิดรอบ ${cycle.code} ใช่ไหม? งานที่ยังไม่ส่งจะหมดอายุทันที และไม่สามารถเปิดรอบนี้กลับได้`
-    )
-  ) {
+async function closeCycle(
+  cycle: EvaluationCycle,
+  confirmed = false
+): Promise<void> {
+  if (!confirmed) {
+    cycleConfirmation.value = { cycle, action: 'close' }
     return
   }
   operationCycleId.value = cycle.id
@@ -1230,5 +1243,46 @@ async function closeCycle(cycle: EvaluationCycle): Promise<void> {
         />
       </div>
     </UCard>
+    <AppModal
+      v-if="cycleConfirmation"
+      :open="true"
+      :title="
+        cycleConfirmation.action === 'activate'
+          ? 'ยืนยันเปิดรอบประเมิน'
+          : 'ยืนยันปิดรอบประเมิน'
+      "
+      @update:open="
+        (open) => {
+          if (!open) cycleConfirmation = null
+        }
+      "
+    >
+      <div class="space-y-4 p-6">
+        <h2 class="text-lg font-semibold">
+          {{
+            cycleConfirmation.action === 'activate'
+              ? 'ยืนยันเปิดรอบประเมิน'
+              : 'ยืนยันปิดรอบประเมิน'
+          }}
+        </h2>
+        <p>{{ cycleConfirmation.cycle.code }}</p>
+        <p>
+          {{
+            cycleConfirmation.action === 'activate'
+              ? 'การเปิดรอบจะสร้างขอบเขตงานสำหรับรอบนี้'
+              : 'งานที่ยังไม่ส่งจะหมดอายุทันที และไม่สามารถเปิดรอบนี้กลับได้'
+          }}
+        </p>
+        <div class="flex justify-end gap-2">
+          <UButton
+            label="ยกเลิก"
+            color="neutral"
+            variant="outline"
+            @click="cycleConfirmation = null"
+          />
+          <UButton label="ยืนยัน" @click="confirmCycleOperation" />
+        </div>
+      </div>
+    </AppModal>
   </div>
 </template>

@@ -299,8 +299,11 @@ export class AcademicService {
         ]
       })
     }
-    if (options.archived === false)
+    if (options.archived === false) {
       filters.push({ status: { $ne: 'archived' } })
+    } else if (options.archived === true) {
+      filters.push({ status: 'archived' })
+    }
     return paginate(this.schools, andFilters(filters), page, {
       schoolCode: 1,
       _id: 1
@@ -739,11 +742,43 @@ export class AcademicService {
       resultingPrograms = programs
     }
     if (input.status === 'archived' && current.status !== 'archived') {
-      // Retirement must be coordinated with references and in-flight writes.
-      throw new ConflictException({
-        code: 'COURSE_ARCHIVE_REQUIRES_MIGRATION',
-        field: 'status'
-      })
+      const studentModel =
+        this.students ??
+        (this.courses.db?.models?.[StudentRecord.name] as Model<StudentRecord> | undefined)
+      if (studentModel) {
+        const studentExists = await studentModel
+          .exists({ courseId: current.id })
+          .exec()
+        if (studentExists) {
+          throw new ConflictException({
+            code: 'COURSE_ARCHIVE_REQUIRES_MIGRATION',
+            field: 'status'
+          })
+        }
+      } else {
+        throw new ConflictException({
+          code: 'COURSE_ARCHIVE_REQUIRES_MIGRATION',
+          field: 'status'
+        })
+      }
+      const placementModel =
+        this.placements ??
+        (this.courses.db?.models?.[PlacementRecord.name] as Model<PlacementRecord> | undefined)
+      if (placementModel) {
+        const livePlacement = await placementModel
+          .exists({
+            courseId: current.id,
+            status: { $in: ['planned', 'active'] }
+          })
+          .exec()
+        if (livePlacement) {
+          throw new ConflictException({
+            code: 'COURSE_HAS_OPEN_WORK',
+            field: 'status'
+          })
+        }
+      }
+      update.status = 'archived'
     }
     const programScopes = this.programAuditScopes(resultingPrograms)
     return this.auditedMutation(actor, requestId, async (session) => {
@@ -806,8 +841,11 @@ export class AcademicService {
         ]
       })
     }
-    if (options.archived === false)
+    if (options.archived === false) {
       filters.push({ status: { $ne: 'archived' } })
+    } else if (options.archived === true) {
+      filters.push({ status: 'archived' })
+    }
     const tenantStaff = actor.roleScopes
       ? actor.roleScopes.some(
           (scope) =>

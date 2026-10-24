@@ -180,7 +180,6 @@ const directoryError = ref('')
 const exportLoading = ref(false)
 const studentDirectoryExportKeys = new Map<string, string>()
 let directoryRequestVersion = 0
-let directoryFacetKey = ''
 
 // Filter states
 const selectedYear = ref<string>('all')
@@ -412,7 +411,7 @@ function enrichStudents(
       statusEn = 'Could not load evaluation status'
     } else if (rawEvalStatus === 'submitted') {
       status = 'submitted'
-      statusTh = 'ส่งผลประเมินแล้ว'
+      statusTh = 'จบการฝึกงานแล้ว'
       statusEn = 'Submitted'
     } else if (rawEvalStatus === 'email_error') {
       status = 'email_error'
@@ -605,7 +604,7 @@ const availableSchools = computed<
 const statusLabels: Record<string, { labelTh: string; icon: string }> = {
   pending: { labelTh: 'รอระบุผู้ประเมิน', icon: '⚪' },
   inProgress: { labelTh: 'ส่งคำขอประเมินแล้ว', icon: '🟡' },
-  submitted: { labelTh: 'ส่งผลประเมินแล้ว', icon: '🟢' },
+  submitted: { labelTh: 'จบการฝึกงานแล้ว', icon: '🟢' },
   expired: { labelTh: 'หมดอายุ', icon: '🔴' },
   email_error: { labelTh: 'ส่งอีเมลผิดพลาด', icon: '❌' },
   assignment_ambiguous: { labelTh: 'พบ assignment ซ้ำ', icon: '⚠️' }
@@ -614,7 +613,7 @@ const statusLabels: Record<string, { labelTh: string; icon: string }> = {
 const defaultStatusesList = [
   { value: 'pending', labelTh: 'รอระบุผู้ประเมิน', icon: '⚪' },
   { value: 'inProgress', labelTh: 'ส่งคำขอประเมินแล้ว', icon: '🟡' },
-  { value: 'submitted', labelTh: 'ส่งผลประเมินแล้ว', icon: '🟢' },
+  { value: 'submitted', labelTh: 'จบการฝึกงานแล้ว', icon: '🟢' },
   { value: 'email_error', labelTh: 'ส่งอีเมลผิดพลาด', icon: '❌' },
   { value: 'expired', labelTh: 'หมดอายุ', icon: '🔴' }
 ]
@@ -765,20 +764,10 @@ function directoryQuery(
   return query
 }
 
-function directoryFilterKey(): string {
-  const query = directoryQuery(1, pageSize.value)
-  delete query.page
-  delete query.pageSize
-  delete query.includeDirectoryData
-  return JSON.stringify(query)
-}
-
 async function loadDirectoryPage(includeData: boolean): Promise<void> {
   if (!import.meta.client) return
   const requestVersion = ++directoryRequestVersion
-  const filterKey = directoryFilterKey()
-  const withDirectoryData =
-    includeData || !directoryData.value || directoryFacetKey !== filterKey
+  const withDirectoryData = includeData || !directoryData.value
   directoryLoading.value = true
   directoryError.value = ''
   try {
@@ -790,7 +779,6 @@ async function loadDirectoryPage(includeData: boolean): Promise<void> {
     directoryTotal.value = result.meta.total
     if (result.directory) {
       directoryData.value = result.directory
-      directoryFacetKey = filterKey
     }
   } catch (error) {
     if (requestVersion !== directoryRequestVersion) return
@@ -811,7 +799,7 @@ watch(
   () => {
     page.value = 1
     clearTimeout(directorySearchTimer)
-    directorySearchTimer = setTimeout(() => void loadDirectoryPage(true), 250)
+    directorySearchTimer = setTimeout(() => void loadDirectoryPage(false), 250)
   }
 )
 watch([page, pageSize], () => void loadDirectoryPage(false))
@@ -1098,15 +1086,21 @@ function getRowActions(row: EnrichedStudentRow) {
     ],
     [
       {
-        label: 'Certificate (ยังไม่พร้อมออกเอกสาร)',
+        label:
+          row.status === 'submitted'
+            ? 'Certificate'
+            : 'Certificate (ยังไม่พร้อมออกเอกสาร)',
         icon: 'i-lucide-award',
-        disabled: true,
+        disabled: row.status !== 'submitted',
         onSelect: () => openDoc('certification', row)
       },
       {
-        label: 'Transcript (ยังไม่พร้อมออกเอกสาร)',
+        label:
+          row.status === 'submitted'
+            ? 'Transcript'
+            : 'Transcript (ยังไม่พร้อมออกเอกสาร)',
         icon: 'i-lucide-file-text',
-        disabled: true,
+        disabled: row.status !== 'submitted',
         onSelect: () => openDoc('referral', row)
       }
     ],
@@ -1124,24 +1118,82 @@ function getRowActions(row: EnrichedStudentRow) {
 // =============================================================================
 // BILINGUAL EXCEL EXPORT (ภาษาไทย & ภาษาอังกฤษ) อิงตามข้อมูลจริงในฐานข้อมูล
 // =============================================================================
-async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
+const exportModalOpen = ref(false)
+const exportForm = ref({
+  academicYear: '',
+  schoolId: 'all',
+  programId: 'all',
+  semester: 'all',
+  locale: 'th' as 'th' | 'en'
+})
+
+const exportYearOptions = computed(() =>
+  availableYears.value.map((yr) => ({
+    value: yr,
+    label: `ปีการศึกษา ${yr} (${Number(yr) - 543})`
+  }))
+)
+
+function openExportModal(locale: 'th' | 'en' = 'th'): void {
+  exportForm.value.locale = locale
+  if (selectedYear.value && selectedYear.value !== 'all') {
+    exportForm.value.academicYear = selectedYear.value
+  } else if (availableYears.value.length > 0) {
+    exportForm.value.academicYear = availableYears.value[0] || ''
+  } else {
+    exportForm.value.academicYear = ''
+  }
+  exportForm.value.schoolId = selectedSchool.value || 'all'
+  exportForm.value.programId = 'all'
+  exportForm.value.semester = selectedSemester.value || 'all'
+  exportModalOpen.value = true
+}
+
+function setExportSchool(value: string): void {
+  exportForm.value.schoolId = value
+  exportForm.value.programId = 'all'
+}
+
+async function confirmExport(): Promise<void> {
+  if (!exportForm.value.academicYear) {
+    toast.add({
+      title: 'กรุณาระบุปีการศึกษา',
+      description: 'จำเป็นต้องเลือกปีการศึกษาเพื่อกำหนดการส่งออกข้อมูล',
+      color: 'warning',
+      icon: 'i-lucide-alert-triangle'
+    })
+    return
+  }
+
+  const rawYear = Number(exportForm.value.academicYear)
+  const academicYear = !Number.isNaN(rawYear)
+    ? rawYear > 2400
+      ? rawYear - 543
+      : rawYear
+    : undefined
+
+  const filters: Record<string, unknown> = {}
+  if (academicYear) filters.academicYear = academicYear
+  if (exportForm.value.schoolId && exportForm.value.schoolId !== 'all') {
+    filters.schoolId = exportForm.value.schoolId
+  }
+  if (exportForm.value.programId && exportForm.value.programId !== 'all') {
+    filters.programId = exportForm.value.programId
+  }
+  if (exportForm.value.semester && exportForm.value.semester !== 'all') {
+    filters.semester = exportForm.value.semester
+  }
+
+  await runExport(exportForm.value.locale, filters)
+}
+
+async function runExport(
+  locale: 'th' | 'en',
+  filters: Record<string, unknown>
+): Promise<void> {
   if (!import.meta.client) return
 
   exportLoading.value = true
-  const query = directoryQuery(1, 1)
-  const allowedFilterKeys = [
-    'search',
-    'schoolId',
-    'cycleId',
-    'academicYear',
-    'semester',
-    'evaluationStatus'
-  ] as const
-  const filters = Object.fromEntries(
-    allowedFilterKeys.flatMap((key) =>
-      query[key] === undefined ? [] : [[key, query[key]]]
-    )
-  )
   const keyScope = JSON.stringify({ locale, filters })
   const idempotencyKey =
     studentDirectoryExportKeys.get(keyScope) ?? crypto.randomUUID()
@@ -1165,7 +1217,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
       studentDirectoryExportKeys.delete(keyScope)
       toast.add({
         title: 'ไม่มีข้อมูลสำหรับส่งออก',
-        description: 'กรุณาปรับเปลี่ยนตัวกรองเพื่อเลือกข้อมูลนักศึกษา',
+        description: 'ไม่พบข้อมูลนักศึกษาที่ตรงตามเงื่อนไขที่เลือก กรุณาปรับเปลี่ยนตัวกรอง',
         color: 'warning',
         icon: 'i-lucide-alert-triangle'
       })
@@ -1213,7 +1265,23 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
       throw new Error('Received an invalid download URL')
     }
     studentDirectoryExportKeys.delete(keyScope)
-    window.location.assign(safeDownloadUrl)
+    const fileRes = await fetch(safeDownloadUrl, {
+      credentials: 'include'
+    })
+    if (!fileRes.ok) {
+      throw new Error(`Failed to download report file (HTTP ${fileRes.status})`)
+    }
+    const blob = await fileRes.blob()
+    const objectUrl = window.URL.createObjectURL(blob)
+    const dateStamp = new Date().toISOString().slice(0, 10).replaceAll('-', '')
+    const filename = `MFU_Internship_Report_${locale === 'th' ? 'TH' : 'EN'}_${dateStamp}.xlsx`
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.URL.revokeObjectURL(objectUrl)
     toast.add({
       title:
         locale === 'th'
@@ -1224,6 +1292,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
       icon: 'i-lucide-file-spreadsheet'
     })
 
+    exportModalOpen.value = false
     exportMenuOpen.value = false
   } catch (error) {
     console.error('Failed to export Student directory:', error)
@@ -1278,7 +1347,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
           size="sm"
           variant="solid"
           class="font-medium shadow-sm hover:shadow"
-          @click="exportToExcel('th')"
+          @click="openExportModal('th')"
         />
 
         <!-- Export English -->
@@ -1290,7 +1359,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
           size="sm"
           variant="outline"
           class="font-medium"
-          @click="exportToExcel('en')"
+          @click="openExportModal('en')"
         />
       </div>
     </div>
@@ -1331,7 +1400,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
         </span>
         <div>
           <p class="text-xs text-emerald-700 dark:text-emerald-400">
-            ส่งผลประเมินแล้ว
+            จบการฝึกงานแล้ว
           </p>
           <p class="text-xl font-bold text-emerald-700 dark:text-emerald-300">
             {{ stats.submitted }} คน
@@ -1722,7 +1791,7 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
                     class="font-semibold flex items-center gap-1 w-fit"
                   >
                     <UIcon name="i-lucide-check-circle-2" class="size-3" />
-                    ส่งผลประเมินแล้ว
+                    จบการฝึกงานแล้ว
                   </UBadge>
                   <UBadge
                     v-else-if="row.status === 'email_error'"
@@ -2614,6 +2683,225 @@ async function exportToExcel(locale: 'th' | 'en'): Promise<void> {
             />
           </div>
         </form>
+      </div>
+    </AppModal>
+
+    <!-- ========================================================================= -->
+    <!-- MODAL: กำหนดตัวกรองสำหรับส่งออกข้อมูล Excel (Cer PDF + Send Email Format)  -->
+    <!-- ========================================================================= -->
+    <AppModal
+      v-if="exportModalOpen"
+      :open="true"
+      title="ส่งออกรายงาน Excel"
+      @update:open="
+        (value) => {
+          if (!value && !exportLoading) {
+            exportModalOpen = false
+          }
+        }
+      "
+    >
+      <div
+        class="w-full max-w-xl rounded-2xl sm:rounded-3xl border border-default bg-default p-6 shadow-2xl space-y-5"
+        @click.stop
+      >
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-default pb-4">
+          <div class="flex items-center gap-3">
+            <span
+              class="grid size-11 place-items-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/20"
+            >
+              <UIcon name="i-lucide-file-spreadsheet" class="size-6" />
+            </span>
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-lg font-bold text-highlighted tracking-tight">
+                  {{ exportForm.locale === 'th' ? 'ส่งออกรายงาน Excel (ภาษาไทย)' : 'Export Excel Report (English)' }}
+                </h2>
+                <UBadge
+                  :color="exportForm.locale === 'th' ? 'success' : 'primary'"
+                  size="xs"
+                  variant="soft"
+                  class="font-mono font-semibold"
+                >
+                  {{ exportForm.locale === 'th' ? 'TH' : 'EN' }}
+                </UBadge>
+              </div>
+              <p class="text-xs text-muted mt-0.5">
+                เลือกปีการศึกษา สำนักวิชา และสาขา สำหรับจัดทำไฟล์ Cer PDF + ส่งเมล
+              </p>
+            </div>
+          </div>
+          <UButton
+            aria-label="ปิดหน้าต่าง"
+            color="neutral"
+            icon="i-lucide-x"
+            size="sm"
+            variant="ghost"
+            :disabled="exportLoading"
+            @click="exportModalOpen = false"
+          />
+        </div>
+
+        <!-- Body -->
+        <div class="space-y-4">
+          <!-- 1. ปีการศึกษา (Academic Year - Required) -->
+          <div>
+            <label class="block text-xs font-semibold text-highlighted mb-1.5">
+              ปีการศึกษา (Academic Year)
+              <span class="text-rose-500 font-bold">* จำเป็นต้องเลือก</span>
+            </label>
+            <USelect
+              v-model="exportForm.academicYear"
+              :items="exportYearOptions"
+              value-key="value"
+              label-key="label"
+              placeholder="-- กรุณาเลือกปีการศึกษา (จำเป็น) --"
+              class="w-full"
+              :ui="{ base: 'h-11 rounded-xl text-sm font-medium' }"
+            />
+            <p
+              v-if="!exportForm.academicYear"
+              class="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1"
+            >
+              <UIcon name="i-lucide-alert-triangle" class="size-3.5" />
+              จำเป็นต้องระบุปีการศึกษา เพื่อกำหนดขอบเขตข้อมูลที่จะนำออกมาจัดทำไฟล์
+            </p>
+          </div>
+
+          <!-- 2. สำนักวิชา (School) -->
+          <div>
+            <label class="block text-xs font-semibold text-highlighted mb-1.5">
+              สำนักวิชา (School)
+            </label>
+            <USelect
+              :model-value="exportForm.schoolId"
+              :items="schoolSelectOptions"
+              value-key="value"
+              label-key="label"
+              class="w-full"
+              :ui="{ base: 'h-11 rounded-xl text-sm' }"
+              @update:model-value="setExportSchool"
+            />
+          </div>
+
+          <!-- 3. สาขาวิชา / หลักสูตร (Program) -->
+          <div>
+            <label class="block text-xs font-semibold text-highlighted mb-1.5">
+              สาขาวิชา / หลักสูตร (Program)
+            </label>
+            <PaginatedLookupSelect
+              v-model="exportForm.programId"
+              api-path="/academic/programs"
+              id-query-param="programIds"
+              label="สาขาวิชา / หลักสูตร"
+              empty-label="🌐 ทุกสาขาวิชาในสำนักวิชา (All Programs)"
+              empty-value="all"
+              :query="exportForm.schoolId && exportForm.schoolId !== 'all' ? { schoolId: exportForm.schoolId } : {}"
+              control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+
+          <!-- 4. ภาคการศึกษา (Semester) -->
+          <div>
+            <label class="block text-xs font-semibold text-highlighted mb-1.5">
+              ภาคการศึกษา (Semester)
+            </label>
+            <USelect
+              v-model="exportForm.semester"
+              :items="semesterSelectOptions"
+              value-key="value"
+              label-key="label"
+              class="w-full"
+              :ui="{ base: 'h-11 rounded-xl text-sm' }"
+            />
+          </div>
+
+          <!-- 5. ภาษาที่ต้องการส่งออก (Language) -->
+          <div>
+            <label class="block text-xs font-semibold text-highlighted mb-1.5">
+              ภาษาของเอกสาร (Language / Locale)
+            </label>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                class="flex items-center justify-center gap-2 p-2.5 rounded-xl border text-xs font-semibold transition-all"
+                :class="
+                  exportForm.locale === 'th'
+                    ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/30'
+                    : 'border-default text-muted hover:border-primary/40'
+                "
+                @click="exportForm.locale = 'th'"
+              >
+                <span class="size-2 rounded-full bg-emerald-500" />
+                ภาษาไทย (Thai Report)
+              </button>
+              <button
+                type="button"
+                class="flex items-center justify-center gap-2 p-2.5 rounded-xl border text-xs font-semibold transition-all"
+                :class="
+                  exportForm.locale === 'en'
+                    ? 'border-primary bg-primary/5 text-primary ring-1 ring-primary/30'
+                    : 'border-default text-muted hover:border-primary/40'
+                "
+                @click="exportForm.locale = 'en'"
+              >
+                <span class="size-2 rounded-full bg-primary" />
+                English (English Report)
+              </button>
+            </div>
+          </div>
+
+          <!-- Notice Box -->
+          <div
+            class="rounded-xl border border-default bg-muted/30 p-3.5 text-xs text-muted space-y-1"
+          >
+            <div class="flex items-center gap-1.5 font-semibold text-highlighted">
+              <UIcon
+                name="i-lucide-file-check"
+                class="size-4 text-emerald-600 dark:text-emerald-400"
+              />
+              <span>รูปแบบไฟล์ตามแม่แบบมาตรฐาน Cer PDF + ส่งเมล:</span>
+            </div>
+            <ul class="list-disc list-inside space-y-0.5 text-[11px] text-muted pl-1">
+              <li>
+                แยกชีตรายหลักสูตร (62 คอลัมน์: Hard Skills รายข้อ, HS, HM, HA,
+                HSD, SS1..SS12, SM, SA, SSD, PDF URL, EMAIL_SENT)
+              </li>
+              <li>
+                มีชีตสรุป <code>Send Email</code> สำหรับติดตามการส่งเมลและลิงก์ PDF นักศึกษาทุกคน
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div
+          class="flex items-center justify-end gap-3 pt-4 border-t border-default"
+        >
+          <UButton
+            color="neutral"
+            label="ยกเลิก"
+            variant="ghost"
+            size="sm"
+            :disabled="exportLoading"
+            @click="exportModalOpen = false"
+          />
+          <UButton
+            :color="exportForm.locale === 'th' ? 'success' : 'primary'"
+            icon="i-lucide-file-spreadsheet"
+            :label="
+              exportForm.locale === 'th'
+                ? 'ยืนยันการส่งออก Excel'
+                : 'Confirm Export Excel'
+            "
+            :loading="exportLoading"
+            :disabled="!exportForm.academicYear"
+            size="sm"
+            class="font-medium shadow-sm hover:shadow"
+            @click="confirmExport"
+          />
+        </div>
       </div>
     </AppModal>
   </div>

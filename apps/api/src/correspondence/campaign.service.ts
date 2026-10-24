@@ -167,6 +167,8 @@ export interface TargetedEmailInput {
 
 export interface InvitationReissueInput {
   readonly reason: string
+  readonly recipientEmail?: string
+  readonly evaluatorName?: string
 }
 
 export interface DirectStudentInvitationResult {
@@ -1451,12 +1453,19 @@ export class CampaignService {
       ['internshipStaff']
     )
     const reason = input.reason.trim()
+    const targetEmail = input.recipientEmail?.trim()
+      ? input.recipientEmail.trim().toLowerCase()
+      : undefined
     const scopedKey = idempotencyScopeKey(
       actor.id,
       'invitation-reissue',
       idempotencyKey
     )
-    const payloadHash = requestHash({ assignmentId, reason })
+    const payloadHash = requestHash({
+      assignmentId,
+      reason,
+      recipientEmail: targetEmail
+    })
     const replay = await this.findInvitationReissueReplay(
       actor,
       scopedKey,
@@ -1517,6 +1526,19 @@ export class CampaignService {
           })
         }
         const previousVersion = currentInvitation.version ?? 1
+        const effectiveRecipientEmail = targetEmail || evaluator.email
+
+        if (targetEmail && targetEmail !== evaluator.email) {
+          evaluator.email = targetEmail
+          await evaluator.save({ session })
+        }
+        if (input.evaluatorName && input.evaluatorName.trim()) {
+          evaluator.name = {
+            th: input.evaluatorName.trim(),
+            en: input.evaluatorName.trim()
+          }
+          await evaluator.save({ session })
+        }
 
         const invitation = await this.invitations.findOneAndUpdate(
           {
@@ -1528,7 +1550,7 @@ export class CampaignService {
           {
             $set: {
               version: previousVersion + 1,
-              email: evaluator.email,
+              email: effectiveRecipientEmail,
               expiresAt: assignment.deadlineAt,
               status: 'active'
             },
@@ -1577,7 +1599,7 @@ export class CampaignService {
         const delivery = await new this.deliveries({
           campaignId: campaign.id,
           assignmentId: assignment.id,
-          recipientEmail: evaluator.email,
+          recipientEmail: effectiveRecipientEmail,
           templateVersionId,
           status: 'queued',
           attempts: 0
@@ -2048,6 +2070,23 @@ export class CampaignService {
         if (targetIssue) {
           throw new ConflictException({ code: targetIssue })
         }
+
+        if (input.recipientEmail && recipientEmail !== evaluator.email) {
+          evaluator.email = recipientEmail
+          await evaluator.save({ session })
+        }
+        if (input.evaluatorName && input.evaluatorName.trim()) {
+          evaluator.name = {
+            th: input.evaluatorName.trim(),
+            en: input.evaluatorName.trim()
+          }
+          await evaluator.save({ session })
+        }
+        if (invitation && recipientEmail !== invitation.email) {
+          invitation.email = recipientEmail
+          await invitation.save({ session })
+        }
+
         let targetPin: string | undefined
         if (campaignType === 'invitation') {
           if (invitation) {

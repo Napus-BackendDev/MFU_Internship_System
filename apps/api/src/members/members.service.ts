@@ -164,6 +164,7 @@ export class MembersService {
       academicYear?: number
       semester?: string
       includeDirectoryData?: boolean
+      includeEvaluationAnswers?: boolean
     },
     session?: ClientSession
   ): Promise<unknown> {
@@ -964,7 +965,14 @@ export class MembersService {
       .map((assignment) => assignment.id)
     const activeFinalByAssignmentId = new Map<
       string,
-      Pick<EvaluationRecord, 'categoryScores'>
+      Pick<
+        EvaluationRecord,
+        | 'assignmentId'
+        | 'version'
+        | 'categoryScores'
+        | 'submittedAt'
+      > &
+        Partial<Pick<EvaluationRecord, 'answers' | 'questionSnapshot'>>
     >()
     if (submittedAssignmentIds.length > 0) {
       const activeFinals = await bindSession(
@@ -973,7 +981,11 @@ export class MembersService {
             assignmentId: { $in: submittedAssignmentIds },
             $or: [{ supersededAt: { $exists: false } }, { supersededAt: null }]
           })
-          .select('assignmentId version categoryScores')
+          .select(
+            input.includeEvaluationAnswers
+              ? 'assignmentId version categoryScores answers questionSnapshot submittedAt'
+              : 'assignmentId version categoryScores submittedAt'
+          )
           .sort({ version: -1 }),
         session
       )
@@ -981,8 +993,12 @@ export class MembersService {
           Array<
             Pick<
               EvaluationRecord,
-              'assignmentId' | 'version' | 'categoryScores'
-            >
+              | 'assignmentId'
+              | 'version'
+              | 'categoryScores'
+              | 'submittedAt'
+            > &
+              Partial<Pick<EvaluationRecord, 'answers' | 'questionSnapshot'>>
           >
         >()
         .exec()
@@ -1200,9 +1216,8 @@ export class MembersService {
           const relatedEvaluator = evaluatorsById.get(
             relatedAssignment.evaluatorId
           )
-          const categoryScores = activeFinalByAssignmentId.get(
-            relatedAssignment.id
-          )?.categoryScores
+          const activeFinal = activeFinalByAssignmentId.get(relatedAssignment.id)
+          const categoryScores = activeFinal?.categoryScores
           return {
             id: relatedAssignment.id,
             cycleId: relatedAssignment.cycleId,
@@ -1231,6 +1246,13 @@ export class MembersService {
                     scoringPolicyVersion: categoryScores.scoringPolicyVersion
                   }
                 }
+              : {}),
+            ...(activeFinal?.answers ? { answers: activeFinal.answers } : {}),
+            ...(activeFinal?.questionSnapshot
+              ? { questionSnapshot: activeFinal.questionSnapshot }
+              : {}),
+            ...(activeFinal?.submittedAt
+              ? { submittedAt: activeFinal.submittedAt }
               : {}),
             ...(relatedEvaluator
               ? {
@@ -1317,31 +1339,60 @@ export class MembersService {
             session
           ).exec()
     } else {
-      ;[
-        statusDistribution,
-        facetStatusDistribution,
-        schoolIds,
-        academicYears,
-        semesters
-      ] = await Promise.all([
-        this.studentDirectoryStatusDistribution(
-          filter,
-          input.cycleId,
-          assignmentScope
-        ),
-        this.studentDirectoryStatusDistribution(
-          directoryFacetFilter,
-          input.cycleId,
-          assignmentScope
-        ),
-        this.students.distinct('schoolId', directoryFacetFilter).exec(),
-        directoryTerm
-          ? Promise.resolve([directoryTerm.academicYear])
-          : this.students.distinct('academicYear', directoryFacetFilter).exec(),
-        directoryTerm
-          ? Promise.resolve([directoryTerm.semester])
-          : this.students.distinct('semester', directoryFacetFilter).exec()
-      ])
+      const areFiltersIdentical =
+        JSON.stringify(filter) === JSON.stringify(directoryFacetFilter)
+      if (areFiltersIdentical) {
+        const [
+          dist,
+          schoolIdsResult,
+          academicYearsResult,
+          semestersResult
+        ] = await Promise.all([
+          this.studentDirectoryStatusDistribution(
+            filter,
+            input.cycleId,
+            assignmentScope
+          ),
+          this.students.distinct('schoolId', directoryFacetFilter).exec(),
+          directoryTerm
+            ? Promise.resolve([directoryTerm.academicYear])
+            : this.students.distinct('academicYear', directoryFacetFilter).exec(),
+          directoryTerm
+            ? Promise.resolve([directoryTerm.semester])
+            : this.students.distinct('semester', directoryFacetFilter).exec()
+        ])
+        statusDistribution = dist
+        facetStatusDistribution = dist
+        schoolIds = schoolIdsResult
+        academicYears = academicYearsResult
+        semesters = semestersResult
+      } else {
+        ;[
+          statusDistribution,
+          facetStatusDistribution,
+          schoolIds,
+          academicYears,
+          semesters
+        ] = await Promise.all([
+          this.studentDirectoryStatusDistribution(
+            filter,
+            input.cycleId,
+            assignmentScope
+          ),
+          this.studentDirectoryStatusDistribution(
+            directoryFacetFilter,
+            input.cycleId,
+            assignmentScope
+          ),
+          this.students.distinct('schoolId', directoryFacetFilter).exec(),
+          directoryTerm
+            ? Promise.resolve([directoryTerm.academicYear])
+            : this.students.distinct('academicYear', directoryFacetFilter).exec(),
+          directoryTerm
+            ? Promise.resolve([directoryTerm.semester])
+            : this.students.distinct('semester', directoryFacetFilter).exec()
+        ])
+      }
     }
     const facetSchoolObjectIds = schoolIds
       .filter(
@@ -2118,6 +2169,14 @@ export class MembersService {
       updateInput.email = normalizedEmail(input.email)
       await this.assertStudentEmailAvailable(updateInput.email, existing.id)
     }
+    if (input.evaluatorEmail !== undefined) {
+      updateInput.evaluatorEmail = input.evaluatorEmail
+        ? normalizedEmail(input.evaluatorEmail)
+        : ''
+    }
+    if (input.evaluatorName !== undefined) {
+      updateInput.evaluatorName = input.evaluatorName.trim()
+    }
 
     const schoolOrProgramChanged =
       (input.schoolId !== undefined && input.schoolId !== existing.schoolId) ||
@@ -2337,6 +2396,42 @@ export class MembersService {
             return student
           })
       if (!student) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+      if (
+        input.evaluatorName !== undefined ||
+        input.evaluatorEmail !== undefined
+      ) {
+        const studentReferences = [student.id, student.studentId]
+        const studentAssignments = await this.assignments
+          .find({ studentId: { $in: studentReferences } })
+          .select('evaluatorId')
+          .exec()
+        const evaluatorIds = [
+          ...new Set(studentAssignments.map((a) => a.evaluatorId))
+        ].filter((id) => Types.ObjectId.isValid(id))
+
+        if (evaluatorIds.length > 0) {
+          const evaluatorUpdate: Record<string, unknown> = {}
+          if (input.evaluatorEmail !== undefined) {
+            evaluatorUpdate.email = input.evaluatorEmail
+              ? normalizedEmail(input.evaluatorEmail)
+              : ''
+          }
+          if (input.evaluatorName !== undefined) {
+            evaluatorUpdate.name = {
+              th: input.evaluatorName.trim(),
+              en: input.evaluatorName.trim()
+            }
+          }
+          if (Object.keys(evaluatorUpdate).length > 0) {
+            await this.evaluators
+              .updateMany(
+                { _id: { $in: evaluatorIds } },
+                { $set: evaluatorUpdate }
+              )
+              .exec()
+          }
+        }
+      }
       return student.toJSON()
     } catch (error) {
       const code = duplicateStudentErrorCode(error)

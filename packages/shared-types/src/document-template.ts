@@ -156,11 +156,13 @@ const supportedCanvasTypesV2 = new Set<CanonicalCanvasElementTypeV2>([
 
 const supportedPlaceholdersV2 = new Set([
   'student_id',
+  'student_name',
   'student_name_th',
   'student_name_en',
   'school_name',
   'program_name',
   'organization_name',
+  'company_name',
   'position_title',
   'academic_year',
   'training_period',
@@ -171,7 +173,9 @@ const supportedPlaceholdersV2 = new Set([
   'hard_skill_average',
   'hard_skill_answered_count',
   'soft_skill_average',
-  'soft_skill_answered_count'
+  'soft_skill_answered_count',
+  'suggestion',
+  'evaluator_suggestion'
 ])
 
 const canvasColorPattern = /^#[\da-f]{6}$/iu

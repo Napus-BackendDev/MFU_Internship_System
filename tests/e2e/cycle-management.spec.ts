@@ -82,7 +82,6 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
       observedVersionRequests.push(request.url())
     }
   })
-  page.on('dialog', (dialog) => dialog.accept())
   await page.route('**/api/v2/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -461,11 +460,28 @@ test('staff creates, previews, activates, and closes an evaluation cycle', async
   ).toBeVisible()
   await expect(activateButton).toBeEnabled()
   await activateButton.click()
+  await expect(page.getByRole('dialog')).toContainText('ยืนยันเปิดรอบประเมิน')
+  await page.getByRole('button', { name: 'ยกเลิก', exact: true }).click()
+  await expect(
+    page.getByRole('article').getByText('ฉบับร่าง', { exact: true })
+  ).toBeVisible()
+  await activateButton.click()
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'ยืนยัน', exact: true })
+    .click()
   await expect(
     page.getByRole('article').getByText('เปิดรับผล', { exact: true })
   ).toBeVisible()
 
   await page.getByRole('button', { name: 'ปิดรอบ' }).click()
+  await expect(page.getByRole('dialog')).toContainText(
+    'ไม่สามารถเปิดรอบนี้กลับได้'
+  )
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'ยืนยัน', exact: true })
+    .click()
   await expect(
     page.getByRole('article').getByText('ปิดแล้ว', { exact: true })
   ).toBeVisible()

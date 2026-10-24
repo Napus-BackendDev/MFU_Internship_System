@@ -114,6 +114,7 @@ export class AuditService {
     input: {
       actorId?: string
       requestId?: string
+      actionCategory?: 'auth' | 'create' | 'update' | 'delete' | 'patch'
       page: number
       pageSize: number
     }
@@ -123,6 +124,24 @@ export class AuditService {
     }
 
     const baseFilter: QueryFilter<AuditLogRecord> = {
+      ...(input.actionCategory === 'auth'
+        ? {
+            route: {
+              $regex:
+                '^/(?:api/v2/)?(?:auth(?:/|$)|public/(?:evaluations/verify-pin|invitations/exchange)/?$)',
+              $options: 'i'
+            }
+          }
+        : input.actionCategory
+          ? {
+              method: {
+                create: 'POST',
+                update: 'PUT',
+                delete: 'DELETE',
+                patch: 'PATCH'
+              }[input.actionCategory]
+            }
+          : {}),
       ...(input.requestId ? { requestId: input.requestId } : {}),
       ...(actor.roles.includes('systemAdmin') && input.actorId
         ? { actorId: input.actorId }

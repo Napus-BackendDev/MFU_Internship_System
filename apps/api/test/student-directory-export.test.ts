@@ -61,6 +61,20 @@ const student: StudentDirectoryExportSource = {
 }
 
 describe('student-directory server export mapping', () => {
+  it('exports the saved advisor contact used by the directory', () => {
+    for (const locale of ['th', 'en'] as const) {
+      expect(
+        toStudentDirectoryExportValues(
+          { ...student, advisorName: 'Saved Advisor' },
+          undefined,
+          locale
+        )
+      ).toMatchObject({
+        advisorTh: 'Saved Advisor',
+        advisorEn: 'Saved Advisor'
+      })
+    }
+  })
   it('uses the selected cycle placement and preserves category-specific score meaning', () => {
     expect(
       toStudentDirectoryExportValues(student, 'cycle-1', 'en')
@@ -78,13 +92,14 @@ describe('student-directory server export mapping', () => {
     })
   })
 
-  it('does not invent evaluation status or scores when a cycle is unselected', () => {
+  it('exports the unique persisted assignment without requiring a cycle filter', () => {
     expect(
       toStudentDirectoryExportValues(student, undefined, 'th')
     ).toMatchObject({
-      statusTh: 'เลือกรอบฝึกงานเพื่อดูสถานะ',
-      hardSkillScore: '-',
-      softSkillScore: '-',
+      statusTh: 'ส่งผลประเมินแล้ว',
+      evaluatorEmail: 'evaluator@example.test',
+      hardSkillScore: '4.3 / 1–5 (2 ข้อ)',
+      softSkillScore: '3.5 / 1–5 (1 ข้อ)',
       company: 'บริษัททดสอบ'
     })
   })
@@ -139,6 +154,14 @@ describe('student-directory server export mapping', () => {
       toStudentDirectoryExportValues(ambiguous, 'cycle-1', 'en')
     ).toMatchObject({
       statusEn: 'Duplicate assignments in this cycle',
+      evaluatorEmail: '-',
+      hardSkillScore: '-',
+      softSkillScore: '-'
+    })
+    expect(
+      toStudentDirectoryExportValues(ambiguous, undefined, 'en')
+    ).toMatchObject({
+      statusEn: 'Duplicate assignments',
       evaluatorEmail: '-',
       hardSkillScore: '-',
       softSkillScore: '-'

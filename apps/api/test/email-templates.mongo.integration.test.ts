@@ -195,6 +195,25 @@ describe('email template API workflow on an isolated MongoDB replica set', () =>
     await expect(versions.countDocuments({ status: 'draft' })).resolves.toBe(1)
   })
 
+  it.each(['student_name1', 'Student_Name', 'student-name', 'ชื่อ'])(
+    'rejects malformed placeholder %s instead of publishing raw text',
+    async (placeholder) => {
+      const created = (await controller.createTemplate({
+        code: 'MALFORMED',
+        audience: 'evaluator',
+        subject: `Hello {{${placeholder}}}`,
+        html: '<p>Hello</p>',
+        text: 'Hello'
+      })) as { versions: Array<{ id: string }> }
+      await expect(
+        controller.publishTemplate(created.versions[0]!.id)
+      ).rejects.toMatchObject({
+        response: { code: 'UNKNOWN_TEMPLATE_PLACEHOLDER' }
+      })
+      expect(await versions.countDocuments({ status: 'published' })).toBe(0)
+    }
+  )
+
   it('returns a conflict for duplicate template codes without adding a version', async () => {
     const input = {
       code: 'TEST-DUPLICATE',

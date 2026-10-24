@@ -49,6 +49,7 @@ const api = useApi()
 const toast = useToast()
 const auth = useAuthStore()
 const config = useRuntimeConfig()
+const { getSchools, getPrograms } = useReferenceData()
 const canLinkOidc = computed(
   () => auth.actor?.roles.includes('systemAdmin') ?? false
 )
@@ -171,7 +172,11 @@ const roleBadgeMap: Record<
 
 // Helpers
 function getPrimaryRole(user: UserItem): RoleKey {
-  return user.roleAssignments?.[0]?.role ?? 'student'
+  return (
+    user.roleAssignments?.[0]?.role ??
+    (user as unknown as { roles?: RoleKey[] }).roles?.[0] ??
+    'student'
+  )
 }
 
 function getSchoolName(schoolId?: string): string {
@@ -245,22 +250,20 @@ async function loadSummary(): Promise<void> {
 
 async function loadAcademic(): Promise<void> {
   try {
-    const [schoolsRes, programsRes] = await Promise.all([
-      api<{ items: SchoolItem[] }>('/academic/schools', {
-        query: { pageSize: 100 }
-      }),
-      api<{ items: ProgramItem[] }>('/academic/programs', {
-        query: { pageSize: 100 }
-      })
+    const [schoolsList, programsList] = await Promise.all([
+      getSchools(),
+      getPrograms()
     ])
-    schools.value = schoolsRes.items || []
-    programs.value = programsRes.items || []
+    schools.value = (schoolsList || []) as SchoolItem[]
+    programs.value = (programsList || []) as ProgramItem[]
   } catch (err) {
     console.error('Failed to load academic data:', err)
   }
 }
 
+let usersRequestSequence = 0
 async function loadUsers(): Promise<void> {
+  const requestSequence = ++usersRequestSequence
   loading.value = true
   usersError.value = false
   try {
@@ -283,9 +286,19 @@ async function loadUsers(): Promise<void> {
       }
     }>('/users', { query })
 
-    users.value = res.items || []
+    if (requestSequence !== usersRequestSequence) return
+    users.value = (res.items || []).map((u) => ({
+      ...u,
+      displayName:
+        u.displayName ||
+        (u as unknown as { name?: { th?: string; en?: string } }).name?.th ||
+        (u as unknown as { name?: { th?: string; en?: string } }).name?.en ||
+        (u.email ? u.email.split('@')[0] : '') ||
+        'ผู้ใช้งาน'
+    }))
     totalUsers.value = res.meta?.total || 0
   } catch (err) {
+    if (requestSequence !== usersRequestSequence) return
     usersError.value = true
     console.error('Failed to load users:', err)
     toast.add({
@@ -294,7 +307,7 @@ async function loadUsers(): Promise<void> {
       color: 'error'
     })
   } finally {
-    loading.value = false
+    if (requestSequence === usersRequestSequence) loading.value = false
   }
 }
 
@@ -494,15 +507,58 @@ async function submitForm(): Promise<void> {
   }
 }
 
-async function toggleUserStatus(user: UserItem): Promise<void> {
+const statusChangeUser = ref<UserItem | null>(null)
+
+async function confirmUserStatusChange(): Promise<void> {
+  const user = statusChangeUser.value
+  statusChangeUser.value = null
+  if (user) await toggleUserStatus(user, true)
+}
+
+const userToDelete = ref<UserItem | null>(null)
+const isDeletingUser = ref(false)
+
+function openDeleteUserModal(user: UserItem): void {
+  userToDelete.value = user
+}
+
+async function confirmDeleteUser(): Promise<void> {
+  if (!userToDelete.value) return
+  isDeletingUser.value = true
+  const targetUser = userToDelete.value
+  try {
+    await api(`/users/${targetUser.id}`, {
+      method: 'DELETE'
+    })
+    toast.add({
+      title: 'ลบผู้ใช้งานสำเร็จ',
+      description: `ผู้ใช้งาน ${targetUser.displayName} ถูกนำออกจากระบบแล้ว`,
+      color: 'success'
+    })
+    userToDelete.value = null
+    await Promise.all([loadUsers(), loadSummary()])
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'ไม่สามารถลบผู้ใช้งานได้'
+    toast.add({
+      title: 'ไม่สามารถลบผู้ใช้งานได้',
+      description: msg,
+      color: 'error'
+    })
+  } finally {
+    isDeletingUser.value = false
+  }
+}
+
+async function toggleUserStatus(
+  user: UserItem,
+  confirmed = false
+): Promise<void> {
   const nextStatus = user.status === 'active' ? 'suspended' : 'active'
   const actionLabel = nextStatus === 'active' ? 'เปิดใช้งาน' : 'ระงับการใช้งาน'
-  if (
-    !window.confirm(
-      `ยืนยัน${actionLabel}บัญชี ${user.displayName} (${user.email})?`
-    )
-  )
+  if (!confirmed) {
+    statusChangeUser.value = user
     return
+  }
 
   try {
     await api(`/users/${user.id}`, {
@@ -603,6 +659,14 @@ function getUserActions(user: UserItem) {
       color: user.status === 'active' ? 'error' : 'neutral',
       onSelect: () => {
         void toggleUserStatus(user)
+      }
+    },
+    {
+      label: 'ลบผู้ใช้งาน...',
+      icon: 'i-lucide-trash-2',
+      color: 'error',
+      onSelect: () => {
+        openDeleteUserModal(user)
       }
     }
   ])
@@ -1013,12 +1077,12 @@ onMounted(() => {
                             : 'bg-emerald-600 dark:bg-emerald-500'
                     ]"
                   >
-                    {{ user.displayName.slice(0, 1).toUpperCase() }}
+                    {{ (user.displayName || user.email || 'U').slice(0, 1).toUpperCase() }}
                   </div>
                   <div class="space-y-0.5 min-w-0">
                     <div class="flex items-center gap-1.5 flex-wrap">
                       <span class="font-semibold text-highlighted text-xs">{{
-                        user.displayName
+                        user.displayName || user.email || 'ผู้ใช้งาน'
                       }}</span>
                       <UBadge
                         v-if="user.studentId"
@@ -1157,6 +1221,17 @@ onMounted(() => {
                     @click="openEditModal(user)"
                   />
 
+                  <!-- Quick Delete -->
+                  <UButton
+                    color="error"
+                    icon="i-lucide-trash-2"
+                    size="xs"
+                    title="ลบผู้ใช้งาน"
+                    variant="ghost"
+                    class="hidden sm:inline-flex cursor-pointer hover:bg-red-500/10 text-red-600 dark:text-red-400"
+                    @click="openDeleteUserModal(user)"
+                  />
+
                   <!-- 3 dots dropdown menu -->
                   <UDropdownMenu
                     :items="getUserActions(user)"
@@ -1280,9 +1355,11 @@ onMounted(() => {
             >
             <SearchableSelect
               v-model="form.schoolId"
+              aria-label="สำนักวิชาที่สังกัดผู้ใช้งาน"
               :options="formSchoolOptions"
               search-placeholder="ค้นหาสำนักวิชา…"
               placeholder="-- ไม่ระบุ หรือ ทั่วทั้งระบบ --"
+              @update:model-value="form.programId = ''"
             />
           </div>
 
@@ -1293,6 +1370,7 @@ onMounted(() => {
             >
             <SearchableSelect
               v-model="form.programId"
+              aria-label="หลักสูตรที่สังกัดผู้ใช้งาน"
               :options="formProgramOptions"
               search-placeholder="ค้นหาสาขาวิชา…"
               placeholder="-- ทุกสาขาวิชาในสำนัก --"
@@ -1406,5 +1484,78 @@ onMounted(() => {
         </div>
       </template>
     </UModal>
+    <AppModal
+      v-if="statusChangeUser"
+      :open="true"
+      title="ยืนยันเปลี่ยนสถานะบัญชี"
+      @update:open="
+        (open) => {
+          if (!open) statusChangeUser = null
+        }
+      "
+    >
+      <div class="space-y-4 p-6">
+        <h2 class="text-lg font-semibold">ยืนยันเปลี่ยนสถานะบัญชี</h2>
+        <p>
+          {{
+            statusChangeUser.status === 'active'
+              ? 'ระงับการใช้งาน'
+              : 'เปิดใช้งาน'
+          }}บัญชี {{ statusChangeUser.displayName }} ({{
+            statusChangeUser.email
+          }})?
+        </p>
+        <div class="flex justify-end gap-2">
+          <UButton
+            label="ยกเลิก"
+            color="neutral"
+            variant="outline"
+            @click="statusChangeUser = null"
+          />
+          <UButton label="ยืนยัน" @click="confirmUserStatusChange" />
+        </div>
+      </div>
+    </AppModal>
+    <AppModal
+      v-if="userToDelete"
+      :open="true"
+      title="ยืนยันการลบผู้ใช้งาน"
+      @update:open="
+        (open) => {
+          if (!open) userToDelete = null
+        }
+      "
+    >
+      <div class="space-y-4 p-6">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
+            <UIcon name="i-lucide-trash-2" class="size-6 text-red-600 dark:text-red-400" />
+          </div>
+          <div>
+            <h2 class="text-lg font-semibold text-foreground">ยืนยันการลบผู้ใช้งาน</h2>
+            <p class="text-xs text-muted">การดำเนินการนี้จะเก็บถาวรและนำบัญชีผู้ใช้ออกจากระบบ</p>
+          </div>
+        </div>
+        <p class="text-sm text-foreground">
+          คุณต้องการลบผู้ใช้งาน <strong class="font-medium text-red-600 dark:text-red-400">{{ userToDelete.displayName }}</strong> ({{ userToDelete.email }}) ใช่หรือไม่?
+        </p>
+        <div class="flex justify-end gap-2 pt-2">
+          <UButton
+            label="ยกเลิก"
+            color="neutral"
+            variant="outline"
+            :disabled="isDeletingUser"
+            @click="userToDelete = null"
+          />
+          <UButton
+            label="ลบผู้ใช้งาน"
+            color="error"
+            icon="i-lucide-trash-2"
+            :loading="isDeletingUser"
+            @click="confirmDeleteUser"
+          />
+        </div>
+      </div>
+    </AppModal>
   </div>
 </template>

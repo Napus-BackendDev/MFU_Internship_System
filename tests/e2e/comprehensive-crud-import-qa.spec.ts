@@ -25,6 +25,79 @@ interface StudentPatchPayload {
 }
 
 test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel Upload & Correctness)', () => {
+  test('import errors remain inside the dialog and clear on a successful retry', async ({
+    page
+  }) => {
+    let failPreview = true
+    await page.route('**/api/v2/**', async (route) => {
+      const path = new URL(route.request().url()).pathname.replace(
+        '/api/v2',
+        ''
+      )
+      if (path === '/auth/me') return route.fulfill({ json: { actor } })
+      if (path === '/students/import-preview') {
+        if (failPreview)
+          return route.fulfill({
+            status: 422,
+            json: {
+              error: { code: 'WORKBOOK_NO_STUDENT_ROWS', message: 'No rows' }
+            }
+          })
+        return route.fulfill({
+          json: {
+            batchId: 'retry-preview',
+            sourceName: 'retry.xlsx',
+            status: 'previewed',
+            questionFieldsDetected: [],
+            summary: {
+              total: 1,
+              creates: 1,
+              updates: 0,
+              unchanged: 0,
+              invalid: 0
+            },
+            items: [
+              {
+                id: 'retry-row',
+                sheet: 'Students',
+                rowNumber: 2,
+                action: 'create',
+                status: 'pending',
+                student: {
+                  studentId: '6631503991',
+                  name: { th: 'QA Retry', en: 'QA Retry' }
+                },
+                issues: [],
+                warnings: [],
+                changes: []
+              }
+            ]
+          }
+        })
+      }
+      await route.continue()
+    })
+    await page.goto('/app/students')
+    await page.waitForLoadState('networkidle')
+    await page
+      .getByRole('button', { name: 'นำเข้าจาก Excel', exact: true })
+      .click()
+    const dialog = page.getByRole('dialog')
+    const file = {
+      name: 'retry.xlsx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      buffer: generateSampleStudentExcelBuffer()
+    }
+    await dialog.locator('input[type="file"]').setInputFiles(file)
+    await expect(dialog.getByRole('alert')).toContainText(
+      'ไม่พบแถวข้อมูลนักศึกษา'
+    )
+    failPreview = false
+    await dialog.locator('input[type="file"]').setInputFiles(file)
+    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    await expect(dialog.getByText('6631503991', { exact: true })).toBeVisible()
+  })
   test('TC-STU-02 & TC-STU-03: Edit student data via UI, submit form, verify persistence & UI update', async ({
     page
   }) => {
@@ -322,6 +395,22 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
     let committedRowIds: string[] = []
 
     const mockBatchId = 'batch-e2e-qa-999'
+    const invalidRow = {
+      id: 'row-invalid',
+      sheet: 'Students',
+      rowNumber: 4,
+      action: 'invalid',
+      status: 'invalid',
+      student: {
+        studentId: '6631503099',
+        name: { th: 'แถวผิด', en: 'Invalid row' }
+      },
+      issues: [
+        { code: 'INVALID_EMAIL', field: 'email', message: 'Invalid email' }
+      ],
+      warnings: [],
+      changes: []
+    }
 
     await page.route('**/api/v2/**', async (route) => {
       const request = route.request()
@@ -341,11 +430,11 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
             batchId: mockBatchId,
             sourceName: 'Sample_Students.xlsx',
             summary: {
-              total: 2,
+              total: 3,
               creates: 2,
               updates: 0,
               unchanged: 0,
-              invalid: 0
+              invalid: 1
             },
             questionFieldsDetected: [],
             items: [
@@ -396,7 +485,8 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
                 issues: [],
                 warnings: [],
                 changes: []
-              }
+              },
+              invalidRow
             ]
           }
         })
@@ -435,11 +525,11 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
             status: 'committed',
             questionFieldsDetected: [],
             summary: {
-              total: 2,
+              total: 3,
               creates: 2,
               updates: 0,
               unchanged: 0,
-              invalid: 0,
+              invalid: 1,
               committed: 2,
               warnings: 0
             },
@@ -465,7 +555,8 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
                 issues: [],
                 warnings: [],
                 changes: []
-              }
+              },
+              invalidRow
             ]
           }
         })
@@ -505,7 +596,7 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
       .toBe(true)
 
     // 6. Verify Preview table displays uploaded students
-    await expect(page.getByText('พร้อมนำเข้าข้อมูล (2 รายการ)')).toBeVisible()
+    await expect(page.getByText('พร้อมนำเข้าข้อมูล (3 รายการ)')).toBeVisible()
     await expect(page.getByText('6631503002', { exact: true })).toBeVisible()
     await expect(
       page
@@ -533,6 +624,10 @@ test.describe('Comprehensive UI Operations & Verification (CRUD, Viewing, Excel 
       .poll(() => commitRequestReceived, { timeout: 10_000 })
       .toBe(true)
     expect(committedRowIds).toEqual(['row-1', 'row-2'])
+
+    await expect(page.getByText('ความคืบหน้าการนำเข้า')).toBeVisible()
+    await expect(page.getByRole('dialog')).toContainText('100%')
+    await expect(page.getByRole('dialog')).toContainText('(2 / 2 รายการ)')
 
     // Inspect the completion result, then close it explicitly.
     await page.getByRole('button', { name: 'เสร็จสิ้นและปิดหน้าต่าง' }).click()

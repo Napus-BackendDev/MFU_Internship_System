@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
@@ -193,6 +194,53 @@ export class EvaluationsController {
     return this.service.createCompetencySet(
       request.actor!,
       competencySetSchema.parse(raw)
+    )
+  }
+
+  @RequirePermissions('competencies.manage')
+  @Patch('competency-sets/:competencySetId')
+  public updateCompetencySet(
+    @Req() request: AuthenticatedRequest,
+    @Param('competencySetId') id: string,
+    @Body() raw: unknown
+  ): Promise<unknown> {
+    const body = z
+      .object({
+        name: z
+          .object({
+            th: z.string().trim().min(1),
+            en: z.string().trim().min(1)
+          })
+          .strict()
+          .optional(),
+        status: z.enum(['active', 'inactive', 'archived']).optional()
+      })
+      .strict()
+      .refine((data) => data.name !== undefined || data.status !== undefined, {
+        message: 'Either name or status must be provided'
+      })
+      .parse(raw)
+    const payload = body.status === undefined ? body.name! : body
+    return this.service.updateCompetencySet(
+      request.actor!,
+      id,
+      payload,
+      request.requestId ?? 'unknown'
+    )
+  }
+
+  @RequirePermissions('competencies.manage')
+  @Delete('competency-sets/:competencySetId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  public async deleteCompetencySet(
+    @Req() request: AuthenticatedRequest,
+    @Param('competencySetId') id: string
+  ): Promise<void> {
+    await this.service.updateCompetencySet(
+      request.actor!,
+      id,
+      { status: 'archived' },
+      request.requestId ?? 'unknown'
     )
   }
 

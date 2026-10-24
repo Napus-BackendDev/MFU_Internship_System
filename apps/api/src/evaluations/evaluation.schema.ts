@@ -70,14 +70,14 @@ export const SectionSchema = SchemaFactory.createForClass(SectionRecord)
 
 @Schema({ ...schemaOptions, collection: 'competencySets' })
 export class CompetencySetRecord {
-  @Prop({ required: true, unique: true, uppercase: true })
+  @Prop({ required: true, unique: true, uppercase: true, immutable: true })
   public code!: string
 
   @Prop({ required: true, type: LocalizedTextSchema })
   public name!: LocalizedText
 
-  @Prop({ default: 'active', enum: ['active', 'archived'] })
-  public status!: 'active' | 'archived'
+  @Prop({ default: 'active', enum: ['active', 'inactive', 'archived'] })
+  public status!: 'active' | 'inactive' | 'archived'
 }
 
 export const CompetencySetSchema =
@@ -222,6 +222,8 @@ EvaluationAssignmentSchema.index(
   { unique: true }
 )
 EvaluationAssignmentSchema.index({ cycleId: 1, studentId: 1 }, { unique: true })
+EvaluationAssignmentSchema.index({ status: 1, createdAt: -1, _id: -1 })
+EvaluationAssignmentSchema.index({ studentId: 1, status: 1, updatedAt: -1 })
 
 @Schema({ ...schemaOptions, collection: 'evaluationDrafts' })
 export class EvaluationDraftRecord {

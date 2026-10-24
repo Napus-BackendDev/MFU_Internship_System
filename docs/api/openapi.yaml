@@ -485,6 +485,16 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '422':
           $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Academic]
+      operationId: deleteSchool
+      summary: Archive a School
+      x-permissions: [academic.manage]
+      responses:
+        '204':
+          description: School archived
+        '404':
+          $ref: '#/components/responses/NotFound'
   /academic/programs:
     get:
       tags: [Academic]
@@ -680,6 +690,16 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
         '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Academic]
+      operationId: deleteProgram
+      summary: Archive a Program
+      x-permissions: [academic.manage]
+      responses:
+        '204':
+          description: Program archived
+        '404':
+          $ref: '#/components/responses/NotFound'
   /academic/courses/{courseId}:
     parameters:
       - { name: courseId, in: path, required: true, schema: { type: string } }
@@ -698,6 +718,16 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Academic]
+      operationId: deleteCourse
+      summary: Archive a Course
+      x-permissions: [academic.manage]
+      responses:
+        '204':
+          description: Course archived
+        '404':
+          $ref: '#/components/responses/NotFound'
   /academic/terms/{termId}:
     parameters:
       - { name: termId, in: path, required: true, schema: { type: string } }
@@ -717,6 +747,16 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
         '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Academic]
+      operationId: deleteTerm
+      summary: Archive an academic term
+      x-permissions: [academic.manage]
+      responses:
+        '204':
+          description: Academic term archived
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /students:
     get:
@@ -1235,6 +1275,46 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/ValidationError'
+  /competency-sets/{competencySetId}:
+    parameters:
+      - $ref: '#/components/parameters/CompetencySetId'
+    patch:
+      tags: [Competencies]
+      operationId: updateCompetencySet
+      summary: Rename a competency set; its code remains immutable
+      description: Requires management scope over every section of every version. Published questions remain unchanged. The name change is audited.
+      x-permissions: [competencies.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompetencySetNamePatch'
+      responses:
+        '200':
+          description: Competency set renamed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetencySet'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Competencies]
+      operationId: deleteCompetencySet
+      summary: Archive a competency set
+      x-permissions: [competencies.manage]
+      responses:
+        '204':
+          description: Competency set archived
+        '404':
+          $ref: '#/components/responses/NotFound'
   /competency-sets/{competencySetId}/versions:
     parameters:
       - $ref: '#/components/parameters/CompetencySetId'
@@ -2178,6 +2258,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /system-settings/smtp/tests/{testId}:
     parameters:
       - name: testId
@@ -2322,6 +2404,23 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '409':
           $ref: '#/components/responses/Conflict'
+  /document-templates/{templateId}:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ObjectId'
+    delete:
+      tags: [Documents]
+      operationId: deleteDocumentTemplate
+      summary: Deactivate or archive a document template
+      x-permissions: [documentTemplates.manage]
+      responses:
+        '204':
+          description: Document template archived
+        '404':
+          $ref: '#/components/responses/NotFound'
   /document-templates/{templateId}/activate:
     parameters:
       - name: templateId
@@ -2745,6 +2844,37 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /reports/exports/{exportId}/file:
+    get:
+      tags: [Reports]
+      operationId: getReportExportFile
+      summary: Download the generated report export file directly
+      x-permissions: [exports.download]
+      parameters:
+        - name: exportId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ObjectId'
+      responses:
+        '200':
+          description: Binary report export file (XLSX or CSV)
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+            text/csv:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /audit-logs:
     get:
       tags: [Audit]
@@ -2752,6 +2882,12 @@ paths:
       summary: List immutable audit events in approved scope
       x-permissions: [audit.read]
       parameters:
+        - name: actionCategory
+          in: query
+          description: Filter before pagination. auth matches auth routes, public PIN verification, and invitation session exchange; create/update/delete/patch match POST/PUT/DELETE/PATCH respectively.
+          schema:
+            type: string
+            enum: [auth, create, update, delete, patch]
         - $ref: '#/components/parameters/Page'
         - name: pageSize
           in: query
@@ -3930,34 +4066,42 @@ components:
     TemplateStatus:
       type: string
       enum: [draft, published, retired]
+    CompetencySetNamePatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          $ref: '#/components/schemas/LocalizedText'
+        status:
+          type: string
+          enum: [active, archived]
     CompetencySetInput:
       type: object
-      required: [code, name, programIds]
+      required: [code, name]
       properties:
         code:
           type: string
-          maxLength: 100
+          minLength: 1
+          maxLength: 40
+          description: Immutable after creation.
         name:
           $ref: '#/components/schemas/LocalizedText'
-        programIds:
-          type: array
-          minItems: 1
-          items:
-            $ref: '#/components/schemas/ObjectId'
+        status:
+          type: string
+          enum: [active, archived]
+          default: active
     CompetencySet:
       allOf:
         - $ref: '#/components/schemas/CompetencySetInput'
         - type: object
-          required: [id, latestVersion, createdAt]
+          required: [id, status]
           properties:
             id:
               $ref: '#/components/schemas/ObjectId'
-            latestVersion:
-              type: integer
-              minimum: 1
-            currentStatus:
-              $ref: '#/components/schemas/TemplateStatus'
             createdAt:
+              type: string
+              format: date-time
+            updatedAt:
               type: string
               format: date-time
     CompetencySetList:
@@ -4687,6 +4831,8 @@ components:
         - from
         - passwordConfigured
         - effectivePasswordConfigured
+        - deliveryMode
+        - effectiveConnection
         - version
         - updatedAt
         - updatedBy
@@ -4718,6 +4864,29 @@ components:
         effectivePasswordConfigured:
           type: boolean
           description: Whether the active source has a password without revealing it
+        deliveryMode:
+          type: string
+          enum: [capture, smtp]
+          description: Server-configured delivery mode; never inferred from a hostname
+        effectiveConnection:
+          type: object
+          required: [host, port, secure, from, usernameConfigured, version]
+          properties:
+            host:
+              type: string
+            port:
+              type: integer
+              minimum: 1
+              maximum: 65535
+            secure:
+              type: boolean
+            from:
+              type: string
+            usernameConfigured:
+              type: boolean
+            version:
+              type: integer
+              minimum: 0
         version:
           type: integer
           minimum: 0
@@ -5174,6 +5343,8 @@ components:
               type: string
               maxLength: 100
             schoolId:
+              $ref: '#/components/schemas/ObjectId'
+            programId:
               $ref: '#/components/schemas/ObjectId'
             cycleId:
               $ref: '#/components/schemas/ObjectId'

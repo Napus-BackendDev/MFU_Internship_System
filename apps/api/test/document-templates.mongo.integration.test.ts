@@ -501,6 +501,24 @@ describe('Document template versions on an isolated MongoDB replica set', () => 
     )
     expect(ownDocumentDetail).toHaveProperty('id', ownDocument.id)
     expect(ownDocumentDetail.toJSON()).not.toHaveProperty('resourceScopes')
+    const ownDocumentView = await service.getDocumentView(
+      actor,
+      ownDocument.id,
+      'poll-document-request'
+    )
+    expect(ownDocumentView).toMatchObject({
+      id: ownDocument.id,
+      documentType: 'transcript',
+      documentNumber: `MFU-TR-${ownDocument.id.toUpperCase()}`
+    })
+    for (const field of [
+      'resourceScopes',
+      'objectKey',
+      'sourceSnapshot',
+      'requestedBy',
+      'idempotencyKey'
+    ])
+      expect(ownDocumentView).not.toHaveProperty(field)
     await expect(
       service.getDocument(actor, foreignDocument.id, 'foreign-document-request')
     ).rejects.toMatchObject({ status: 404 })

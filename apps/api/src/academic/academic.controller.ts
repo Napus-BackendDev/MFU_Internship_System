@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -172,6 +175,21 @@ export class AcademicController {
     )
   }
 
+  @RequirePermissions('academic.manage')
+  @Delete('schools/:schoolId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  public async deleteSchool(
+    @Req() request: AuthenticatedRequest,
+    @Param('schoolId') id: string
+  ): Promise<void> {
+    await this.service.updateSchool(
+      request.actor!,
+      id,
+      { status: 'archived' },
+      request.requestId ?? 'unknown'
+    )
+  }
+
   @RequirePermissions('academic.read')
   @Get('programs')
   public listPrograms(
@@ -212,6 +230,21 @@ export class AcademicController {
       request.actor!,
       id,
       programSchema.partial().parse(raw),
+      request.requestId ?? 'unknown'
+    )
+  }
+
+  @RequirePermissions('academic.manage')
+  @Delete('programs/:programId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  public async deleteProgram(
+    @Req() request: AuthenticatedRequest,
+    @Param('programId') id: string
+  ): Promise<void> {
+    await this.service.updateProgram(
+      request.actor!,
+      id,
+      { status: 'archived' },
       request.requestId ?? 'unknown'
     )
   }
@@ -259,6 +292,21 @@ export class AcademicController {
     )
   }
 
+  @RequirePermissions('academic.manage')
+  @Delete('courses/:courseId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  public async deleteCourse(
+    @Req() request: AuthenticatedRequest,
+    @Param('courseId') id: string
+  ): Promise<void> {
+    await this.service.updateCourse(
+      request.actor!,
+      id,
+      { status: 'archived' },
+      request.requestId ?? 'unknown'
+    )
+  }
+
   @RequirePermissions('academic.read')
   @Get('terms')
   public listTerms(
@@ -302,6 +350,21 @@ export class AcademicController {
       request.actor!,
       id,
       termBaseSchema.partial().parse(raw),
+      request.requestId ?? 'unknown'
+    )
+  }
+
+  @RequirePermissions('academic.manage')
+  @Delete('terms/:termId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  public async deleteTerm(
+    @Req() request: AuthenticatedRequest,
+    @Param('termId') id: string
+  ): Promise<void> {
+    await this.service.updateTerm(
+      request.actor!,
+      id,
+      { status: 'archived' },
       request.requestId ?? 'unknown'
     )
   }

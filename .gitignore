@@ -28,3 +28,5 @@ cookies.txt
 dump.rdb
 .DS_Store
 Thumbs.db
+tmp/
+apps/*/tmp/

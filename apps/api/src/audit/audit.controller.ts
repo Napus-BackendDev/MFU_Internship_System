@@ -14,6 +14,9 @@ import { AuditService } from './audit.service.js'
 const auditQuerySchema = z.object({
   actorId: z.string().optional(),
   requestId: z.string().optional(),
+  actionCategory: z
+    .enum(['auth', 'create', 'update', 'delete', 'patch'])
+    .optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25)
 })

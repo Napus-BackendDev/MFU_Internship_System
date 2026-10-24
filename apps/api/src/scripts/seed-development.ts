@@ -6,6 +6,7 @@ import { loadEnvironment } from '@internship/config'
 import { MongoClient, ObjectId } from 'mongodb'
 import { upsertDevelopmentRecord as upsertId } from './development-seed-record.js'
 import { createDevelopmentPinCredential } from './development-pin.js'
+import { createDevelopmentDocumentTemplate } from './development-document-templates.js'
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development'
 try {
@@ -1896,17 +1897,21 @@ try {
   const fontFamily = extractFontFamilyName(fontBytes)
   const fontSha256 = createHash('sha256').update(fontBytes).digest('hex')
   const fontAssetKey = `development-fonts/sarabun-${fontSha256}.ttf`
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: environment.S3_BUCKET,
-      Key: fontAssetKey,
-      Body: fontBytes,
-      ContentLength: fontBytes.byteLength,
-      ContentType: 'font/ttf',
-      ContentDisposition: 'attachment',
-      Metadata: { sha256: fontSha256, assettype: 'font' }
-    })
-  )
+  try {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: environment.S3_BUCKET,
+        Key: fontAssetKey,
+        Body: fontBytes,
+        ContentLength: fontBytes.byteLength,
+        ContentType: 'font/ttf',
+        ContentDisposition: 'attachment',
+        Metadata: { sha256: fontSha256, assettype: 'font' }
+      })
+    )
+  } catch (err: unknown) {
+    console.warn('S3 font upload skipped (S3 service not running):', (err as Error)?.message || err)
+  }
   await upsertId(
     database,
     'documentAssets',
@@ -1934,7 +1939,7 @@ try {
     { code: 'CERT-MFU-2026' },
     {
       code: 'CERT-MFU-2026',
-      name: 'หนังสือรับรองและทรานสคริปต์การฝึกงาน (MFU Internship Transcript)',
+      name: 'ใบประกาศนียบัตรรับรองการฝึกงาน (Certificate of Internship Completion)',
       documentType: 'certificate',
       status: 'active',
       createdAt: now,
@@ -1952,74 +1957,7 @@ try {
       status: 'published',
       schemaVersion: 2,
       revision: 1,
-      canonicalJson: {
-        width: 1024,
-        height: 724,
-        editorMetadata: {
-          nameTh: 'ใบประกาศนียบัตรรับรองการฝึกงาน (Certificate of Completion)',
-          nameEn: 'Certificate of Professional Internship Completion',
-          description:
-            'เกียรติบัตรรับรองการผ่านการฝึกงานอย่างเป็นทางการ (A4 แนวนอน)',
-          backgroundType: 'none',
-          bgOpacity: 15
-        },
-        elements: [
-          {
-            id: 'el-cr-univ',
-            type: 'text',
-            content: 'มหาวิทยาลัยแม่ฟ้าหลวง • MAE FAH LUANG UNIVERSITY',
-            x: 0,
-            y: 128,
-            width: 1024,
-            fontFamily: 'Sarabun',
-            fontSize: 13,
-            fontWeight: 'bold',
-            color: '#b45309',
-            textAlign: 'center'
-          },
-          {
-            id: 'el-cr-title-th',
-            type: 'heading',
-            content: 'ใบประกาศนียบัตรรับรองการฝึกงาน',
-            x: 0,
-            y: 156,
-            width: 1024,
-            fontFamily: 'Sarabun',
-            fontSize: 34,
-            fontWeight: 'bold',
-            color: '#0f172a',
-            textAlign: 'center'
-          },
-          {
-            id: 'el-cr-title-en',
-            type: 'text',
-            content: 'CERTIFICATE OF INTERNSHIP COMPLETION',
-            x: 0,
-            y: 202,
-            width: 1024,
-            fontFamily: 'Sarabun',
-            fontSize: 13,
-            fontWeight: 'bold',
-            color: '#64748b',
-            textAlign: 'center'
-          },
-          {
-            id: 'el-cr-std-name-th',
-            type: 'variable',
-            variableKey: 'student_name_th',
-            content: '{{student_name_th}}',
-            x: 0,
-            y: 270,
-            width: 1024,
-            fontFamily: 'Sarabun',
-            fontSize: 34,
-            fontWeight: 'bold',
-            color: '#78350f',
-            textAlign: 'center'
-          }
-        ]
-      },
-      placeholders: ['student_name_th'],
+      ...createDevelopmentDocumentTemplate('certificate'),
       fontAssetKeys: [fontAssetKey],
       publishedAt: now,
       createdAt: now,
@@ -2027,14 +1965,14 @@ try {
     }
   )
 
-  // 9.2 Referral Letter Template & Generated Referral Letter
+  // 9.2 Transcript template (retain the legacy code for idempotent seed lookups).
   const referralTemplateId = await upsertId(
     database,
     'documentTemplates',
     { code: 'DOC-RF-001' },
     {
       code: 'DOC-RF-001',
-      name: 'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน (Official Internship Referral Letter)',
+      name: 'ใบบันทึกผลการประเมินการฝึกงาน (Internship Transcript)',
       documentType: 'transcript',
       status: 'active',
       createdAt: now,
@@ -2052,48 +1990,7 @@ try {
       status: 'published',
       schemaVersion: 2,
       revision: 1,
-      canonicalJson: {
-        width: 794,
-        height: 1040,
-        editorMetadata: {
-          nameTh:
-            'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน (Official Internship Referral Letter)',
-          nameEn: 'Official Internship Referral Letter',
-          description: 'เอกสารหนังสือส่งตัวนักศึกษาเข้าฝึกงาน (A4 แนวตั้ง)',
-          backgroundType: 'none',
-          bgOpacity: 12
-        },
-        elements: [
-          {
-            id: 'el-rf-header',
-            type: 'text',
-            content: 'หนังสือส่งตัวนักศึกษาเข้าฝึกงาน',
-            x: 0,
-            y: 80,
-            width: 794,
-            fontFamily: 'Sarabun',
-            fontSize: 20,
-            fontWeight: 'bold',
-            color: '#0f172a',
-            textAlign: 'center'
-          },
-          {
-            id: 'el-rf-std-name-th',
-            type: 'variable',
-            variableKey: 'student_name_th',
-            content: 'ชื่อนักศึกษา: {{student_name_th}}',
-            x: 75,
-            y: 200,
-            width: 640,
-            fontFamily: 'Sarabun',
-            fontSize: 14,
-            fontWeight: 'normal',
-            color: '#0f172a',
-            textAlign: 'left'
-          }
-        ]
-      },
-      placeholders: ['student_name_th'],
+      ...createDevelopmentDocumentTemplate('transcript'),
       fontAssetKeys: [fontAssetKey],
       publishedAt: now,
       createdAt: now,

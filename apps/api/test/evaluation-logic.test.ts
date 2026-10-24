@@ -130,13 +130,17 @@ describe('evaluation resource and score rules', () => {
     ).toThrow()
   })
 
-  it('rejects mixed scales and non-unit weights before publishing', () => {
+  it('rejects mixed scales and weights greater than 2 before publishing', () => {
     const mixedScale = structuredClone(sections)
     mixedScale[0]!.questions[1]!.scaleMax = 10
     expect(() => validateCompetencySections(mixedScale)).toThrow()
 
-    const weighted = structuredClone(sections)
-    weighted[1]!.questions[0]!.weight = 2
-    expect(() => validateCompetencySections(weighted)).toThrow()
+    const validWeight = structuredClone(sections)
+    validWeight[1]!.questions[0]!.weight = 2
+    expect(() => validateCompetencySections(validWeight)).not.toThrow()
+
+    const excessiveWeight = structuredClone(sections)
+    excessiveWeight[1]!.questions[0]!.weight = 2.5
+    expect(() => validateCompetencySections(excessiveWeight)).toThrow()
   })
 })

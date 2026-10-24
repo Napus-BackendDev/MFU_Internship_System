@@ -191,7 +191,7 @@ const page = ref(1)
 const pageSize = ref(5)
 
 // Fetch students list with school, program, academicYear, evaluationStatus, and search filters
-const { data, error, pending, refresh } = await useAsyncData(
+const { data, error, pending, refresh } = useAsyncData(
   'students',
   () =>
     api<StudentPage>('/students', {
@@ -214,6 +214,7 @@ const { data, error, pending, refresh } = await useAsyncData(
       }
     }),
   {
+    lazy: true,
     watch: [
       page,
       search,
@@ -270,10 +271,13 @@ const {
   error: provincesError,
   pending: provincesPending,
   refresh: refreshProvinces
-} = await useAsyncData('students-master-provinces', () =>
-  api<{ items: ProvinceMasterItem[] }>('/system-settings/provinces', {
-    query: { status: 'active' }
-  })
+} = useAsyncData(
+  'students-master-provinces',
+  () =>
+    api<{ items: ProvinceMasterItem[] }>('/system-settings/provinces', {
+      query: { status: 'active' }
+    }),
+  { lazy: true }
 )
 
 const REGIONS_ORDER = [
@@ -349,18 +353,19 @@ const evaluationStatusFilterOptions = [
   { value: 'missing_student_id', label: '⚪ ขาดรหัสนักศึกษา' },
   { value: 'awaiting_response', label: '🟡 ส่งคำขอประเมินแล้ว' },
   { value: 'in_progress', label: '🟠 กำลังทำแบบประเมิน' },
-  { value: 'submitted', label: '🟢 ส่งผลประเมินแล้ว' },
+  { value: 'submitted', label: '🟢 จบการฝึกงานแล้ว' },
   { value: 'email_error', label: '🔴 ส่งอีเมลผิดพลาด' },
   { value: 'expired', label: '⚫ หมดอายุ' }
 ]
 
-const { data: termsMasterData } = await useAsyncData(
+const { data: termsMasterData } = useAsyncData(
   'students-master-terms',
   () =>
     api<{ items: { id: string; academicYear: number; semester: string }[] }>(
       '/academic/terms',
       { query: { pageSize: 25 } }
-    )
+    ),
+  { lazy: true }
 )
 
 const academicYearFilterOptions = computed(() => {
@@ -449,7 +454,7 @@ const {
   error: evaluationFormsError,
   pending: evaluationFormsPending,
   refresh: refreshEvaluationForms
-} = await useAsyncData(
+} = useAsyncData(
   'students-eval-forms',
   () =>
     api<PaginatedItems<CompetencySetItem>>('/competency-sets', {
@@ -460,7 +465,7 @@ const {
         archived: false
       }
     }),
-  { watch: [competencyFormSearch, competencyFormPage] }
+  { lazy: true, watch: [competencyFormSearch, competencyFormPage] }
 )
 
 const referenceDataError = computed(() =>
@@ -863,13 +868,14 @@ function checkStudentCompleteness(student?: Student | null): {
 function getStudentEvaluationStatus(student: Student) {
   const status = student.evaluationStatus
 
-  if (status === 'submitted') {
+  const placement = getStudentPlacement(student)
+  if (status === 'submitted' || placement?.status === 'completed') {
     return {
       code: 'submitted',
-      label: 'ส่งผลประเมินแล้ว',
+      label: 'จบการฝึกงานแล้ว',
       color: 'success' as const,
       icon: 'i-lucide-check-circle-2',
-      description: 'นักศึกษาได้รับการประเมินผลเรียบร้อยแล้ว'
+      description: 'ตอบแบบประเมินและจบการฝึกงานเรียบร้อยแล้ว'
     }
   }
   if (status === 'email_error') {
@@ -1274,6 +1280,7 @@ const isExcelModalOpen = ref(false)
 const importMode = ref<'students' | 'contacts'>('students')
 const contactImportTermId = ref('')
 const isExcelImporting = ref(false)
+const importPreviewError = ref('')
 const parsedRows = ref<ParsedStudentRow[]>([])
 const selectedFileName = ref<string>('')
 const studentImportBatchId = ref<string | null>(null)
@@ -1320,6 +1327,7 @@ function cleanFileNameDisplay(name: string): string {
 }
 
 function clearExcelImportState() {
+  importPreviewError.value = ''
   parsedRows.value = []
   selectedFileName.value = ''
   studentImportBatchId.value = null
@@ -1349,24 +1357,6 @@ function openExcelImportModal() {
 
 // Download Excel Template for Students
 function downloadStudentExcelTemplate() {
-  if (importMode.value === 'contacts') {
-    const sheet = XLSX.utils.aoa_to_sheet([
-      [
-        'Student ID',
-        'advisorName',
-        'advisorEmail',
-        'siteVisitAdvisorName',
-        'siteVisitAdvisorEmail',
-        'evaluatorName',
-        'evaluatorEmail'
-      ]
-    ])
-    sheet['!cols'] = Array.from({ length: 7 }, () => ({ wch: 28 }))
-    const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, sheet, 'Contacts')
-    XLSX.writeFile(workbook, 'MFU_Internship_Contacts_Template.xlsx')
-    return
-  }
   const ws = XLSX.utils.aoa_to_sheet([
     [
       'รหัสนักศึกษา (studentId)',
@@ -1376,12 +1366,17 @@ function downloadStudentExcelTemplate() {
       'รหัสหลักสูตร (programCode)',
       'รหัสวิชา (courseCode)',
       'ภาคการศึกษา (semester)',
-      'สถานประกอบการ (company)',
-      'จังหวัด (province)',
-      'ปีที่เข้าศึกษา',
       'ปีการศึกษา (academicYear)',
+      'สถานประกอบการ (company)',
+      'ที่อยู่สถานประกอบการ (companyAddress)',
+      'จังหวัด (province)',
+      'ปีที่เข้าศึกษา (admissionYear)',
       'ชื่อผู้ประเมิน (evaluatorName)',
-      'อีเมลผู้ประเมิน (evaluatorEmail)'
+      'อีเมลผู้ประเมิน (evaluatorEmail)',
+      'ชื่ออาจารย์ผู้ประสานงาน (advisorName)',
+      'อีเมลอาจารย์ผู้ประสานงาน (advisorEmail)',
+      'ชื่ออาจารย์นิเทศ (siteVisitAdvisorName)',
+      'อีเมลอาจารย์นิเทศ (siteVisitAdvisorEmail)'
     ]
   ])
   // Set column widths
@@ -1393,12 +1388,17 @@ function downloadStudentExcelTemplate() {
     { wch: 18 }, // programCode
     { wch: 18 }, // courseCode
     { wch: 18 }, // semester
+    { wch: 20 }, // academicYear
     { wch: 30 }, // company
+    { wch: 35 }, // companyAddress
     { wch: 20 }, // province
-    { wch: 16 }, // admissionYear
-    { wch: 22 }, // academicYear
+    { wch: 18 }, // admissionYear
     { wch: 28 }, // evaluatorName
-    { wch: 32 } // evaluatorEmail
+    { wch: 32 }, // evaluatorEmail
+    { wch: 28 }, // advisorName
+    { wch: 32 }, // advisorEmail
+    { wch: 28 }, // siteVisitAdvisorName
+    { wch: 32 } // siteVisitAdvisorEmail
   ]
 
   const wb = XLSX.utils.book_new()
@@ -1408,7 +1408,7 @@ function downloadStudentExcelTemplate() {
   toast.add({
     title: 'ดาวน์โหลดเทมเพลตสำเร็จ',
     description:
-      'ไฟล์ MFU_Internship_Student_Template.xlsx มีเฉพาะหัวคอลัมน์ ไม่มีข้อมูลตัวอย่าง',
+      'ไฟล์ MFU_Internship_Student_Template.xlsx มีเฉพาะหัวคอลัมน์มาตรฐานครบถ้วน ไม่มีข้อมูลตัวอย่าง',
     color: 'success'
   })
 }
@@ -1512,11 +1512,30 @@ function importErrorMessage(error: unknown): string {
     typeof error.data === 'object' &&
     'error' in error.data &&
     error.data.error &&
-    typeof error.data.error === 'object' &&
-    'message' in error.data.error &&
-    typeof error.data.error.message === 'string'
+    typeof error.data.error === 'object'
   ) {
-    return error.data.error.message
+    const detail = error.data.error
+    const messages: Record<string, string> = {
+      WORKBOOK_NO_STUDENT_ROWS:
+        'ไม่พบแถวข้อมูลนักศึกษา กรุณากรอกข้อมูลใต้หัวตารางแล้วเลือกไฟล์อีกครั้ง',
+      WORKBOOK_INVALID:
+        'อ่านไฟล์ไม่สำเร็จ กรุณาเลือกไฟล์ Excel (.xlsx) หรือ CSV ที่มีหัวตารางนักศึกษา',
+      WORKBOOK_ROW_LIMIT_EXCEEDED:
+        'ไฟล์มีข้อมูลเกิน 1,000 แถว กรุณาแบ่งไฟล์แล้วเลือกใหม่',
+      WORKBOOK_SHEET_LIMIT_EXCEEDED:
+        'ไฟล์มีเกิน 20 ชีต กรุณาลดจำนวนชีตแล้วเลือกใหม่',
+      WORKBOOK_COLUMN_LIMIT_EXCEEDED:
+        'ไฟล์มีเกิน 200 คอลัมน์ กรุณาลดจำนวนคอลัมน์แล้วเลือกใหม่'
+    }
+    if (
+      'code' in detail &&
+      typeof detail.code === 'string' &&
+      messages[detail.code]
+    ) {
+      return messages[detail.code]!
+    }
+    if ('message' in detail && typeof detail.message === 'string')
+      return detail.message
   }
   if (error instanceof Error) {
     if (
@@ -1534,6 +1553,7 @@ async function handleExcelFileUpload(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
+  importPreviewError.value = ''
   selectedFileName.value = file.name
   parsedRows.value = []
   studentImportBatchId.value = null
@@ -1544,26 +1564,16 @@ async function handleExcelFileUpload(event: Event) {
   try {
     const form = new FormData()
     form.append('file', file)
+    const query = contactImportTermId.value
+      ? `?academicTermId=${encodeURIComponent(contactImportTermId.value)}`
+      : ''
     const batch = await api<StudentImportBatchResponse>(
-      importMode.value === 'contacts'
-        ? contactImportTermId.value
-          ? `/students/import-preview?mode=contacts&academicTermId=${encodeURIComponent(contactImportTermId.value)}`
-          : '/students/import-preview?mode=contacts'
-        : '/students/import-preview',
+      `/students/import-preview${query}`,
       { method: 'POST', body: form }
     )
     applyStudentImportBatch(batch)
-    toast.add({
-      title: 'ตรวจสอบไฟล์เสร็จแล้ว',
-      description: `พบใหม่ ${batch.summary.creates}, มีส่วนต่าง ${batch.summary.updates}, ไม่เปลี่ยน ${batch.summary.unchanged}, ผิดเงื่อนไข ${batch.summary.invalid} รายการ`,
-      color: batch.summary.invalid > 0 ? 'warning' : 'success'
-    })
   } catch (error: unknown) {
-    toast.add({
-      title: 'ตรวจสอบไฟล์ไม่สำเร็จ',
-      description: importErrorMessage(error),
-      color: 'error'
-    })
+    importPreviewError.value = importErrorMessage(error)
   } finally {
     isExcelImporting.value = false
     input.value = ''
@@ -1630,6 +1640,7 @@ async function handleExecuteExcelImport() {
       `/students/imports/${batchId}`
     )
     applyStudentImportBatch(updatedBatch)
+    importProgress.value.total = decisions.length
     if (committedCount > 0) await refresh()
 
     if (commitError) {
@@ -1644,11 +1655,6 @@ async function handleExecuteExcelImport() {
 
     importProgress.value.status = 'completed'
     importProgress.value.current = committedCount
-    toast.add({
-      title: 'นำเข้าข้อมูลสำเร็จ',
-      description: `บันทึกหรืออัปเดตข้อมูล ${committedCount} รายการเรียบร้อยแล้ว`,
-      color: 'success'
-    })
     await refresh()
   } catch (error: unknown) {
     importProgress.value.status = 'error'
@@ -1941,7 +1947,7 @@ const completionReason = ref('')
 const completingPlacement = ref(false)
 const completionError = ref('')
 
-async function openPlacementCompletion(student: Student): Promise<void> {
+async function _openPlacementCompletion(student: Student): Promise<void> {
   completionStudent.value = student
   completionPlacement.value = null
   completionError.value = ''
@@ -2008,13 +2014,18 @@ async function completePlacement(): Promise<void> {
     })
     await refresh()
   } catch (error: unknown) {
-    const code = (error as { data?: { code?: string } }).data?.code
+    const data = (
+      error as { data?: { code?: string; error?: { code?: string } } } | null
+    )?.data
+    const code = data?.error?.code ?? data?.code
     completionError.value =
       code === 'PLACEMENT_COMPLETION_DATE_INVALID'
-        ? 'วันสิ้นสุดต้องไม่ก่อนเริ่มฝึกงานและไม่อยู่ในอนาคต'
+        ? 'วันสิ้นสุดต้องอยู่หลังวันเริ่มฝึกงานและไม่อยู่ในอนาคต'
         : code === 'PLACEMENT_CHANGED'
           ? 'ข้อมูลการฝึกงานเปลี่ยนแล้ว กรุณาปิดหน้าต่างและเปิดใหม่'
-          : 'จบการฝึกงานไม่สำเร็จ ตรวจว่ามีผลประเมินสุดท้ายครบทุกงานและข้อมูลไม่เปลี่ยนระหว่างทำรายการ'
+          : code === 'PLACEMENT_EVALUATIONS_INCOMPLETE'
+            ? 'ยังส่งผลประเมินสุดท้ายไม่ครบทุกงาน กรุณาตรวจหน้าการประเมิน'
+            : 'จบการฝึกงานไม่สำเร็จ กรุณาตรวจข้อมูลแล้วลองใหม่'
   } finally {
     completingPlacement.value = false
   }
@@ -2034,15 +2045,6 @@ function getStudentMenuItems(student: Student) {
         label: 'แก้ไขข้อมูล',
         icon: 'i-lucide-pencil',
         onSelect: () => openEditStudentModal(student)
-      },
-      {
-        label:
-          getStudentPlacement(student)?.status === 'completed'
-            ? 'จบการฝึกงานแล้ว'
-            : 'จบการฝึกงาน',
-        icon: 'i-lucide-circle-check',
-        disabled: getStudentPlacement(student)?.status === 'completed',
-        onSelect: () => openPlacementCompletion(student)
       }
     ],
     [
@@ -3679,35 +3681,6 @@ function handleModalBackdropClick() {
         </div>
 
         <!-- Step 1: Download Template & Upload -->
-        <div
-          v-if="!studentImportBatchId"
-          class="space-y-3 p-4 border-b border-default"
-        >
-          <UFormField label="ประเภทข้อมูลนำเข้า">
-            <USelect
-              v-model="importMode"
-              :items="[
-                {
-                  label: '1. ข้อมูลนักศึกษา (ไฟล์ Cer หรือเทมเพลตนักศึกษา)',
-                  value: 'students'
-                },
-                {
-                  label: '2. จับคู่อาจารย์และผู้ประเมิน (Checklist)',
-                  value: 'contacts'
-                }
-              ]"
-              class="w-full"
-              aria-label="ประเภทข้อมูลนำเข้า"
-            />
-          </UFormField>
-          <template v-if="importMode === 'contacts'">
-            <p class="text-sm text-muted">
-              จับคู่ข้อมูลอัตโนมัติด้วยรหัสนักศึกษา
-              อัปเดตเฉพาะข้อมูลติดต่ออาจารย์และผู้ประเมิน ไม่สร้างนักศึกษาใหม่
-              ช่องว่างจะไม่ลบข้อมูลเดิม และยังไม่ส่งอีเมล
-            </p>
-          </template>
-        </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <!-- Download Template Card -->
           <div
@@ -3721,15 +3694,7 @@ function handleModalBackdropClick() {
                 <span>1. ดาวน์โหลดเทมเพลตมาตรฐาน</span>
               </div>
               <p class="mt-1 text-xs text-muted">
-                <template v-if="importMode === 'contacts'">
-                  ใช้ Checklist เดิม
-                  หรือเทมเพลตรหัสนักศึกษาและข้อมูลติดต่อแยกบทบาท
-                  ช่องว่างจะคงข้อมูลเดิมไว้
-                </template>
-                <template v-else>
-                  ดาวน์โหลดไฟล์ตัวอย่างที่มีหัวตารางครบถ้วน (รหัสนักศึกษา,
-                  ชื่อ-นามสกุลไทย/อังกฤษ, อีเมล, รหัสสำนักวิชา, รหัสหลักสูตร)
-                </template>
+                ดาวน์โหลดไฟล์ตัวอย่างที่มีหัวตารางครบถ้วน ทั้งข้อมูลนักศึกษา สถานประกอบการ และข้อมูลติดต่อผู้ประเมิน/อาจารย์ หรือสามารถนำเข้าไฟล์เดิม (เช่น Checklist, Cer) ได้ทันที
               </p>
             </div>
             <div class="mt-3">
@@ -3799,6 +3764,14 @@ function handleModalBackdropClick() {
               </p>
             </template>
           </div>
+        </div>
+
+        <div v-if="importPreviewError" role="alert">
+          <UAlert
+            color="error"
+            title="ตรวจสอบไฟล์ไม่สำเร็จ"
+            :description="importPreviewError"
+          />
         </div>
 
         <div

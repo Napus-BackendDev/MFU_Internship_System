@@ -402,7 +402,9 @@ export class EvaluationsService {
         }
       })
     }
-    if (options.archived === false) {
+    if (options.archived === true) {
+      filters.push({ status: 'archived' })
+    } else {
       filters.push({ status: { $ne: 'archived' } })
     }
     return paginate(this.competencySets, andFilters(filters), page, {
@@ -416,7 +418,124 @@ export class EvaluationsService {
     input: CompetencySetRecord
   ): Promise<unknown> {
     assertCompetencyPermission(actor, 'competencies.manage')
+    if (input.status === 'active') {
+      await this.competencySets
+        .updateMany({ status: 'active' }, { $set: { status: 'inactive' } })
+        .exec()
+    }
     return (await this.competencySets.create(input)).toJSON()
+  }
+
+  public async updateCompetencySet(
+    actor: AuthenticatedActor,
+    id: string,
+    nameOrPatch:
+      | CompetencySetRecord['name']
+      | {
+          name?: CompetencySetRecord['name']
+          status?: 'active' | 'inactive' | 'archived'
+        },
+    requestId: string
+  ): Promise<unknown> {
+    assertCompetencyPermission(actor, 'competencies.manage')
+    const patch =
+      'th' in nameOrPatch && 'en' in nameOrPatch
+        ? { name: nameOrPatch }
+        : nameOrPatch
+    return runWithTransaction(this.connection, async (session) => {
+      const current = await this.competencySets
+        .findById(id)
+        .session(session ?? null)
+        .exec()
+      if (!current) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+      const versions = await this.competencyVersions
+        .find({ competencySetId: id })
+        .select({ sections: 1, _id: 1 })
+        .session(session ?? null)
+        .lean()
+        .exec()
+      const sections = versions.flatMap((version) => version.sections)
+      const tenantEditor =
+        actor.roles.includes('systemAdmin') ||
+        competencyReadScopes(actor).some(
+          (scope) => scope.role === 'internshipStaff' && scope.tenant
+        )
+      if (!tenantEditor) {
+        assertCompetencyResourceScope(actor, sections)
+        assertCompetencyInputScope(actor, sections)
+      }
+
+      if (patch.status === 'archived' && current.status !== 'archived') {
+        const versionIds = versions.map((v) => v._id.toString())
+        if (versionIds.length > 0) {
+          const activeCycle = await this.cycles
+            .exists({
+              competencySetVersionId: { $in: versionIds },
+              status: { $in: ['draft', 'active'] }
+            })
+            .session(session ?? null)
+            .exec()
+          if (activeCycle) {
+            throw new ConflictException({
+              code: 'COMPETENCY_SET_IN_USE',
+              message: 'แบบประเมินนี้กำลังถูกใช้งานอยู่ในรอบการประเมินที่เปิดอยู่ จึงไม่สามารถลบหรือเก็บถาวรได้'
+            })
+          }
+        }
+      }
+
+      if (patch.status === 'active' && current.status !== 'active') {
+        await this.competencySets
+          .updateMany(
+            { _id: { $ne: current._id }, status: 'active' },
+            { $set: { status: 'inactive' } }
+          )
+          .session(session ?? null)
+          .exec()
+      }
+
+      const updateQuery: Record<string, unknown> = {}
+      if (patch.name) updateQuery.name = patch.name
+      if (patch.status) updateQuery.status = patch.status
+
+      const updated = await this.competencySets
+        .findByIdAndUpdate(
+          id,
+          { $set: updateQuery },
+          { returnDocument: 'after', runValidators: true, session }
+        )
+        .exec()
+      if (!updated) throw new ConflictException({ code: 'VERSION_CONFLICT' })
+      await this.auditService.record(
+        {
+          requestId,
+          actorId: actor.id,
+          actorEmail: actor.email,
+          action: 'competencies.updated',
+          route: 'PATCH /api/v2/competency-sets/:competencySetId',
+          method: 'PATCH',
+          resourceScopes: tenantEditor
+            ? [{ tenant: true }]
+            : sections.map((section) => ({
+                ...(section.schoolId ? { schoolIds: [section.schoolId] } : {}),
+                ...(section.programId
+                  ? { programIds: [section.programId] }
+                  : {})
+              })),
+          metadata: {
+            competencySetId: id,
+            code: current.code,
+            before: { name: current.name, status: current.status },
+            after: {
+              name: patch.name ?? current.name,
+              status: patch.status ?? current.status
+            }
+          }
+        },
+        session
+      )
+      return updated.toJSON()
+    })
   }
 
   public async createCompetencyVersion(
@@ -2143,6 +2262,63 @@ export class EvaluationsService {
           { assignmentId },
           session ? { session } : {}
         )
+        if (
+          assignment.placementId &&
+          Types.ObjectId.isValid(assignment.placementId)
+        ) {
+          const pendingCount = await this.assignments
+            .countDocuments({
+              placementId: assignment.placementId,
+              _id: { $ne: assignment._id },
+              status: { $ne: 'submitted' }
+            })
+            .session(session ?? null)
+            .exec()
+
+          if (pendingCount === 0) {
+            const placementUpdate = await this.placements.findOneAndUpdate(
+              {
+                _id: new Types.ObjectId(assignment.placementId),
+                status: { $in: ['active', 'planned'] }
+              },
+              {
+                $set: {
+                  status: 'completed',
+                  endsAt: now
+                },
+                $inc: { __v: 1 }
+              },
+              {
+                session: session ?? undefined,
+                returnDocument: 'after'
+              }
+            )
+            if (placementUpdate) {
+              await this.auditService.record(
+                {
+                  requestId,
+                  actorId: actor.id,
+                  actorEmail: actor.email,
+                  action: 'placements.completed',
+                  route: 'POST /api/v2/evaluations/:evaluationId/submit',
+                  method: 'POST',
+                  resourceScopes: [
+                    {
+                      schoolIds: [assignment.schoolId],
+                      programIds: [assignment.programId]
+                    }
+                  ],
+                  metadata: {
+                    placementId: assignment.placementId,
+                    autoCompleted: true,
+                    reason: 'Automatic completion upon evaluation submission'
+                  }
+                },
+                session
+              )
+            }
+          }
+        }
         await this.auditService.record(
           {
             requestId,

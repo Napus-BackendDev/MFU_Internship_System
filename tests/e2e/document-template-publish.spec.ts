@@ -28,7 +28,6 @@ for (const publisher of [
       exact: true
     })
     await expect(publishButton).toBeVisible()
-    page.on('dialog', (dialog) => dialog.accept())
 
     const publishRequest = page.waitForRequest(
       (request) =>
@@ -40,6 +39,18 @@ for (const publisher of [
           )
     )
     await publishButton.click()
+    const confirmation = page.getByRole('dialog', {
+      name: 'ยืนยันเผยแพร่แม่แบบ',
+      exact: true
+    })
+    await confirmation
+      .getByRole('button', { name: 'ยกเลิก', exact: true })
+      .click()
+    await expect(publishButton).toBeVisible()
+    await publishButton.click()
+    await confirmation
+      .getByRole('button', { name: 'ยืนยัน', exact: true })
+      .click()
     await publishRequest
 
     await expect(

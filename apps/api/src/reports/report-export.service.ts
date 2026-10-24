@@ -11,8 +11,11 @@ import {
   DEFAULT_REPORT_EXPORT_FIELDS,
   REPORT_EXPORT_FIELDS
 } from '@internship/shared-types'
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { InjectQueue } from '@nestjs/bullmq'
 import {
   ConflictException,
@@ -55,6 +58,7 @@ import {
   toStudentDirectoryExportValues,
   type StudentDirectoryExportSource
 } from './student-directory-export.js'
+import { renderStudentDirectoryExportXlsx } from './student-directory-export.xlsx.js'
 
 const MAX_EXPORT_ROWS = 5000
 const EXPORT_TTL_MS = 24 * 60 * 60 * 1000
@@ -77,6 +81,7 @@ interface CreateReportExportInput {
 interface StudentDirectoryReportFilters {
   readonly search?: string
   readonly schoolId?: string
+  readonly programId?: string
   readonly cycleId?: string
   readonly academicYear?: number
   readonly semester?: string
@@ -247,7 +252,7 @@ export class ReportExportService {
         readonly exportId: string
         readonly schoolId: string
         readonly programId: string
-        readonly values: Readonly<Record<string, string | number>>
+        readonly values: Readonly<Record<string, unknown>>
         readonly expiresAt: Date
       }>
       if (reportType === 'studentDirectory') {
@@ -406,6 +411,13 @@ export class ReportExportService {
       return this.returnExisting(actor, reportExport, requestHashValue)
     }
     if (reportExport.status === 'queued') {
+      if (reportExport.reportType === 'studentDirectory') {
+        void this.processStudentDirectoryExport(reportExport).catch((err) => {
+          this.logger.error(
+            `Background studentDirectory export rendering failed: ${(err as Error).message}`
+          )
+        })
+      }
       try {
         await this.exportQueue.add(
           'generate-report',
@@ -434,7 +446,7 @@ export class ReportExportService {
     if (!actorHasPermission(actor.roles, 'exports.download')) {
       throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
     }
-    const reportExport = await this.exports
+    let reportExport = await this.exports
       .findOne({ _id: exportId, requestedBy: actor.id })
       .select('+failureCode')
       .exec()
@@ -444,18 +456,36 @@ export class ReportExportService {
       return this.toView(reportExport, 'expired')
     }
     await this.assertCurrentScope(actor, reportExport)
+    if (
+      reportExport.status === 'queued' &&
+      reportExport.reportType === 'studentDirectory'
+    ) {
+      try {
+        await this.processStudentDirectoryExport(reportExport)
+        const updated = await this.exports
+          .findOne({ _id: exportId, requestedBy: actor.id })
+          .select('+failureCode')
+          .exec()
+        if (updated) reportExport = updated
+      } catch (err) {
+        this.logger.error(
+          `Recovery studentDirectory export rendering failed: ${(err as Error).message}`
+        )
+      }
+    }
     return this.toView(reportExport)
   }
 
   public async downloadUrl(
     actor: AuthenticatedActor,
     exportId: string,
-    requestId: string
+    requestId: string,
+    baseUrl?: string
   ): Promise<unknown> {
     if (!actorHasPermission(actor.roles, 'exports.download')) {
       throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
     }
-    const reportExport = await this.exports
+    let reportExport = await this.exports
       .findOne({ _id: exportId, requestedBy: actor.id })
       .select('+objectKey +sha256 +resourceScopes')
       .exec()
@@ -468,8 +498,18 @@ export class ReportExportService {
       Math.floor((reportExport.expiresAt.getTime() - now) / 1000)
     )
     if (
+      reportExport.status === 'queued' &&
+      reportExport.reportType === 'studentDirectory'
+    ) {
+      await this.processStudentDirectoryExport(reportExport)
+      const updated = await this.exports
+        .findOne({ _id: exportId, requestedBy: actor.id })
+        .select('+objectKey +sha256 +resourceScopes')
+        .exec()
+      if (updated) reportExport = updated
+    }
+    if (
       reportExport.status !== 'ready' ||
-      !reportExport.objectKey ||
       expiresIn <= 0
     ) {
       throw new ConflictException({
@@ -479,6 +519,34 @@ export class ReportExportService {
             : 'REPORT_EXPORT_NOT_READY'
       })
     }
+
+    const isDev = process.env.NODE_ENV === 'development'
+    if (isDev || baseUrl) {
+      const url = `${baseUrl || ''}/api/v2/reports/exports/${exportId}/file`
+      await this.auditService.record({
+        requestId,
+        actorId: actor.id,
+        actorEmail: actor.email,
+        action: 'reports.export_downloaded',
+        route: 'GET /api/v2/reports/exports/:exportId/download-url',
+        method: 'GET',
+        resourceScopes: reportExport.resourceScopes.map(
+          (scope) => scope as unknown as AuditResourceScope
+        ),
+        metadata: {
+          exportId,
+          format: reportExport.format,
+          rowCount: reportExport.rowCount,
+          expiresIn
+        }
+      })
+      return { url, expiresIn }
+    }
+
+    if (!reportExport.objectKey) {
+      throw new ConflictException({ code: 'REPORT_EXPORT_NOT_READY' })
+    }
+
     const url = await getSignedUrl(
       this.s3,
       new GetObjectCommand({
@@ -507,9 +575,157 @@ export class ReportExportService {
     return { url, expiresIn }
   }
 
+  public async getFile(
+    actor: AuthenticatedActor,
+    exportId: string
+  ): Promise<{ bytes: Buffer; filename: string; contentType: string }> {
+    if (!actorHasPermission(actor.roles, 'exports.download')) {
+      throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
+    }
+    let reportExport = await this.exports
+      .findOne({ _id: exportId, requestedBy: actor.id })
+      .select('+objectKey +sha256 +resourceScopes')
+      .exec()
+    if (!reportExport) {
+      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    }
+    await this.assertCurrentScope(actor, reportExport)
+    if (reportExport.expiresAt <= new Date()) {
+      throw new ConflictException({ code: 'REPORT_EXPORT_EXPIRED' })
+    }
+    if (reportExport.status === 'queued') {
+      if (reportExport.reportType === 'studentDirectory') {
+        await this.processStudentDirectoryExport(reportExport)
+        const updated = await this.exports
+          .findOne({ _id: exportId, requestedBy: actor.id })
+          .select('+objectKey +sha256 +resourceScopes')
+          .exec()
+        if (updated) reportExport = updated
+      } else {
+        throw new ConflictException({ code: 'REPORT_EXPORT_NOT_READY' })
+      }
+    }
+    if (reportExport.status !== 'ready') {
+      throw new ConflictException({ code: 'REPORT_EXPORT_NOT_READY' })
+    }
+
+    const locale = reportExport.locale ?? 'th'
+    const filename =
+      reportExport.reportType === 'studentDirectory'
+        ? `MFU_Internship_Report_${locale === 'th' ? 'TH' : 'EN'}_${reportExport.snapshotAt.toISOString().slice(0, 10).replaceAll('-', '')}.xlsx`
+        : `report-${exportId}.csv`
+    const contentType =
+      reportExport.reportType === 'studentDirectory'
+        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        : 'text/csv; charset=utf-8'
+
+    // Try reading cached file from disk
+    try {
+      const localPath = join(
+        process.cwd(),
+        'tmp',
+        'exports',
+        `${exportId}.${reportExport.format}`
+      )
+      const diskBytes = await readFile(localPath)
+      return { bytes: diskBytes, filename, contentType }
+    } catch {
+      // Disk miss, generate
+    }
+
+    // If studentDirectory, re-generate from snapshots in MongoDB
+    if (reportExport.reportType === 'studentDirectory') {
+      const result = await this.processStudentDirectoryExport(reportExport)
+      return { bytes: result.bytes, filename, contentType }
+    }
+
+    throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+  }
+
+  public async processStudentDirectoryExport(
+    reportExport: ReportExportRecord & {
+      readonly id: string
+      readonly _id: Types.ObjectId
+    },
+    inMemoryRows?: readonly { readonly values: Readonly<Record<string, unknown>> }[]
+  ): Promise<{ bytes: Buffer; filename: string; contentType: string }> {
+    let rows = inMemoryRows
+    if (!rows || rows.length === 0) {
+      const snapshotDocs = await this.snapshots
+        .find({ exportId: reportExport.id })
+        .select('+values')
+        .sort({ _id: 1 })
+        .lean<{ values: Readonly<Record<string, unknown>> }[]>()
+        .exec()
+      rows = snapshotDocs
+    }
+
+    const locale = reportExport.locale ?? 'th'
+    const bytes = renderStudentDirectoryExportXlsx(
+      locale,
+      rows.map((row) => ({
+        values: row.values as unknown as StudentDirectoryExportValues
+      }))
+    )
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const filename = `MFU_Internship_Report_${locale === 'th' ? 'TH' : 'EN'}_${reportExport.snapshotAt.toISOString().slice(0, 10).replaceAll('-', '')}.xlsx`
+    const contentType =
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    const objectKey = `report-exports/${reportExport.id}/${sha256}.xlsx`
+
+    // Cache to disk
+    try {
+      const dir = join(process.cwd(), 'tmp', 'exports')
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, `${reportExport.id}.xlsx`), bytes)
+    } catch (err) {
+      this.logger.warn(
+        `Failed to write export to local disk: ${(err as Error).message}`
+      )
+    }
+
+    // Best-effort S3 upload
+    try {
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: objectKey,
+          Body: bytes,
+          ContentType: contentType,
+          ContentDisposition: `attachment; filename="${filename}"`,
+          Metadata: { sha256 }
+        })
+      )
+    } catch (err) {
+      this.logger.warn(
+        `S3 upload skipped or unavailable: ${(err as Error).message}`
+      )
+    }
+
+    await this.exports.updateOne(
+      { _id: reportExport.id },
+      {
+        $set: {
+          status: 'ready',
+          objectKey,
+          sha256,
+          completedAt: new Date()
+        },
+        $unset: {
+          failureCode: 1,
+          processingStartedAt: 1,
+          processingLeaseUntil: 1,
+          processingToken: 1
+        }
+      }
+    )
+
+    return { bytes, filename, contentType }
+  }
+
   private async returnExisting(
     actor: AuthenticatedActor,
-    reportExport: ReportExportRecord & { readonly id: string },
+    reportExport: ReportExportRecord & { readonly id: string; readonly _id: Types.ObjectId },
     expectedHash: string
   ): Promise<unknown> {
     if (reportExport.requestHash !== expectedHash) {
@@ -522,6 +738,20 @@ export class ReportExportService {
       return this.toView(reportExport, 'expired')
     }
     await this.assertCurrentScope(actor, reportExport)
+    if (
+      reportExport.status === 'queued' &&
+      reportExport.reportType === 'studentDirectory'
+    ) {
+      try {
+        await this.processStudentDirectoryExport(reportExport)
+        const updated = await this.exports.findById(reportExport.id).exec()
+        if (updated) reportExport = updated
+      } catch (err) {
+        this.logger.error(
+          `Recovery studentDirectory export rendering failed: ${(err as Error).message}`
+        )
+      }
+    }
     if (reportExport.status === 'queued') {
       try {
         await this.exportQueue.add(
@@ -637,8 +867,10 @@ export class ReportExportService {
         page: 1,
         pageSize: MAX_EXPORT_ROWS + 1,
         includeDirectoryData: false,
+        includeEvaluationAnswers: true,
         ...(filters.search ? { search: filters.search } : {}),
         ...(filters.schoolId ? { schoolId: filters.schoolId } : {}),
+        ...(filters.programId ? { programId: filters.programId } : {}),
         ...(filters.cycleId ? { cycleId: filters.cycleId } : {}),
         ...(filters.academicYear ? { academicYear: filters.academicYear } : {}),
         ...(filters.semester ? { semester: filters.semester } : {}),
@@ -665,16 +897,76 @@ export class ReportExportService {
         code: 'STUDENT_DIRECTORY_EXPORT_SNAPSHOT_INCOMPLETE'
       })
     }
+    const studentIds = result.items.map((s) => s.studentId)
+    const assignmentIds = result.items.flatMap((s) =>
+      (s.directoryRelations?.assignments ?? []).flatMap((a) => (a.id ? [a.id] : []))
+    )
+
+    const docByStudentId = new Map<
+      string,
+      { _id?: Types.ObjectId | string; status?: string }
+    >()
+    if (studentIds.length > 0) {
+      try {
+        const docs = await this.connection
+          .collection('generatedDocuments')
+          .find({ studentId: { $in: studentIds } })
+          .toArray()
+        for (const doc of docs) {
+          docByStudentId.set(String(doc.studentId), doc)
+        }
+      } catch {
+        // collection may not exist yet in test
+      }
+    }
+
+    const deliveryByAssignmentId = new Map<string, { status?: string }>()
+    if (assignmentIds.length > 0) {
+      try {
+        const dels = await this.connection
+          .collection('deliveries')
+          .find({ assignmentId: { $in: assignmentIds } })
+          .toArray()
+        for (const del of dels) {
+          deliveryByAssignmentId.set(
+            String(del.assignmentId),
+            del as { status?: string }
+          )
+        }
+      } catch {
+        // collection may not exist yet in test
+      }
+    }
+
     return result.items.map((student) => {
       if (!student.schoolId || !student.programId) {
         throw new UnprocessableEntityException({
           code: 'EXPORT_SCOPE_REFERENCE_MISSING'
         })
       }
+      const doc = docByStudentId.get(student.studentId)
+      const studentAssignments = student.directoryRelations?.assignments ?? []
+      const assignment = filters.cycleId
+        ? studentAssignments.find((a) => a.cycleId === filters.cycleId)
+        : studentAssignments[0]
+      const delivery = assignment?.id
+        ? deliveryByAssignmentId.get(assignment.id)
+        : undefined
+      const pdfUrl = doc?._id
+        ? `/api/v2/documents/generated-documents/${String(doc._id)}/download-url`
+        : ''
+      const emailSent =
+        delivery?.status === 'delivered' || delivery?.status === 'sent'
+          ? 'EMAIL_SENT'
+          : ''
+
       return {
         schoolId: student.schoolId,
         programId: student.programId,
-        values: toStudentDirectoryExportValues(student, filters.cycleId, locale)
+        values: toStudentDirectoryExportValues(student, filters.cycleId, locale, {
+          pdfUrl,
+          emailSent
+        })
       }
     })
   }

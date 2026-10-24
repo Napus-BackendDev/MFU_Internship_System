@@ -98,11 +98,30 @@ export class StudentImportService {
     assertSupportedWorkbook(sourceName, file)
 
     let parsed
+    let effectiveMode: 'students' | 'contacts' = options.mode ?? 'students'
     try {
-      parsed =
-        options.mode === 'contacts'
-          ? parseStudentContactsWorkbook(file)
-          : parseStudentWorkbook(file)
+      if (options.mode === 'contacts') {
+        parsed = parseStudentContactsWorkbook(file)
+      } else {
+        try {
+          parsed = parseStudentWorkbook(file)
+        } catch (innerError) {
+          const innerCode = innerError instanceof Error ? innerError.message : ''
+          if (
+            !options.mode &&
+            (innerCode === 'WORKBOOK_NO_STUDENT_ROWS' || innerCode === 'WORKBOOK_INVALID')
+          ) {
+            try {
+              parsed = parseStudentContactsWorkbook(file)
+              effectiveMode = 'contacts'
+            } catch {
+              throw innerError
+            }
+          } else {
+            throw innerError
+          }
+        }
+      }
     } catch (error) {
       const code = error instanceof Error ? error.message : 'WORKBOOK_INVALID'
       if (
@@ -190,7 +209,7 @@ export class StudentImportService {
         checksum,
         expiresAt,
         sourceRowCount: parsed.rows.length,
-        mode: options.mode ?? 'students',
+        mode: effectiveMode,
         academicTermId: options.academicTermId,
         questionFields: [...parsed.questionFields],
         status: 'preview'
@@ -321,13 +340,16 @@ export class StudentImportService {
         expiresAt
       )
     }
+    const existing = existingByStudentId.get(source.studentId)
     const issues: StudentImportIssue[] = [...source.issues]
     const warnings: StudentImportIssue[] = []
     const sourcePreview = publicSourcePreview(source)
     const sourceRowHash = requestHash(source)
     let school = source.schoolReference
       ? findMaster(schools, source.schoolReference, ['schoolCode', 'name'])
-      : undefined
+      : existing?.schoolId
+        ? schools.find((s) => String(s._id) === String(existing.schoolId))
+        : undefined
     let program: Record<string, unknown> | undefined
 
     if (school) {
@@ -335,11 +357,25 @@ export class StudentImportService {
       const schoolPrograms = programs.filter(
         (p) => String(p.schoolId) === schoolId
       )
-      program = findMaster(schoolPrograms, source.programReference, [
-        'programCode',
-        'name'
-      ])
-      if (!program) {
+      program = source.programReference
+        ? findMaster(schoolPrograms, source.programReference, [
+            'programCode',
+            'name'
+          ])
+        : existing?.programId
+          ? schoolPrograms.find(
+              (p) => String(p._id) === String(existing.programId)
+            )
+          : undefined
+      if (!program && source.programReference) {
+        issues.push(
+          issue(
+            'PROGRAM_NOT_FOUND',
+            'program',
+            'Program was not found under the selected school.'
+          )
+        )
+      } else if (!program && !existing?.programId) {
         issues.push(
           issue(
             'PROGRAM_NOT_FOUND',
@@ -377,14 +413,20 @@ export class StudentImportService {
         )
       }
     } else {
-      issues.push(
-        issue('SCHOOL_NOT_FOUND', 'school', 'School is not in master data.')
-      )
+      if (!existing?.schoolId) {
+        issues.push(
+          issue('SCHOOL_NOT_FOUND', 'school', 'School is not in master data.')
+        )
+      }
       if (source.programReference) {
         program = findMaster(programs, source.programReference, [
           'programCode',
           'name'
         ])
+      } else if (existing?.programId) {
+        program = programs.find(
+          (p) => String(p._id) === String(existing.programId)
+        )
       }
       if (!program) {
         issues.push(
@@ -394,6 +436,30 @@ export class StudentImportService {
             'Program was not found under the selected school.'
           )
         )
+      }
+    }
+
+    if (existing) {
+      if (school) {
+        const idx = issues.findIndex(
+          (i) => i.code === 'SCHOOL_REQUIRED' || i.code === 'SCHOOL_NOT_FOUND'
+        )
+        if (idx >= 0) issues.splice(idx, 1)
+      }
+      if (program) {
+        const idx = issues.findIndex(
+          (i) =>
+            i.code === 'PROGRAM_REQUIRED' || i.code === 'PROGRAM_NOT_FOUND'
+        )
+        if (idx >= 0) issues.splice(idx, 1)
+      }
+      if (!source.name && !source.nameTh && !source.nameEn && existing.name) {
+        const idx = issues.findIndex((i) => i.code === 'NAME_REQUIRED')
+        if (idx >= 0) issues.splice(idx, 1)
+      }
+      if (!source.email && existing.email) {
+        const idx = issues.findIndex((i) => i.code === 'INVALID_EMAIL')
+        if (idx >= 0) issues.splice(idx, 1)
       }
     }
     const schoolId = school ? String(school._id) : undefined
@@ -497,12 +563,16 @@ export class StudentImportService {
       )
     }
 
+    const resolvedName =
+      source.name || source.nameTh || source.nameEn || existing?.name || ''
+    const resolvedEmail = source.email || existing?.email || ''
+
     const payload: ImportPayload = {
       studentId: source.studentId,
-      name: source.name || source.nameTh || source.nameEn,
-      email: source.email,
-      schoolId,
-      programId,
+      name: resolvedName,
+      email: resolvedEmail,
+      schoolId: (schoolId || existing?.schoolId)!,
+      programId: (programId || existing?.programId)!,
       ...(source.courseReference ? { course: source.courseReference } : {}),
       ...(course ? { courseId: String(course._id) } : {}),
       ...(source.semester
@@ -516,18 +586,25 @@ export class StudentImportService {
         ? { admissionYear: source.admissionYear }
         : {}),
       ...(source.company ? { company: source.company } : {}),
-      ...(source.companyAddress ? { companyAddress: source.companyAddress } : {}),
+      ...(source.companyAddress
+        ? { companyAddress: source.companyAddress }
+        : {}),
       ...(source.province ? { province: source.province } : {}),
-      ...(source.evaluatorEmail ? { evaluatorEmail: source.evaluatorEmail } : {}),
+      ...(source.evaluatorEmail
+        ? { evaluatorEmail: source.evaluatorEmail }
+        : {}),
       ...(source.evaluatorName ? { evaluatorName: source.evaluatorName } : {}),
       ...(source.advisorEmail ? { advisorEmail: source.advisorEmail } : {}),
       ...(source.advisorName ? { advisorName: source.advisorName } : {}),
-      ...(source.siteVisitAdvisorEmail ? { siteVisitAdvisorEmail: source.siteVisitAdvisorEmail } : {}),
-      ...(source.siteVisitAdvisorName ? { siteVisitAdvisorName: source.siteVisitAdvisorName } : {})
+      ...(source.siteVisitAdvisorEmail
+        ? { siteVisitAdvisorEmail: source.siteVisitAdvisorEmail }
+        : {}),
+      ...(source.siteVisitAdvisorName
+        ? { siteVisitAdvisorName: source.siteVisitAdvisorName }
+        : {})
     }
 
-    const existing = existingByStudentId.get(source.studentId)
-    const emailOwner = existingByEmail.get(source.email)
+    const emailOwner = resolvedEmail ? existingByEmail.get(resolvedEmail) : undefined
     if (emailOwner && emailOwner.id !== existing?.id) {
       issues.push(
         issue(
@@ -706,7 +783,9 @@ export class StudentImportService {
       ...(existing.courseId ? { courseId: existing.courseId } : {}),
       ...(existing.course ? { course: existing.course } : {}),
       ...(existing.company ? { company: existing.company } : {}),
-      ...(existing.companyAddress ? { companyAddress: existing.companyAddress } : {}),
+      ...(existing.companyAddress
+        ? { companyAddress: existing.companyAddress }
+        : {}),
       ...(existing.province ? { province: existing.province } : {}),
       ...contacts
     }
@@ -1271,6 +1350,11 @@ function diffPayload(
   return fields.flatMap((field) => {
     const before = current[field]
     const after = payload[field]
+    if (
+      field === 'semester' &&
+      normalizeSemester(before) === normalizeSemester(after)
+    )
+      return []
     if (stableValue(before) === stableValue(after)) return []
     return [
       { field, before: safeDiffValue(before), after: safeDiffValue(after) }
@@ -1323,7 +1407,9 @@ function publicStudentPayload(
     ...(payload.semester ? { semester: payload.semester } : {}),
     ...(payload.academicYear ? { academicYear: payload.academicYear } : {}),
     ...(payload.company ? { company: payload.company } : {}),
-    ...(payload.companyAddress ? { companyAddress: payload.companyAddress } : {}),
+    ...(payload.companyAddress
+      ? { companyAddress: payload.companyAddress }
+      : {}),
     ...(payload.province ? { province: payload.province } : {})
   }
 }
@@ -1346,8 +1432,12 @@ function publicSourcePreview(
     ...(source.evaluatorName ? { evaluatorName: source.evaluatorName } : {}),
     ...(source.advisorEmail ? { advisorEmail: source.advisorEmail } : {}),
     ...(source.advisorName ? { advisorName: source.advisorName } : {}),
-    ...(source.siteVisitAdvisorEmail ? { siteVisitAdvisorEmail: source.siteVisitAdvisorEmail } : {}),
-    ...(source.siteVisitAdvisorName ? { siteVisitAdvisorName: source.siteVisitAdvisorName } : {}),
+    ...(source.siteVisitAdvisorEmail
+      ? { siteVisitAdvisorEmail: source.siteVisitAdvisorEmail }
+      : {}),
+    ...(source.siteVisitAdvisorName
+      ? { siteVisitAdvisorName: source.siteVisitAdvisorName }
+      : {}),
     ...(source.admissionYear !== undefined
       ? { admissionYear: source.admissionYear }
       : {})

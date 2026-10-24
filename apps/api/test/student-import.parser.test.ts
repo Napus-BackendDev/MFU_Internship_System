@@ -18,6 +18,102 @@ function workbookBuffer(
 }
 
 describe('student import workbook parser', () => {
+  it('keeps evaluator names out of the student Thai name in the downloaded template', () => {
+    const parsed = parseStudentWorkbook(
+      workbookBuffer([
+        {
+          name: 'Students',
+          rows: [
+            [
+              'studentId',
+              'ชื่อ-นามสกุล (name)',
+              'email',
+              'schoolCode',
+              'programCode',
+              'ชื่อผู้ประเมิน (evaluatorName)'
+            ],
+            [
+              '6631503991',
+              'QA Student',
+              'student@example.test',
+              'IT',
+              'SE',
+              'QA Evaluator'
+            ]
+          ]
+        }
+      ])
+    )
+    expect(parsed.rows[0]).toMatchObject({
+      name: 'QA Student',
+      nameTh: 'QA Student',
+      evaluatorName: 'QA Evaluator'
+    })
+  })
+
+  it.each(['', 'invalid-email'])(
+    'never replaces invalid student email %s with an evaluator email',
+    (email) => {
+      const parsed = parseStudentWorkbook(
+        workbookBuffer([
+          {
+            name: 'Students',
+            rows: [
+              [
+                'studentId',
+                'name',
+                'email',
+                'schoolCode',
+                'programCode',
+                'evaluatorEmail'
+              ],
+              [
+                '6631503991',
+                'QA Student',
+                email,
+                'IT',
+                'SE',
+                'evaluator@example.test'
+              ]
+            ]
+          }
+        ])
+      )
+      expect(parsed.rows[0]?.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: 'INVALID_EMAIL' })
+        ])
+      )
+      expect(parsed.rows[0]?.email).not.toBe('evaluator@example.test')
+    }
+  )
+  it.each([0, 3])(
+    'reports actual Excel row numbers with %s leading empty rows',
+    (leadingRows) => {
+      const parsed = parseStudentWorkbook(
+        workbookBuffer([
+          {
+            name: 'Students',
+            rows: [
+              ...Array.from({ length: leadingRows }, () => []),
+              ['studentId', 'name', 'email', 'schoolCode', 'programCode'],
+              ['6631503991', 'QA A', 'qa.a@example.test', 'IT', 'SE'],
+              [],
+              ['6631503992', 'QA B', 'qa.b@example.test', 'IT', 'SE']
+            ]
+          }
+        ])
+      )
+      expect(parsed.rows.map((row) => row.rowNumber)).toEqual([
+        leadingRows + 2,
+        leadingRows + 4
+      ])
+      expect(parsed.rows.map((row) => row.key)).toEqual([
+        `Students:${leadingRows + 2}`,
+        `Students:${leadingRows + 4}`
+      ])
+    }
+  )
   it.each([false, true])(
     'uses corrected evaluator email regardless of column order (reversed: %s)',
     (reverse) => {
