@@ -454,3 +454,9 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - `pnpm verify` เทียบเท่าครบและผ่านทุกขั้น: format:check, lint, typecheck, test (API 474/skip 4 Redis, Web 83, Worker 50/skip 1, contracts), openapi:check/lint, e2e 71/71, build
 - บั๊กเพิ่มจากรอบสุดท้าย: หน้า /app/evaluations แสดง ID ดิบแทนชื่อนักศึกษา/ผู้ประเมิน/บริษัท (lookup lazy ไม่ถูกเรียกหลัง SSR) แก้ให้โหลดฝั่ง client + cycles.vue แบบเดียวกัน; ดาวน์โหลด Excel ที่เป็น presigned URL ข้ามโดเมนถูก CSP connect-src บล็อกใน production (เปลี่ยนเป็น navigation + API ใส่ Content-Disposition); e2e 6 เคสที่ล้าสมัยหลังเปลี่ยนฟีเจอร์ (ฟอร์มสร้างเป็นหน้าเต็ม, import ยุบประเภท, export มี modal, โหลด lazy) ปรับให้ตรงพฤติกรรมปัจจุบัน
 - ไม่ commit/push/deploy; QA stack ยังรันอยู่ที่ web 28082/API 28083/Mailpit 28025 (ข้อมูล QA ใน `.runtime/qa-2026-10-25`, Redis WSL พอร์ต 6380)
+
+### 2026-10-26 — รอบเตรียมโปรดักชัน (ต่อจาก QA เต็มระบบ)
+
+- แก้เพิ่ม: Export ในโปรดักชันไม่เขียนไฟล์ข้อมูลส่วนบุคคลลงดิสก์ API และไม่ถือว่าพร้อมถ้าอัปโหลด S3 ไม่สำเร็จ; ข้อความ error ทั้งเว็บเป็นไทยที่ทำตามได้ (utils/api-error.ts + useApi) แทน `[POST] ... 409 Conflict`; timeout เทสต์ Mongo integration 30s
+- กดจริงเพิ่มผ่านแล้ว: สร้างผู้ใช้/อีเมลซ้ำ, รอบประเมิน (สร้าง ตรวจความพร้อม เปิดรอบ), แม่แบบอีเมล (แก้ บันทึก รีโหลดยังอยู่), Studio บันทึก Draft, แบบประเมิน (น้ำหนัก>2 ถูกบล็อก)
+- ผลตรวจเต็ม: format, lint, typecheck, test (API 474, Web 87, Worker 50), openapi, e2e 71/71, build ผ่าน; commit 3544c2c ยังไม่ push; ค้างให้ owner ตัดสินใจเหมือนรายการก่อนหน้า (ความหมาย EMAIL_SENT, เลขที่เอกสาร, ค่า OIDC/S3/SMTP จริงของโปรดักชัน)
