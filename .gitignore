@@ -30,3 +30,4 @@ dump.rdb
 Thumbs.db
 tmp/
 apps/*/tmp/
+.pnpm-store/

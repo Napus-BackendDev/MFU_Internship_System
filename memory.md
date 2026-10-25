@@ -460,3 +460,10 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - แก้เพิ่ม: Export ในโปรดักชันไม่เขียนไฟล์ข้อมูลส่วนบุคคลลงดิสก์ API และไม่ถือว่าพร้อมถ้าอัปโหลด S3 ไม่สำเร็จ; ข้อความ error ทั้งเว็บเป็นไทยที่ทำตามได้ (utils/api-error.ts + useApi) แทน `[POST] ... 409 Conflict`; timeout เทสต์ Mongo integration 30s
 - กดจริงเพิ่มผ่านแล้ว: สร้างผู้ใช้/อีเมลซ้ำ, รอบประเมิน (สร้าง ตรวจความพร้อม เปิดรอบ), แม่แบบอีเมล (แก้ บันทึก รีโหลดยังอยู่), Studio บันทึก Draft, แบบประเมิน (น้ำหนัก>2 ถูกบล็อก)
 - ผลตรวจเต็ม: format, lint, typecheck, test (API 474, Web 87, Worker 50), openapi, e2e 71/71, build ผ่าน; commit 3544c2c ยังไม่ push; ค้างให้ owner ตัดสินใจเหมือนรายการก่อนหน้า (ความหมาย EMAIL_SENT, เลขที่เอกสาร, ค่า OIDC/S3/SMTP จริงของโปรดักชัน)
+
+### 2026-10-26 — อัปเดตความปลอดภัย dependency และยืนยันชุดตรวจสุดท้าย
+
+- `pnpm audit --prod`: จาก critical 4 / high 26 เหลือ critical 2 / high 8 (ทั้งหมดเป็น tooling ของ Nuxt dev/build เช่น simple-git, brace-expansion, node-forge, vite ที่ไม่ถูกนำไปรันบนเซิร์ฟเวอร์จริง) แก้ที่ใช้จริงแล้ว: proxy-addr (IP spoofing ที่กระทบ rate limit), body-parser, multer, zod, devalue, vue server-renderer, undici, prosemirror-view ฯลฯ ผ่าน overrides ใน `pnpm-workspace.yaml`; ห้าม override simple-git เป็น 4.x เพราะ `nuxt dev` บูตไม่ได้ (ไม่มี default export)
+- pnpm store กลางของเครื่อง (`AppData\Local\pnpm\store\v11\index.db`) เสียหาย ติดตั้งใช้ `--store-dir ./.pnpm-store` ในโปรเจกต์ (อยู่ใน .gitignore) ไม่ได้ลบของเดิม
+- Playwright: expect 15s, test 60s (dev server คอมไพล์ช้ารอบแรก) ห้ามรันสองชุด e2e พร้อมกัน (แย่งพอร์ต 18080/18081); ตั้ง `TEST_REDIS_URL` ชี้ Redis จริงทำให้เทสต์ที่เคยข้ามรันครบ (API 478, Worker 51, Web 87)
+- ผลสุดท้ายที่สะอาด: format, lint, typecheck, test, openapi check/lint, build ผ่าน; e2e 71/71 (รันตัวเดียว)

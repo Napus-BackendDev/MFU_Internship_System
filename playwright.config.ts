@@ -7,6 +7,9 @@ export default defineConfig({
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
+  // The suite runs against `nuxt dev`, which compiles pages on first visit; 5s was flaky.
+  expect: { timeout: 15_000 },
+  timeout: 60_000,
   reporter: 'line',
   outputDir: './test-results/playwright',
   use: {
