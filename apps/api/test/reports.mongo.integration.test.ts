@@ -2,6 +2,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Queue } from 'bullmq'
 import {
   createConnection,
+  Types,
   type ClientSession,
   type Connection,
   type Model
@@ -721,6 +722,55 @@ describe('Reports on an isolated MongoDB replica set', () => {
       })
     ).resolves.toMatchObject({ id: created.id })
     expect(directoryMembers.listStudents).toHaveBeenCalledTimes(1)
+  })
+
+  it('links the latest ready certificate PDF of each student in the directory export', async () => {
+    const student = await createStudent('6631505102', schoolA, programA)
+    const templateId = new Types.ObjectId()
+    const versionId = new Types.ObjectId()
+    const documentId = new Types.ObjectId()
+    await connection
+      .collection('documentTemplates')
+      .insertOne({ _id: templateId, documentType: 'certificate' })
+    await connection
+      .collection('documentTemplateVersions')
+      .insertOne({ _id: versionId, templateId })
+    await connection.collection('generatedDocuments').insertOne({
+      _id: documentId,
+      studentId: student.id,
+      templateVersionId: String(versionId),
+      status: 'ready',
+      createdAt: new Date()
+    })
+    directoryMembers.listStudents.mockResolvedValueOnce({
+      items: [
+        {
+          schoolId: schoolA,
+          programId: programA,
+          studentId: '6631505102',
+          name: { th: 'นักศึกษาลิงก์', en: 'Linked Student' }
+        }
+      ],
+      meta: { total: 1 }
+    })
+
+    const created = (await exportService.create(scopedStaff, {
+      reportType: 'studentDirectory',
+      filters: { schoolId: schoolA },
+      locale: 'th',
+      format: 'xlsx',
+      idempotencyKey: 'student-directory-export-pdf-url',
+      requestId: 'request-directory-export-pdf-url'
+    })) as { id: string }
+    const snapshot = await exportSnapshots
+      .findOne({ exportId: created.id })
+      .select('+values')
+      .lean()
+    const values = snapshot?.values as { studentId?: string; pdfUrl?: string }
+    expect(values.studentId).toBe('6631505102')
+    expect(values.pdfUrl).toContain(
+      `/api/v2/documents/generated-documents/${String(documentId)}/download-url`
+    )
   })
 
   it('rejects student-directory exports above the server-side row limit', async () => {

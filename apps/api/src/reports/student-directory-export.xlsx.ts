@@ -28,18 +28,45 @@ const BASE_DATA_HEADERS = [
   'ปี'
 ] as const
 
-const HARD_HEADERS = ['Hard1', 'Hard2', 'Hard3', 'Hard4', 'Hard5', 'Hard6'] as const
+const HARD_HEADERS = [
+  'Hard1',
+  'Hard2',
+  'Hard3',
+  'Hard4',
+  'Hard5',
+  'Hard6'
+] as const
 const HS_HEADERS = ['HS1', 'HS2', 'HS3', 'HS4', 'HS5', 'HS6'] as const
 const HM_HEADERS = ['HM1', 'HM2', 'HM3', 'HM4', 'HM5', 'HM6'] as const
 
 const SOFT_HEADERS = [
-  'SS1', 'SS2', 'SS3', 'SS4', 'SS5', 'SS6',
-  'SS7', 'SS8', 'SS9', 'SS10', 'SS11', 'SS12'
+  'SS1',
+  'SS2',
+  'SS3',
+  'SS4',
+  'SS5',
+  'SS6',
+  'SS7',
+  'SS8',
+  'SS9',
+  'SS10',
+  'SS11',
+  'SS12'
 ] as const
 
 const SM_HEADERS = [
-  'SM1', 'SM2', 'SM3', 'SM4', 'SM5', 'SM6',
-  'SM7', 'SM8', 'SM9', 'SM10', 'SM11', 'SM12'
+  'SM1',
+  'SM2',
+  'SM3',
+  'SM4',
+  'SM5',
+  'SM6',
+  'SM7',
+  'SM8',
+  'SM9',
+  'SM10',
+  'SM11',
+  'SM12'
 ] as const
 
 const SEND_EMAIL_HEADERS = [
@@ -94,7 +121,10 @@ export function renderStudentDirectoryExportXlsx(
   const workbook = XLSX.utils.book_new()
 
   // 1. Group rows by Program
-  const groupsByProgram = new Map<string, { readonly values: StudentDirectoryExportValues }[]>()
+  const groupsByProgram = new Map<
+    string,
+    { readonly values: StudentDirectoryExportValues }[]
+  >()
   for (const row of rows) {
     const progKey =
       (locale === 'th' ? row.values.programTh : row.values.programEn) ||
@@ -178,20 +208,22 @@ export function renderStudentDirectoryExportXlsx(
     const groupSM: (number | null)[] = softScoresByCol.map(calculateMean)
     const groupSSD = calculateSampleStdev(allSoftScores)
 
-    // Build Header row (62 columns)
+    // Same layout as the reference workbook: HardN / HSN / HMN blocks separated by a blank column.
+    const hardSlots = Math.min(
+      HARD_HEADERS.length,
+      Math.max(5, hardQuestionCount)
+    )
+    const hardSlotIndexes = Array.from({ length: hardSlots }, (_, i) => i)
+
+    // Build Header row (62 columns for 5 hard criteria)
     const headerRow: (string | null)[] = [
       ...BASE_DATA_HEADERS,
-      // Hard question titles: 6 slots (null for empty slots if fewer questions)
-      ...Array.from({ length: 6 }, (_, i) => {
-        if (i < hardQuestionCount && hardQuestionTitles[i]) {
-          return hardQuestionTitles[i]
-        }
-        return HARD_HEADERS[i]!
-      }),
-      // HS headers
-      ...HS_HEADERS,
-      // HM headers
-      ...HM_HEADERS,
+      ...HARD_HEADERS.slice(0, hardSlots),
+      null,
+      ...HS_HEADERS.slice(0, hardSlots),
+      null,
+      ...HM_HEADERS.slice(0, hardSlots),
+      null,
       'HA',
       'HSD',
       // SS headers
@@ -237,13 +269,20 @@ export function renderStudentDirectoryExportXlsx(
 
       // Demographic values (first 13 cols)
       const studentIdNum = Number(v.studentId)
-      const parsedStudentId = !Number.isNaN(studentIdNum) && String(studentIdNum) === v.studentId ? studentIdNum : v.studentId
+      const parsedStudentId =
+        !Number.isNaN(studentIdNum) && String(studentIdNum) === v.studentId
+          ? studentIdNum
+          : v.studentId
 
       const academicYearNum = Number(v.academicYear)
-      const parsedYear = !Number.isNaN(academicYearNum) ? academicYearNum : v.academicYear
+      const parsedYear = !Number.isNaN(academicYearNum)
+        ? academicYearNum
+        : v.academicYear
 
       const academicYearEnNum = Number(v.academicYearEn)
-      const parsedYearEn = !Number.isNaN(academicYearEnNum) ? academicYearEnNum : v.academicYearEn
+      const parsedYearEn = !Number.isNaN(academicYearEnNum)
+        ? academicYearEnNum
+        : v.academicYearEn
 
       const rowValues: (string | number | null)[] = [
         idx + 1, // NO.
@@ -251,20 +290,25 @@ export function renderStudentDirectoryExportXlsx(
         v.nameTh, // Name-Surname (Thai)
         v.nameEn, // Name-Surname
         v.email, // Email
-        v.programTh || v.programEn, // Programe
-        v.schoolTh || v.schoolEn, // School
+        v.programEn || v.programTh, // Programe
+        v.schoolEn || v.schoolTh, // School
         v.courseDisplay, // Course
         v.company, // Organization name
         v.semesterEn, // Semester
         parsedYearEn, // Year
         v.semester, // ภาคการศึกษา
         parsedYear, // ปี
-        // Hard question titles repeated / slot titles
-        ...Array.from({ length: 6 }, (_, i) => hardQuestionTitles[i] || null),
-        // HS1..HS6
-        ...hsVals,
-        // HM1..HM6
-        ...Array.from({ length: 6 }, (_, i) => (i < hardQuestionCount ? groupHM[i] ?? null : null)),
+        // Hard criterion titles
+        ...hardSlotIndexes.map((i) => hardQuestionTitles[i] || null),
+        null,
+        // HS1..HSn
+        ...hsVals.slice(0, hardSlots),
+        null,
+        // HM1..HMn
+        ...hardSlotIndexes.map((i) =>
+          i < hardQuestionCount ? (groupHM[i] ?? null) : null
+        ),
+        null,
         // HA, HSD
         ha,
         groupHSD,
@@ -275,7 +319,7 @@ export function renderStudentDirectoryExportXlsx(
         // SA, SSD
         sa,
         groupSSD,
-        v.issuedOn || '-',
+        v.issuedOn || '',
         v.pdfUrl || '',
         v.emailSent || ''
       ]
@@ -287,7 +331,7 @@ export function renderStudentDirectoryExportXlsx(
 
     // Set column widths
     worksheet['!cols'] = [
-      { wch: 6 },  // NO.
+      { wch: 6 }, // NO.
       { wch: 14 }, // ID
       { wch: 26 }, // Name-Surname (Thai)
       { wch: 26 }, // Name-Surname
@@ -297,28 +341,49 @@ export function renderStudentDirectoryExportXlsx(
       { wch: 22 }, // Course
       { wch: 32 }, // Organization name
       { wch: 12 }, // Semester
-      { wch: 8 },  // Year
+      { wch: 8 }, // Year
       { wch: 16 }, // ภาคการศึกษา
-      { wch: 8 },  // ปี
-      // Hard1..Hard6
-      { wch: 30 }, { wch: 30 }, { wch: 30 }, { wch: 30 }, { wch: 30 }, { wch: 30 },
-      // HS1..HS6
-      { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 },
-      // HM1..HM6
-      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
+      { wch: 8 }, // ปี
+      // Hard1..Hardn, spacer, HS1..HSn, spacer, HM1..HMn, spacer
+      ...hardSlotIndexes.map(() => ({ wch: 30 })),
+      { wch: 3 },
+      ...hardSlotIndexes.map(() => ({ wch: 6 })),
+      { wch: 3 },
+      ...hardSlotIndexes.map(() => ({ wch: 8 })),
+      { wch: 3 },
       { wch: 8 }, // HA
       { wch: 8 }, // HSD
       // SS1..SS12
-      { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 },
-      { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 6 },
       // SM1..SM12
-      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
-      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
+      { wch: 8 },
       { wch: 8 }, // SA
       { wch: 8 }, // SSD
       { wch: 14 }, // Issued on
       { wch: 35 }, // PDF URL
-      { wch: 14 }  // EMAIL_SENT
+      { wch: 14 } // EMAIL_SENT
     ]
 
     XLSX.utils.book_append_sheet(workbook, worksheet, group.sheetName)
@@ -330,21 +395,28 @@ export function renderStudentDirectoryExportXlsx(
     ...rows.map((r, idx) => {
       const v = r.values
       const studentIdNum = Number(v.studentId)
-      const parsedStudentId = !Number.isNaN(studentIdNum) && String(studentIdNum) === v.studentId ? studentIdNum : v.studentId
+      const parsedStudentId =
+        !Number.isNaN(studentIdNum) && String(studentIdNum) === v.studentId
+          ? studentIdNum
+          : v.studentId
 
       const academicYearNum = Number(v.academicYear)
-      const parsedYear = !Number.isNaN(academicYearNum) ? academicYearNum : v.academicYear
+      const parsedYear = !Number.isNaN(academicYearNum)
+        ? academicYearNum
+        : v.academicYear
 
       const academicYearEnNum = Number(v.academicYearEn)
-      const parsedYearEn = !Number.isNaN(academicYearEnNum) ? academicYearEnNum : v.academicYearEn
+      const parsedYearEn = !Number.isNaN(academicYearEnNum)
+        ? academicYearEnNum
+        : v.academicYearEn
 
       return [
         idx + 1, // NO.
         parsedStudentId, // ID
         locale === 'th' ? v.nameTh : v.nameEn, // Name-Surname
         v.email, // Email
-        v.programTh || v.programEn, // Programe
-        v.schoolTh || v.schoolEn, // School
+        v.programEn || v.programTh, // Programe
+        v.schoolEn || v.schoolTh, // School
         v.semesterEn, // Semmester
         parsedYearEn, // Year
         v.semester, // ภาคการศึกษา
@@ -357,18 +429,18 @@ export function renderStudentDirectoryExportXlsx(
 
   const sendEmailWorksheet = XLSX.utils.aoa_to_sheet(sendEmailData)
   sendEmailWorksheet['!cols'] = [
-    { wch: 6 },  // NO.
+    { wch: 6 }, // NO.
     { wch: 14 }, // ID
     { wch: 28 }, // Name-Surname
     { wch: 28 }, // Email
     { wch: 32 }, // Programe
     { wch: 26 }, // School
     { wch: 12 }, // Semmester
-    { wch: 8 },  // Year
+    { wch: 8 }, // Year
     { wch: 16 }, // ภาคการศึกษา
     { wch: 12 }, // ปีการศึกษา
     { wch: 35 }, // PDF URL
-    { wch: 14 }  // Email Sent
+    { wch: 14 } // Email Sent
   ]
 
   XLSX.utils.book_append_sheet(workbook, sendEmailWorksheet, 'Send Email')

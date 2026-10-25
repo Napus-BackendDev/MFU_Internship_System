@@ -162,6 +162,23 @@ describe('V2 document renderer', () => {
     expect(values.hard_skill_average).not.toBe(values.soft_skill_average)
   })
 
+  it('prints the Buddhist-era academic year and never invents an evaluator comment', () => {
+    const snapshot = createSnapshot()
+    const withoutComments = {
+      ...snapshot,
+      student: { ...snapshot.student, academicYear: 2025 },
+      placement: { ...snapshot.placement, academicYear: 2025 },
+      evaluations: snapshot.evaluations.map((evaluation) => ({
+        ...evaluation,
+        answers: {}
+      }))
+    } as DocumentIssueSnapshotV1
+    const values = buildDocumentValues(withoutComments)
+    expect(values.academic_year).toBe('2568')
+    expect(values.suggestion).toBe('')
+    expect(values.evaluator_suggestion).toBe('')
+  })
+
   it('resolves placeholders in custom table headers and cells', async () => {
     const snapshot = createSnapshot()
     const canonical: CanonicalDocumentV2 = {

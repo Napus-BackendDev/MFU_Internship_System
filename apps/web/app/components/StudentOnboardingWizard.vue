@@ -146,7 +146,7 @@ function scrollToDocumentsSection(): void {
         </header>
 
         <!-- Body Content by Step -->
-        <main class="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+        <div class="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
           <!-- ============================================================= -->
           <!-- STEP 1: แดชบอร์ดและข้อมูลการฝึกงาน (Dashboard Overview) -->
           <!-- ============================================================= -->
@@ -479,7 +479,7 @@ function scrollToDocumentsSection(): void {
               >
             </div>
           </section>
-        </main>
+        </div>
 
         <!-- Footer: Student Wizard Navigation Buttons -->
         <footer

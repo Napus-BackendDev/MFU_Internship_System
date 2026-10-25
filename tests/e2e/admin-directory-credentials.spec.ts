@@ -410,8 +410,10 @@ test('student directory never renders or searches legacy invitation credentials'
     .poll(() => studentDirectoryQueries.at(-1)?.academicYear)
     .toBe('2569')
   const exportRequestOffset = studentDirectoryDataRequests.length
-  const downloadReady = page.waitForEvent('download')
   await page.getByRole('button', { name: 'ส่งออก Excel (ภาษาไทย)' }).click()
+  // Export opens a filter dialog; the report is only requested after confirming it.
+  const downloadReady = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'ยืนยันการส่งออก Excel' }).click()
   const download = await downloadReady
   expect(download.suggestedFilename()).toMatch(
     /^MFU_Internship_Report_TH_\d{8}\.xlsx$/
@@ -420,7 +422,8 @@ test('student directory never renders or searches legacy invitation credentials'
   expect(studentDirectoryExportRequests).toHaveLength(1)
   expect(studentDirectoryExportRequests[0]?.body).toMatchObject({
     reportType: 'studentDirectory',
-    filters: { academicYear: 2569 },
+    // Students store Gregorian years, so the Buddhist 2569 selection is sent as 2026.
+    filters: { academicYear: 2026 },
     locale: 'th',
     format: 'xlsx'
   })

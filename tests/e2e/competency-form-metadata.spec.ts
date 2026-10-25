@@ -82,12 +82,12 @@ test('existing competency form keeps its code and saves both localized names', a
   await expect(page.getByText('ชื่อเดิม', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'การจัดการแบบฟอร์ม' }).click()
   await page.getByRole('menuitem', { name: 'แก้ไข / ออกแบบฟอร์ม' }).click()
-  await expect(page).toHaveURL(/\/app\/evaluations\/forms\/create\?id=metadata-form/)
+  await expect(page).toHaveURL(
+    /\/app\/evaluations\/forms\/create\?id=metadata-form/
+  )
   const codeInput = page.getByLabel('รหัสแบบฟอร์ม', { exact: true })
   await expect(codeInput).toBeDisabled()
-  await page
-    .getByLabel('ชื่อแบบฟอร์มภาษาไทย', { exact: true })
-    .fill('ชื่อใหม่')
+  await page.getByLabel('ชื่อแบบฟอร์มภาษาไทย', { exact: true }).fill('ชื่อใหม่')
   await page
     .getByLabel('ชื่อแบบฟอร์มภาษาอังกฤษ', { exact: true })
     .fill('Renamed form')
@@ -100,7 +100,9 @@ test('existing competency form keeps its code and saves both localized names', a
   await expect(page.getByText('ชื่อใหม่', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'การจัดการแบบฟอร์ม' }).click()
   await page.getByRole('menuitem', { name: 'แก้ไข / ออกแบบฟอร์ม' }).click()
-  await expect(page).toHaveURL(/\/app\/evaluations\/forms\/create\?id=metadata-form/)
+  await expect(page).toHaveURL(
+    /\/app\/evaluations\/forms\/create\?id=metadata-form/
+  )
   await expect(
     page.getByLabel('ชื่อแบบฟอร์มภาษาไทย', { exact: true })
   ).toHaveValue('ชื่อใหม่')

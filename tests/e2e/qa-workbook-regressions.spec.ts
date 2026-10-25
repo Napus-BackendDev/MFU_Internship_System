@@ -78,7 +78,10 @@ for (const width of [360, 1280]) {
     await page.getByRole('button', { name: 'สร้างแบบฟอร์มใหม่' }).click()
     await expect(page).toHaveURL(/\/app\/evaluations\/forms\/create/)
     await page.waitForLoadState('networkidle')
-    await page.getByRole('button', { name: /จำลองมุมมองจริง/ }).first().click()
+    await page
+      .getByRole('button', { name: /จำลองมุมมองจริง/ })
+      .first()
+      .click()
     const simulator = page.getByTestId('form-simulator-scroll')
     await expect(simulator).toBeVisible()
     await page.getByRole('link', { name: 'กลับไปหน้ารายการแบบฟอร์ม' }).click()

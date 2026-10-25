@@ -1250,6 +1250,32 @@ describe('evaluation workflow on an isolated MongoDB replica set', () => {
     expect((await competencySets.findById(set.id))?.name.en).toBe('New name')
   })
 
+  it('reads one competency set for the editor and returns 404 for unknown or invalid ids', async () => {
+    const admin: AuthenticatedActor = {
+      id: 'get-admin',
+      email: 'qa@example.test',
+      displayName: 'QA',
+      roles: ['systemAdmin'],
+      scope: { tenant: true, schoolIds: [], programIds: [] }
+    }
+    const set = await competencySets.create({
+      code: 'GET-ONE',
+      name: { th: 'อ่านหนึ่งชุด', en: 'Read one' }
+    })
+    await expect(
+      service.getCompetencySet(admin, set.id)
+    ).resolves.toMatchObject({
+      code: 'GET-ONE',
+      name: { en: 'Read one' }
+    })
+    await expect(
+      service.getCompetencySet(admin, '000000000000000000000000')
+    ).rejects.toMatchObject({ status: 404 })
+    await expect(
+      service.getCompetencySet(admin, 'not-an-id')
+    ).rejects.toMatchObject({ status: 404 })
+  })
+
   it('allows scoped competency rename only when every version is entirely in the Staff scope', async () => {
     const staff: AuthenticatedActor = {
       id: 'rename-staff',

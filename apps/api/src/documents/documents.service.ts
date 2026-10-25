@@ -1218,14 +1218,14 @@ export class DocumentsService {
       })
       throw new ConflictException({ code: 'DOCUMENT_NOT_READY' })
     }
+    const fileName = await this.downloadFileName(document)
     const url = await getSignedUrl(
       this.s3,
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: document.objectKey,
         ResponseContentType: 'application/pdf',
-        ResponseContentDisposition:
-          'attachment; filename="internship-document.pdf"'
+        ResponseContentDisposition: `attachment; filename="${fileName}"`
       }),
       { expiresIn: 300 }
     )
@@ -1241,6 +1241,41 @@ export class DocumentsService {
     return {
       url,
       expiresIn: 300
+    }
+  }
+
+  // e.g. Certificate_6531301160.pdf, so students can tell their two PDFs apart.
+  private async downloadFileName(document: {
+    readonly studentId: string
+    readonly templateVersionId: string
+  }): Promise<string> {
+    try {
+      const [student, version] = await Promise.all([
+        this.students
+          .findById(document.studentId)
+          .select('studentId')
+          .lean()
+          .exec(),
+        this.versions
+          .findById(document.templateVersionId)
+          .select('templateId')
+          .lean()
+          .exec()
+      ])
+      const template = version
+        ? await this.templates
+            .findById(version.templateId)
+            .select('documentType')
+            .lean()
+            .exec()
+        : null
+      const label =
+        template?.documentType === 'certificate' ? 'Certificate' : 'Transcript'
+      const studentNumber = student?.studentId?.replace(/[^0-9A-Za-z_-]/gu, '')
+      return studentNumber ? `${label}_${studentNumber}.pdf` : `${label}.pdf`
+    } catch {
+      // A naming lookup must never block the download itself.
+      return 'internship-document.pdf'
     }
   }
 
@@ -1518,8 +1553,11 @@ export class DocumentsService {
         },
         schoolId: placement.schoolId,
         programId: placement.programId,
-        startsAt: placement.startsAt.toISOString(),
-        endsAt: placement.endsAt.toISOString(),
+        // The workbook's real internship period wins over placement bookkeeping dates.
+        startsAt: (
+          student.internshipStartsAt ?? placement.startsAt
+        ).toISOString(),
+        endsAt: (student.internshipEndsAt ?? placement.endsAt).toISOString(),
         academicTermId: term.id,
         academicTermCode: term.code,
         academicYear: term.academicYear,

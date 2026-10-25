@@ -215,3 +215,25 @@ a {
   align-items: center !important;
   justify-content: center !important;
 }
+
+/*
+ * Empty/loading/error rows span every column of a table that is wider than the screen on
+ * phones and tablets, so their centered message and call-to-action ended up off-screen.
+ * Pin that content to the visible edge on narrow viewports.
+ */
+@media (max-width: 1023px) {
+  td[colspan] {
+    text-align: left !important;
+    padding-inline: 1rem !important;
+  }
+
+  td[colspan] > * {
+    position: sticky;
+    left: 1rem;
+    max-width: calc(100vw - 4rem);
+  }
+
+  td[colspan] .mx-auto {
+    margin-inline: 0 !important;
+  }
+}

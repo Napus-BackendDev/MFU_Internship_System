@@ -7,10 +7,10 @@ for (const width of [360, 1280]) {
     test.setTimeout(90_000)
     await page.setViewportSize({ width, height: 900 })
     let previews = 0
-    await page.route('**/api/v2/students/import-preview?*', async (route) => {
+    await page.route('**/api/v2/students/import-preview**', async (route) => {
       previews++
       const url = new URL(route.request().url())
-      expect(url.searchParams.get('mode')).toBe('contacts')
+      expect(url.searchParams.get('mode')).toBeNull()
       await route.fulfill({
         json: {
           batchId: 'contact-batch',
@@ -73,12 +73,7 @@ for (const width of [360, 1280]) {
     await expect(advisorSummary).toContainText('Site Visitor')
     await expect(advisorSummary).not.toContainText('ขาดอีเมล')
     await page.getByRole('button', { name: 'นำเข้าจาก Excel' }).click()
-    await page.getByRole('combobox', { name: 'ประเภทข้อมูลนำเข้า' }).click()
-    await page
-      .getByRole('option', {
-        name: '2. จับคู่อาจารย์และผู้ประเมิน (Checklist)'
-      })
-      .click()
+    // The import type picker was removed: the server detects Checklist/contact files itself.
     const upload = page.getByRole('dialog').locator('input[type=file]')
     const file = {
       name: 'contacts.csv',
@@ -88,7 +83,7 @@ for (const width of [360, 1280]) {
       )
     }
     await upload.setInputFiles(file)
-    expect(previews).toBe(1)
+    await expect.poll(() => previews).toBe(1)
     await expect(
       page.getByRole('button', { name: 'ยืนยันนำเข้าข้อมูล (1 รายการ)' })
     ).toBeEnabled()

@@ -1278,6 +1278,25 @@ paths:
   /competency-sets/{competencySetId}:
     parameters:
       - $ref: '#/components/parameters/CompetencySetId'
+    get:
+      tags: [Competencies]
+      operationId: getCompetencySet
+      summary: Read one competency set so its editor can load
+      description: Uses the same read scope as the competency set list; an out-of-scope or unknown set returns 404.
+      x-permissions: [competencies.read]
+      responses:
+        '200':
+          description: Competency set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetencySet'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
     patch:
       tags: [Competencies]
       operationId: updateCompetencySet
@@ -3895,6 +3914,15 @@ components:
         questionFieldsDetected:
           type: array
           items: { type: string }
+        skippedSheets:
+          type: array
+          description: Sheets that have content but no student header row and were not imported.
+          items:
+            type: object
+            required: [name, rows]
+            properties:
+              name: { type: string }
+              rows: { type: integer, minimum: 0 }
         summary:
           $ref: '#/components/schemas/StudentImportSummary'
         items:

@@ -58,11 +58,16 @@ export interface ReferenceCacheState {
 export interface UseReferenceDataReturn {
   cache: Ref<ReferenceCacheState>
   getSchools: (forceRefresh?: boolean) => Promise<ReferenceSchool[]>
-  getPrograms: (schoolId?: string, forceRefresh?: boolean) => Promise<ReferenceProgram[]>
+  getPrograms: (
+    schoolId?: string,
+    forceRefresh?: boolean
+  ) => Promise<ReferenceProgram[]>
   getCourses: (forceRefresh?: boolean) => Promise<ReferenceCourse[]>
   getTerms: (forceRefresh?: boolean) => Promise<ReferenceTerm[]>
   getProvinces: (forceRefresh?: boolean) => Promise<ReferenceProvince[]>
-  getCompetencySets: (forceRefresh?: boolean) => Promise<ReferenceCompetencySet[]>
+  getCompetencySets: (
+    forceRefresh?: boolean
+  ) => Promise<ReferenceCompetencySet[]>
   invalidateReferenceData: (
     type?:
       | 'schools'
@@ -80,16 +85,22 @@ const inFlight = new Map<string, Promise<unknown>>()
 export function useReferenceData(): UseReferenceDataReturn {
   const api = useApi()
 
-  const cache = useState<ReferenceCacheState>('app-reference-data-cache', () => ({
-    schools: null,
-    programs: null,
-    courses: null,
-    terms: null,
-    provinces: null,
-    competencySets: null
-  }))
+  const cache = useState<ReferenceCacheState>(
+    'app-reference-data-cache',
+    () => ({
+      schools: null,
+      programs: null,
+      courses: null,
+      terms: null,
+      provinces: null,
+      competencySets: null
+    })
+  )
 
-  async function deduplicatedFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  async function deduplicatedFetch<T>(
+    key: string,
+    fetcher: () => Promise<T>
+  ): Promise<T> {
     if (inFlight.has(key)) {
       return inFlight.get(key) as Promise<T>
     }
@@ -106,9 +117,12 @@ export function useReferenceData(): UseReferenceDataReturn {
     }
     return deduplicatedFetch('schools', async () => {
       try {
-        const res = await api<{ items: ReferenceSchool[] }>('/academic/schools', {
-          query: { page: 1, pageSize: 200, archived: false }
-        })
+        const res = await api<{ items: ReferenceSchool[] }>(
+          '/academic/schools',
+          {
+            query: { page: 1, pageSize: 200, archived: false }
+          }
+        )
         const items = res.items || []
         cache.value.schools = items
         return items
@@ -131,9 +145,12 @@ export function useReferenceData(): UseReferenceDataReturn {
     }
     const allPrograms = await deduplicatedFetch('programs', async () => {
       try {
-        const res = await api<{ items: ReferenceProgram[] }>('/academic/programs', {
-          query: { page: 1, pageSize: 500, archived: false }
-        })
+        const res = await api<{ items: ReferenceProgram[] }>(
+          '/academic/programs',
+          {
+            query: { page: 1, pageSize: 500, archived: false }
+          }
+        )
         const items = res.items || []
         cache.value.programs = items
         return items
@@ -154,9 +171,12 @@ export function useReferenceData(): UseReferenceDataReturn {
     }
     return deduplicatedFetch('courses', async () => {
       try {
-        const res = await api<{ items: ReferenceCourse[] }>('/academic/courses', {
-          query: { page: 1, pageSize: 500, archived: false }
-        })
+        const res = await api<{ items: ReferenceCourse[] }>(
+          '/academic/courses',
+          {
+            query: { page: 1, pageSize: 500, archived: false }
+          }
+        )
         const items = res.items || []
         cache.value.courses = items
         return items
@@ -186,15 +206,20 @@ export function useReferenceData(): UseReferenceDataReturn {
     })
   }
 
-  async function getProvinces(forceRefresh = false): Promise<ReferenceProvince[]> {
+  async function getProvinces(
+    forceRefresh = false
+  ): Promise<ReferenceProvince[]> {
     if (!forceRefresh && cache.value.provinces) {
       return cache.value.provinces
     }
     return deduplicatedFetch('provinces', async () => {
       try {
-        const res = await api<{ items: ReferenceProvince[] }>('/system-settings/provinces', {
-          query: { status: 'active' }
-        })
+        const res = await api<{ items: ReferenceProvince[] }>(
+          '/system-settings/provinces',
+          {
+            query: { status: 'active' }
+          }
+        )
         const items = res.items || []
         cache.value.provinces = items
         return items

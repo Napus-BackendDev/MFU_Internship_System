@@ -1174,7 +1174,13 @@ export class CampaignService {
       await cycle.save()
     }
 
-    // 5. Ensure placement for student
+    // 5. Ensure placement for student (use the real internship period from the import when known)
+    const placementStartsAt =
+      student.internshipStartsAt ??
+      new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const placementEndsAt =
+      student.internshipEndsAt ??
+      new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)
     let placementRefresh: Partial<PlacementRecord> | undefined
     let placement = await this.placements
       .findOne({
@@ -1198,8 +1204,8 @@ export class CampaignService {
         placementRefresh = {
           status: 'active',
           organizationId: evaluator.organizationId,
-          startsAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-          endsAt: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+          startsAt: placementStartsAt,
+          endsAt: placementEndsAt,
           schoolId: student.schoolId,
           programId: student.programId,
           academicTermId
@@ -1212,8 +1218,8 @@ export class CampaignService {
           schoolId: student.schoolId || 'default-school',
           programId: student.programId || 'default-program',
           positionTitle: { th: 'นักศึกษาฝึกงาน', en: 'Intern' },
-          startsAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-          endsAt: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+          startsAt: placementStartsAt,
+          endsAt: placementEndsAt,
           status: 'active'
         })
       }

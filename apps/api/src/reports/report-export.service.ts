@@ -11,7 +11,11 @@ import {
   DEFAULT_REPORT_EXPORT_FIELDS,
   REPORT_EXPORT_FIELDS
 } from '@internship/shared-types'
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client
+} from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -130,6 +134,7 @@ export class ReportExportService {
   private readonly logger = new Logger(ReportExportService.name)
   private readonly s3: S3Client
   private readonly bucket: string
+  private readonly publicWebUrl: string
 
   public constructor(
     @InjectQueue('report-exports')
@@ -151,6 +156,9 @@ export class ReportExportService {
     @Optional() private readonly members?: MembersService
   ) {
     this.bucket = config.get('S3_BUCKET', { infer: true })
+    this.publicWebUrl = (
+      config.get('PUBLIC_WEB_URL', { infer: true }) ?? ''
+    ).replace(/\/+$/u, '')
     this.s3 = new S3Client({
       endpoint: config.get('S3_ENDPOINT', { infer: true }),
       region: config.get('S3_REGION', { infer: true }),
@@ -508,10 +516,7 @@ export class ReportExportService {
         .exec()
       if (updated) reportExport = updated
     }
-    if (
-      reportExport.status !== 'ready' ||
-      expiresIn <= 0
-    ) {
+    if (reportExport.status !== 'ready' || expiresIn <= 0) {
       throw new ConflictException({
         code:
           expiresIn <= 0 || reportExport.status === 'expired'
@@ -551,7 +556,11 @@ export class ReportExportService {
       this.s3,
       new GetObjectCommand({
         Bucket: this.bucket,
-        Key: reportExport.objectKey
+        Key: reportExport.objectKey,
+        // The browser follows this cross-origin URL as a navigation, so storage must say "download".
+        ResponseContentDisposition: `attachment; filename="MFU_Internship_Report_${
+          reportExport.locale === 'en' ? 'EN' : 'TH'
+        }_${new Date().toISOString().slice(0, 10).replaceAll('-', '')}.xlsx"`
       }),
       { expiresIn }
     )
@@ -647,7 +656,9 @@ export class ReportExportService {
       readonly id: string
       readonly _id: Types.ObjectId
     },
-    inMemoryRows?: readonly { readonly values: Readonly<Record<string, unknown>> }[]
+    inMemoryRows?: readonly {
+      readonly values: Readonly<Record<string, unknown>>
+    }[]
   ): Promise<{ bytes: Buffer; filename: string; contentType: string }> {
     let rows = inMemoryRows
     if (!rows || rows.length === 0) {
@@ -725,7 +736,10 @@ export class ReportExportService {
 
   private async returnExisting(
     actor: AuthenticatedActor,
-    reportExport: ReportExportRecord & { readonly id: string; readonly _id: Types.ObjectId },
+    reportExport: ReportExportRecord & {
+      readonly id: string
+      readonly _id: Types.ObjectId
+    },
     expectedHash: string
   ): Promise<unknown> {
     if (reportExport.requestHash !== expectedHash) {
@@ -899,21 +913,72 @@ export class ReportExportService {
     }
     const studentIds = result.items.map((s) => s.studentId)
     const assignmentIds = result.items.flatMap((s) =>
-      (s.directoryRelations?.assignments ?? []).flatMap((a) => (a.id ? [a.id] : []))
+      (s.directoryRelations?.assignments ?? []).flatMap((a) =>
+        a.id ? [a.id] : []
+      )
     )
 
-    const docByStudentId = new Map<
-      string,
-      { _id?: Types.ObjectId | string; status?: string }
-    >()
+    // generatedDocuments reference the student's record id, not the student number in the workbook.
+    const docByStudentId = new Map<string, { _id?: Types.ObjectId | string }>()
     if (studentIds.length > 0) {
       try {
-        const docs = await this.connection
-          .collection('generatedDocuments')
+        const records = await this.students
           .find({ studentId: { $in: studentIds } })
+          .select('_id studentId')
+          .lean()
+          .exec()
+        const numberByRecordId = new Map(
+          records.map((record) => [String(record._id), record.studentId])
+        )
+        const documents = await this.connection
+          .collection('generatedDocuments')
+          .find({
+            studentId: { $in: [...numberByRecordId.keys()] },
+            status: 'ready'
+          })
+          .sort({ createdAt: -1 })
           .toArray()
-        for (const doc of docs) {
-          docByStudentId.set(String(doc.studentId), doc)
+        const versionIds = [
+          ...new Set(documents.map((doc) => String(doc.templateVersionId)))
+        ].filter((id) => Types.ObjectId.isValid(id))
+        const versions = await this.connection
+          .collection('documentTemplateVersions')
+          .find({
+            _id: { $in: versionIds.map((id) => new Types.ObjectId(id)) }
+          })
+          .project({ templateId: 1 })
+          .toArray()
+        const templateIds = [
+          ...new Set(versions.map((version) => String(version.templateId)))
+        ].filter((id) => Types.ObjectId.isValid(id))
+        const templates = await this.connection
+          .collection('documentTemplates')
+          .find({
+            _id: { $in: templateIds.map((id) => new Types.ObjectId(id)) }
+          })
+          .project({ documentType: 1 })
+          .toArray()
+        const typeByTemplate = new Map(
+          templates.map((template) => [
+            String(template._id),
+            template.documentType
+          ])
+        )
+        const templateByVersion = new Map(
+          versions.map((version) => [
+            String(version._id),
+            String(version.templateId)
+          ])
+        )
+        // The workbook's single PDF URL column points at the latest ready certificate.
+        for (const doc of documents) {
+          const templateId = templateByVersion.get(
+            String(doc.templateVersionId)
+          )
+          if (typeByTemplate.get(templateId ?? '') !== 'certificate') continue
+          const number = numberByRecordId.get(String(doc.studentId))
+          if (number && !docByStudentId.has(number))
+            docByStudentId.set(number, doc)
         }
       } catch {
         // collection may not exist yet in test
@@ -953,7 +1018,7 @@ export class ReportExportService {
         ? deliveryByAssignmentId.get(assignment.id)
         : undefined
       const pdfUrl = doc?._id
-        ? `/api/v2/documents/generated-documents/${String(doc._id)}/download-url`
+        ? `${this.publicWebUrl}/api/v2/documents/generated-documents/${String(doc._id)}/download-url`
         : ''
       const emailSent =
         delivery?.status === 'delivered' || delivery?.status === 'sent'
@@ -963,10 +1028,15 @@ export class ReportExportService {
       return {
         schoolId: student.schoolId,
         programId: student.programId,
-        values: toStudentDirectoryExportValues(student, filters.cycleId, locale, {
-          pdfUrl,
-          emailSent
-        })
+        values: toStudentDirectoryExportValues(
+          student,
+          filters.cycleId,
+          locale,
+          {
+            pdfUrl,
+            emailSent
+          }
+        )
       }
     })
   }

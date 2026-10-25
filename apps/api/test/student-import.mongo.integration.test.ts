@@ -274,6 +274,58 @@ describe('student import on an isolated MongoDB replica set', () => {
     })
   })
 
+  it('keeps the workbook English name next to the Thai name and stays idempotent', async () => {
+    const file = workbookBuffer([sourceRow('6631503002')])
+    const initial = (await service.preview(
+      actor,
+      'students.xlsx',
+      file
+    )) as PreviewResponse
+    await service.commit(
+      actor,
+      initial.batchId,
+      'create-english-name',
+      [{ rowId: initial.items[0]!.id, action: 'create' }],
+      'qa-english-name'
+    )
+    const stored = await students.findOne({ studentId: '6631503002' }).lean()
+    expect(stored?.name).toEqual({
+      th: 'นางสาวตัวอย่าง ระบบ',
+      en: 'Example Student'
+    })
+    const repeat = (await service.preview(
+      actor,
+      'students.xlsx',
+      file
+    )) as PreviewResponse
+    expect(repeat.items[0]).toMatchObject({ action: 'unchanged', changes: [] })
+  })
+
+  it('does not erase a stored English name when a later workbook has none', async () => {
+    const withEnglish = workbookBuffer([sourceRow('6631503003')])
+    const first = (await service.preview(
+      actor,
+      'students.xlsx',
+      withEnglish
+    )) as PreviewResponse
+    await service.commit(
+      actor,
+      first.batchId,
+      'create-keep-english',
+      [{ rowId: first.items[0]!.id, action: 'create' }],
+      'qa-keep-english'
+    )
+    const withoutEnglish = workbookBuffer([
+      sourceRow('6631503003', { 'ชื่อ-นามสกุลอังกฤษ (nameEn)': undefined })
+    ])
+    const second = (await service.preview(
+      actor,
+      'students.xlsx',
+      withoutEnglish
+    )) as PreviewResponse
+    expect(second.items[0]).toMatchObject({ action: 'unchanged', changes: [] })
+  })
+
   it('previews and commits evaluator name and legacy-spelled email columns without creating access or sending mail', async () => {
     const preview = (await service.preview(
       actor,

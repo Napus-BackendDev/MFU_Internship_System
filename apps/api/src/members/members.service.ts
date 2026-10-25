@@ -967,10 +967,7 @@ export class MembersService {
       string,
       Pick<
         EvaluationRecord,
-        | 'assignmentId'
-        | 'version'
-        | 'categoryScores'
-        | 'submittedAt'
+        'assignmentId' | 'version' | 'categoryScores' | 'submittedAt'
       > &
         Partial<Pick<EvaluationRecord, 'answers' | 'questionSnapshot'>>
     >()
@@ -993,10 +990,7 @@ export class MembersService {
           Array<
             Pick<
               EvaluationRecord,
-              | 'assignmentId'
-              | 'version'
-              | 'categoryScores'
-              | 'submittedAt'
+              'assignmentId' | 'version' | 'categoryScores' | 'submittedAt'
             > &
               Partial<Pick<EvaluationRecord, 'answers' | 'questionSnapshot'>>
           >
@@ -1216,7 +1210,9 @@ export class MembersService {
           const relatedEvaluator = evaluatorsById.get(
             relatedAssignment.evaluatorId
           )
-          const activeFinal = activeFinalByAssignmentId.get(relatedAssignment.id)
+          const activeFinal = activeFinalByAssignmentId.get(
+            relatedAssignment.id
+          )
           const categoryScores = activeFinal?.categoryScores
           return {
             id: relatedAssignment.id,
@@ -1342,25 +1338,23 @@ export class MembersService {
       const areFiltersIdentical =
         JSON.stringify(filter) === JSON.stringify(directoryFacetFilter)
       if (areFiltersIdentical) {
-        const [
-          dist,
-          schoolIdsResult,
-          academicYearsResult,
-          semestersResult
-        ] = await Promise.all([
-          this.studentDirectoryStatusDistribution(
-            filter,
-            input.cycleId,
-            assignmentScope
-          ),
-          this.students.distinct('schoolId', directoryFacetFilter).exec(),
-          directoryTerm
-            ? Promise.resolve([directoryTerm.academicYear])
-            : this.students.distinct('academicYear', directoryFacetFilter).exec(),
-          directoryTerm
-            ? Promise.resolve([directoryTerm.semester])
-            : this.students.distinct('semester', directoryFacetFilter).exec()
-        ])
+        const [dist, schoolIdsResult, academicYearsResult, semestersResult] =
+          await Promise.all([
+            this.studentDirectoryStatusDistribution(
+              filter,
+              input.cycleId,
+              assignmentScope
+            ),
+            this.students.distinct('schoolId', directoryFacetFilter).exec(),
+            directoryTerm
+              ? Promise.resolve([directoryTerm.academicYear])
+              : this.students
+                  .distinct('academicYear', directoryFacetFilter)
+                  .exec(),
+            directoryTerm
+              ? Promise.resolve([directoryTerm.semester])
+              : this.students.distinct('semester', directoryFacetFilter).exec()
+          ])
         statusDistribution = dist
         facetStatusDistribution = dist
         schoolIds = schoolIdsResult
@@ -1387,7 +1381,9 @@ export class MembersService {
           this.students.distinct('schoolId', directoryFacetFilter).exec(),
           directoryTerm
             ? Promise.resolve([directoryTerm.academicYear])
-            : this.students.distinct('academicYear', directoryFacetFilter).exec(),
+            : this.students
+                .distinct('academicYear', directoryFacetFilter)
+                .exec(),
           directoryTerm
             ? Promise.resolve([directoryTerm.semester])
             : this.students.distinct('semester', directoryFacetFilter).exec()

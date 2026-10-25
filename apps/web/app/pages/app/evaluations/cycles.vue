@@ -215,7 +215,7 @@ const {
     })
     return result.items
   },
-  { lazy: true, watch: [cycleProgramIds] }
+  { lazy: true, server: false, watch: [cycleProgramIds] }
 )
 
 const termsResult = useAsyncData(

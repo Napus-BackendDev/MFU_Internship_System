@@ -67,10 +67,6 @@ export function buildDocumentValues(
     }
     if (suggestion) break
   }
-  if (!suggestion) {
-    suggestion =
-      'มีความกระตือรือร้นในการเรียนรู้ และทำงานร่วมกับผู้อื่นได้ดีมาก'
-  }
 
   return {
     student_id: snapshot.student.studentId,
@@ -90,7 +86,12 @@ export function buildDocumentValues(
     position_title:
       snapshot.placement.positionTitle.th ||
       snapshot.placement.positionTitle.en,
-    academic_year: String(snapshot.placement.academicYear),
+    // Thai documents print Buddhist-era years, matching formatThaiDate.
+    academic_year: String(
+      snapshot.placement.academicYear < 2400
+        ? snapshot.placement.academicYear + 543
+        : snapshot.placement.academicYear
+    ),
     training_period: `${formatThaiDate(snapshot.placement.startsAt)} – ${formatThaiDate(snapshot.placement.endsAt)}`,
     issue_date: formatThaiDate(snapshot.capturedAt),
     doc_number: snapshot.documentNumber,

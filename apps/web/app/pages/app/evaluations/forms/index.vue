@@ -128,10 +128,18 @@ async function confirmDeleteForm() {
   } catch (err: unknown) {
     let msg = 'ไม่สามารถลบแบบประเมินได้'
     if (err && typeof err === 'object') {
-      const code = (err as { data?: { code?: string }; response?: { _data?: { code?: string } } }).data?.code ||
-                   (err as { response?: { _data?: { code?: string } } }).response?._data?.code
+      const code =
+        (
+          err as {
+            data?: { code?: string }
+            response?: { _data?: { code?: string } }
+          }
+        ).data?.code ||
+        (err as { response?: { _data?: { code?: string } } }).response?._data
+          ?.code
       if (code === 'COMPETENCY_SET_IN_USE') {
-        msg = 'แบบประเมินนี้กำลังถูกใช้งานอยู่ในรอบการประเมินที่เปิดอยู่ จึงไม่สามารถลบหรือเก็บถาวรได้'
+        msg =
+          'แบบประเมินนี้กำลังถูกใช้งานอยู่ในรอบการประเมินที่เปิดอยู่ จึงไม่สามารถลบหรือเก็บถาวรได้'
       } else if (err instanceof Error) {
         msg = err.message
       }
@@ -414,8 +422,20 @@ async function toggleFormStatus(form: CompetencySet, activate: boolean) {
                     @update:model-value="(val) => toggleFormStatus(form, val)"
                   />
                   <UBadge
-                    :color="form.status === 'active' ? 'success' : form.status === 'inactive' ? 'neutral' : 'warning'"
-                    :label="form.status === 'active' ? 'เปิดใช้งาน' : form.status === 'inactive' ? 'ปิดใช้งาน' : 'เก็บถาวร'"
+                    :color="
+                      form.status === 'active'
+                        ? 'success'
+                        : form.status === 'inactive'
+                          ? 'neutral'
+                          : 'warning'
+                    "
+                    :label="
+                      form.status === 'active'
+                        ? 'เปิดใช้งาน'
+                        : form.status === 'inactive'
+                          ? 'ปิดใช้งาน'
+                          : 'เก็บถาวร'
+                    "
                     size="sm"
                     variant="subtle"
                   />
@@ -445,9 +465,16 @@ async function toggleFormStatus(form: CompetencySet, activate: boolean) {
                     :items="[
                       [
                         {
-                          label: form.status === 'active' ? 'ปิดใช้งานแบบฟอร์ม' : 'เปิดใช้งานเป็นฟอร์มหลัก',
-                          icon: form.status === 'active' ? 'i-lucide-power-off' : 'i-lucide-power',
-                          onSelect: () => toggleFormStatus(form, form.status !== 'active')
+                          label:
+                            form.status === 'active'
+                              ? 'ปิดใช้งานแบบฟอร์ม'
+                              : 'เปิดใช้งานเป็นฟอร์มหลัก',
+                          icon:
+                            form.status === 'active'
+                              ? 'i-lucide-power-off'
+                              : 'i-lucide-power',
+                          onSelect: () =>
+                            toggleFormStatus(form, form.status !== 'active')
                         },
                         {
                           label: 'แก้ไข / ออกแบบฟอร์ม',
@@ -508,17 +535,30 @@ async function toggleFormStatus(form: CompetencySet, activate: boolean) {
     >
       <div class="space-y-4 p-6">
         <div class="flex items-center gap-3">
-          <div class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
-            <UIcon name="i-lucide-trash-2" class="size-6 text-red-600 dark:text-red-400" />
+          <div
+            class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400"
+          >
+            <UIcon
+              name="i-lucide-trash-2"
+              class="size-6 text-red-600 dark:text-red-400"
+            />
           </div>
           <div>
-            <h2 class="text-lg font-semibold text-foreground">ยืนยันการลบแบบประเมิน</h2>
-            <p class="text-xs text-muted">แบบประเมินจะถูกเปลี่ยนสถานะเป็นเก็บถาวร (Archived)</p>
+            <h2 class="text-lg font-semibold text-foreground">
+              ยืนยันการลบแบบประเมิน
+            </h2>
+            <p class="text-xs text-muted">
+              แบบประเมินจะถูกเปลี่ยนสถานะเป็นเก็บถาวร (Archived)
+            </p>
           </div>
         </div>
         <p class="text-sm text-foreground">
-          คุณต้องการลบแบบประเมิน <strong class="font-medium text-red-600 dark:text-red-400">{{ formToDelete.name.th }}</strong>
-          <span class="text-xs text-muted"> ({{ formToDelete.code }})</span> ใช่หรือไม่?
+          คุณต้องการลบแบบประเมิน
+          <strong class="font-medium text-red-600 dark:text-red-400">{{
+            formToDelete.name.th
+          }}</strong>
+          <span class="text-xs text-muted"> ({{ formToDelete.code }})</span>
+          ใช่หรือไม่?
         </p>
         <div class="flex justify-end gap-2 pt-2 border-t border-default">
           <UButton

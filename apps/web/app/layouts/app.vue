@@ -172,7 +172,8 @@ const pageMetadataMap: Readonly<Record<string, PageHeaderMeta>> = {
   },
   '/app/evaluations/forms/create': {
     title: 'สร้างแบบฟอร์มการประเมิน',
-    description: 'กำหนดเกณฑ์ประเมินสมรรถนะ หมวดทั่วไป หมวดเฉพาะสำนักวิชา และหมวดคำแนะนำ'
+    description:
+      'กำหนดเกณฑ์ประเมินสมรรถนะ หมวดทั่วไป หมวดเฉพาะสำนักวิชา และหมวดคำแนะนำ'
   },
   '/app/evaluations': {
     title: 'การประเมิน',

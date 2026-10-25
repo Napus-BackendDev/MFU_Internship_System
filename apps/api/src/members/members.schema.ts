@@ -85,6 +85,12 @@ export class StudentRecord {
   @Prop({ min: 2000 })
   public academicYear?: number
 
+  @Prop()
+  public internshipStartsAt?: Date
+
+  @Prop()
+  public internshipEndsAt?: Date
+
   @Prop({ default: 'active', enum: ['active', 'archived'], index: true })
   public status!: 'active' | 'archived'
 

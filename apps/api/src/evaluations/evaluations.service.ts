@@ -413,6 +413,25 @@ export class EvaluationsService {
     })
   }
 
+  public async getCompetencySet(
+    actor: AuthenticatedActor,
+    id: string
+  ): Promise<unknown> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    }
+    const filters: QueryFilter<CompetencySetRecord>[] = [{ _id: id }]
+    if (!competencyReadScopes(actor).some((scope) => scope.tenant)) {
+      const setIds = await this.competencyVersions
+        .distinct('competencySetId', competencyVersionScopeFilter(actor))
+        .exec()
+      filters.push({ _id: { $in: setIds } })
+    }
+    const found = await this.competencySets.findOne(andFilters(filters)).exec()
+    if (!found) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    return found.toJSON()
+  }
+
   public async createCompetencySet(
     actor: AuthenticatedActor,
     input: CompetencySetRecord
@@ -478,7 +497,8 @@ export class EvaluationsService {
           if (activeCycle) {
             throw new ConflictException({
               code: 'COMPETENCY_SET_IN_USE',
-              message: 'แบบประเมินนี้กำลังถูกใช้งานอยู่ในรอบการประเมินที่เปิดอยู่ จึงไม่สามารถลบหรือเก็บถาวรได้'
+              message:
+                'แบบประเมินนี้กำลังถูกใช้งานอยู่ในรอบการประเมินที่เปิดอยู่ จึงไม่สามารถลบหรือเก็บถาวรได้'
             })
           }
         }

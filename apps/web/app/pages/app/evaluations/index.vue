@@ -104,7 +104,10 @@ const { data, error, pending, refresh } = useAsyncData(
         search: debouncedSearchQuery.value || undefined
       }
     }),
-  { lazy: true, watch: [status, selectedOrg, debouncedSearchQuery, page, pageSize] }
+  {
+    lazy: true,
+    watch: [status, selectedOrg, debouncedSearchQuery, page, pageSize]
+  }
 )
 
 watch(pageSize, () => {
@@ -135,7 +138,12 @@ const {
         })
       : Promise.resolve({ items: [] })
   },
-  { lazy: true, watch: [assignmentStudentIds] }
+  {
+    lazy: true,
+    server: false,
+    immediate: false,
+    watch: [assignmentStudentIds]
+  }
 )
 
 const assignmentEvaluatorIds = computed(() =>
@@ -162,7 +170,12 @@ const {
         })
       : Promise.resolve({ items: [] })
   },
-  { lazy: true, watch: [assignmentEvaluatorIds] }
+  {
+    lazy: true,
+    server: false,
+    immediate: false,
+    watch: [assignmentEvaluatorIds]
+  }
 )
 
 const assignmentOrganizationIds = computed(() =>
@@ -196,7 +209,12 @@ const {
         })
       : Promise.resolve({ items: [] })
   },
-  { lazy: true, watch: [assignmentOrganizationIds] }
+  {
+    lazy: true,
+    server: false,
+    immediate: false,
+    watch: [assignmentOrganizationIds]
+  }
 )
 
 const relationDataError = computed(
@@ -211,6 +229,18 @@ const relationDataPending = computed(
     evaluatorsPending.value ||
     organizationsPending.value
 )
+
+// The relation lookups depend on the assignment page. When that page is already present at
+// hydration (server-rendered), no watcher fires, so load the lookups once explicitly.
+onMounted(() => {
+  if (assignmentStudentIds.value && !studentsData.value?.items?.length) {
+    void refreshStudents()
+  }
+  // Organizations follow automatically: they are keyed on the evaluators this call loads.
+  if (assignmentEvaluatorIds.value && !evaluatorsData.value?.items?.length) {
+    void refreshEvaluators()
+  }
+})
 
 async function retryRelationData(): Promise<void> {
   await Promise.all([
@@ -875,7 +905,11 @@ async function refreshAfterEmailAction(): Promise<boolean> {
               <th class="min-w-[140px]">Pin</th>
               <th class="min-w-[140px]">กำหนดส่ง</th>
               <th class="min-w-[110px]">สถานะ</th>
-              <th class="w-24 text-right">การจัดการ</th>
+              <th
+                class="w-24 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+              >
+                การจัดการ
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -1037,7 +1071,9 @@ async function refreshAfterEmailAction(): Promise<boolean> {
               </td>
 
               <!-- 6. การจัดการ -->
-              <td class="py-3 px-4 text-right">
+              <td
+                class="py-3 px-4 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+              >
                 <div class="flex items-center justify-end">
                   <UButton
                     aria-label="ส่งอีเมลการประเมิน"

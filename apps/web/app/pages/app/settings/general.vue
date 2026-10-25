@@ -58,7 +58,8 @@ interface ProvinceResponse {
 // Fetch provinces
 const {
   data: provincesData,
-  pending: provincesPending,
+  pending: provincesFetching,
+  status: provincesStatus,
   error: provincesError,
   refresh: refreshProvinces
 } = useAsyncData(
@@ -73,19 +74,28 @@ const {
           selectedStatus.value !== 'all' ? selectedStatus.value : undefined
       }
     }),
-  { lazy: true, watch: [selectedRegion, selectedStatus] }
+  { lazy: true, server: false, watch: [selectedRegion, selectedStatus] }
+)
+
+// A lazy fetch is 'idle' during SSR; treat that as loading so server and client render the same state.
+const provincesPending = computed(
+  () => provincesFetching.value || provincesStatus.value === 'idle'
 )
 
 // Fetch general config
 const {
   data: configData,
-  pending: configPending,
+  pending: configFetching,
+  status: configStatus,
   error: configError,
   refresh: refreshConfig
 } = useAsyncData(
   'settings-general-config',
   () => api<GeneralConfig>('/system-settings/general'),
-  { lazy: true }
+  { lazy: true, server: false }
+)
+const configPending = computed(
+  () => configFetching.value || configStatus.value === 'idle'
 )
 const auth = useAuthStore()
 const canManage = computed(
@@ -612,7 +622,11 @@ async function handleSaveCompanyTypes() {
                 <th>Province Name (English)</th>
                 <th class="w-44">ภูมิภาค</th>
                 <th class="w-28 text-center">สถานะ</th>
-                <th class="w-28 text-right">การจัดการ</th>
+                <th
+                  class="w-28 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+                >
+                  การจัดการ
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -679,7 +693,9 @@ async function handleSaveCompanyTypes() {
                   </button>
                 </td>
 
-                <td class="text-right">
+                <td
+                  class="text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+                >
                   <div class="flex items-center justify-end gap-1">
                     <UButton
                       color="neutral"

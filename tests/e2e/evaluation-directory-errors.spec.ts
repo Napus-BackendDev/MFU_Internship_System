@@ -10,14 +10,20 @@ test('shows and recovers from a failed Student lookup on Evaluations', async ({
   expect(failureSetup.status()).toBe(204)
 
   await page.goto('/app/evaluations')
-  const failureState = await request.get(
-    'http://127.0.0.1:18081/__test/failure-count?path=%2Fapi%2Fv2%2Fstudents'
-  )
-  const initialFailureState = (await failureState.json()) as {
+  const readFailureState = async (): Promise<{
     count: number
     requests: number
+  }> => {
+    const response = await request.get(
+      'http://127.0.0.1:18081/__test/failure-count?path=%2Fapi%2Fv2%2Fstudents'
+    )
+    return (await response.json()) as { count: number; requests: number }
   }
-  expect(initialFailureState.count).toBe(2)
+  // The page loads its lookups lazily after hydration, so wait for both injected failures.
+  await expect
+    .poll(async () => (await readFailureState()).count, { timeout: 45_000 })
+    .toBe(2)
+  const initialFailureState = await readFailureState()
 
   await expect(page.getByText('โหลดข้อมูลประกอบไม่ครบ')).toBeVisible()
   await expect(

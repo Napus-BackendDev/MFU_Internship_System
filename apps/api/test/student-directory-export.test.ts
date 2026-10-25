@@ -85,7 +85,7 @@ describe('student-directory server export mapping', () => {
       province: 'Chiang Rai',
       academicYear: 2569,
       academicYearEn: 2026,
-      semesterEn: 'Semester 1',
+      semesterEn: 'First',
       statusEn: 'Submitted',
       hardSkillScore: '4.3 / 1–5 (2 items)',
       softSkillScore: '3.5 / 1–5 (1 items)'
@@ -133,7 +133,7 @@ describe('student-directory server export mapping', () => {
     ).toMatchObject({
       company: 'บริษัททดสอบ',
       academicYearEn: 2026,
-      semesterEn: 'Semester 1',
+      semesterEn: 'First',
       statusEn: 'Awaiting Evaluator'
     })
   })

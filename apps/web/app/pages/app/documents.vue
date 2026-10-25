@@ -343,9 +343,17 @@ async function fetchAllDocumentTemplates(): Promise<{
 const {
   data: templatesData,
   error: templatesError,
-  pending: templatesPending,
+  pending: templatesFetching,
+  status: templatesStatus,
   refresh: refreshTemplates
-} = useAsyncData('document-templates-list', fetchAllDocumentTemplates, { lazy: true })
+} = useAsyncData('document-templates-list', fetchAllDocumentTemplates, {
+  lazy: true,
+  server: false
+})
+// A lazy fetch is 'idle' during SSR; treat that as loading so the server never prints an empty state.
+const templatesPending = computed(
+  () => templatesFetching.value || templatesStatus.value === 'idle'
+)
 
 // Load dynamic data from system API
 const {
@@ -378,7 +386,7 @@ const {
         })),
       100
     ),
-  { lazy: true }
+  { lazy: true, server: false }
 )
 
 const activeStudentId = ref('')
@@ -407,7 +415,7 @@ const {
         }),
       100
     ),
-  { lazy: true }
+  { lazy: true, server: false }
 )
 
 const {
@@ -425,7 +433,7 @@ const {
         }),
       100
     ),
-  { lazy: true }
+  { lazy: true, server: false }
 )
 
 const {
@@ -445,7 +453,7 @@ const {
       100
     )
   },
-  { lazy: true, watch: [activeStudentId] }
+  { lazy: true, server: false, watch: [activeStudentId] }
 )
 
 const {
@@ -463,7 +471,7 @@ const {
         }),
       100
     ),
-  { lazy: true }
+  { lazy: true, server: false }
 )
 
 const referenceDataError = computed(
@@ -1263,7 +1271,8 @@ const dynamicStudentValues = computed(() => {
     evaluation_grade: '[ไม่มีเกรดรวมตามนโยบาย MVP]',
     issue_date: '[กำหนดเมื่อออกเอกสารจริง]',
     doc_number: '[กำหนดเลขที่โดยระบบเมื่อออกเอกสารจริง]',
-    suggestion: 'มีความกระตือรือร้นในการเรียนรู้ และทำงานร่วมกับผู้อื่นได้ดีมาก',
+    suggestion:
+      'มีความกระตือรือร้นในการเรียนรู้ และทำงานร่วมกับผู้อื่นได้ดีมาก',
     evaluator_suggestion:
       'มีความกระตือรือร้นในการเรียนรู้ และทำงานร่วมกับผู้อื่นได้ดีมาก'
   }
@@ -2092,7 +2101,8 @@ async function confirmDeactivateDocument(): Promise<void> {
     templateToDeactivate.value = null
     await refreshTemplates()
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'ไม่สามารถยกเลิกการใช้งานได้'
+    const msg =
+      err instanceof Error ? err.message : 'ไม่สามารถยกเลิกการใช้งานได้'
     toast.add({
       title: 'ไม่สามารถยกเลิกการใช้งานได้',
       description: msg,
@@ -2901,7 +2911,11 @@ function handleStudioBgUpload(event: Event) {
               <th class="w-40">พื้นหลังแม่แบบ</th>
               <th class="w-36">วันที่สร้าง</th>
               <th class="w-28 text-center">สถานะ</th>
-              <th class="w-24 text-right">การจัดการ</th>
+              <th
+                class="w-24 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+              >
+                การจัดการ
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -3075,7 +3089,9 @@ function handleStudioBgUpload(event: Event) {
               </td>
 
               <!-- Column 7: การจัดการ -->
-              <td class="text-right">
+              <td
+                class="text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+              >
                 <div
                   v-if="canManageDocumentTemplates"
                   class="flex items-center justify-end gap-1"
@@ -3095,7 +3111,16 @@ function handleStudioBgUpload(event: Event) {
                     size="xs"
                     title="ลบ / เก็บถาวรเทมเพลต"
                     variant="ghost"
-                    :disabled="doc.templateStatus === 'active' && doc.versionStatus === 'published' && documents.filter((item) => item.docType === doc.docType && item.templateStatus === 'active' && item.versionStatus === 'published').length === 1"
+                    :disabled="
+                      doc.templateStatus === 'active' &&
+                      doc.versionStatus === 'published' &&
+                      documents.filter(
+                        (item) =>
+                          item.docType === doc.docType &&
+                          item.templateStatus === 'active' &&
+                          item.versionStatus === 'published'
+                      ).length === 1
+                    "
                     class="hidden sm:inline-flex cursor-pointer hover:bg-red-500/10 text-red-600 dark:text-red-400 disabled:opacity-30 disabled:pointer-events-none"
                     @click="openDeactivateDocumentModal(doc)"
                   />
@@ -5118,16 +5143,29 @@ function handleStudioBgUpload(event: Event) {
     >
       <div class="space-y-4 p-6">
         <div class="flex items-center gap-3">
-          <div class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
-            <UIcon name="i-lucide-trash-2" class="size-6 text-red-600 dark:text-red-400" />
+          <div
+            class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400"
+          >
+            <UIcon
+              name="i-lucide-trash-2"
+              class="size-6 text-red-600 dark:text-red-400"
+            />
           </div>
           <div>
-            <h2 class="text-lg font-semibold text-foreground">ยืนยันการเก็บถาวรเทมเพลต</h2>
-            <p class="text-xs text-muted">เทมเพลตจะถูกเปลี่ยนสถานะเป็นปิดใช้งาน (Archived)</p>
+            <h2 class="text-lg font-semibold text-foreground">
+              ยืนยันการเก็บถาวรเทมเพลต
+            </h2>
+            <p class="text-xs text-muted">
+              เทมเพลตจะถูกเปลี่ยนสถานะเป็นปิดใช้งาน (Archived)
+            </p>
           </div>
         </div>
         <p class="text-sm text-foreground">
-          คุณต้องการยกเลิกการใช้งานและเก็บถาวรแม่แบบเอกสาร <strong class="font-medium text-red-600 dark:text-red-400">{{ templateToDeactivate.nameTh || templateToDeactivate.nameEn }}</strong> ใช่หรือไม่?
+          คุณต้องการยกเลิกการใช้งานและเก็บถาวรแม่แบบเอกสาร
+          <strong class="font-medium text-red-600 dark:text-red-400">{{
+            templateToDeactivate.nameTh || templateToDeactivate.nameEn
+          }}</strong>
+          ใช่หรือไม่?
         </p>
         <div class="flex justify-end gap-2 pt-2 border-t border-default">
           <UButton

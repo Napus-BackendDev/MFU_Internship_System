@@ -744,7 +744,8 @@ export class AcademicService {
     if (input.status === 'archived' && current.status !== 'archived') {
       const studentModel =
         this.students ??
-        (this.courses.db?.models?.[StudentRecord.name] as Model<StudentRecord> | undefined)
+        (this.courses.db?.models?.[StudentRecord.name] as
+          Model<StudentRecord> | undefined)
       if (studentModel) {
         const studentExists = await studentModel
           .exists({ courseId: current.id })
@@ -763,7 +764,8 @@ export class AcademicService {
       }
       const placementModel =
         this.placements ??
-        (this.courses.db?.models?.[PlacementRecord.name] as Model<PlacementRecord> | undefined)
+        (this.courses.db?.models?.[PlacementRecord.name] as
+          Model<PlacementRecord> | undefined)
       if (placementModel) {
         const livePlacement = await placementModel
           .exists({

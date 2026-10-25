@@ -1,7 +1,10 @@
 import * as XLSX from 'xlsx'
 import { describe, expect, it } from 'vitest'
 
-import { parseStudentWorkbook } from '../src/members/student-import.parser.js'
+import {
+  parseInternshipPeriod,
+  parseStudentWorkbook
+} from '../src/members/student-import.parser.js'
 
 function workbookBuffer(
   sheets: ReadonlyArray<{ name: string; rows: readonly unknown[][] }>
@@ -322,5 +325,67 @@ describe('student import workbook parser', () => {
     expect(parsed.rows.length).toBe(96)
     const issues = parsed.rows.flatMap((r) => r.issues)
     expect(issues).toHaveLength(0)
+  })
+})
+
+describe('internship period parsing', () => {
+  it.each([
+    [
+      '4 ส.ค - 21 พ.ย 68',
+      '2025-08-03T17:00:00.000Z',
+      '2025-11-21T16:59:59.000Z'
+    ],
+    [
+      '4 ส.ค.-21 พ.ย.2568',
+      '2025-08-03T17:00:00.000Z',
+      '2025-11-21T16:59:59.000Z'
+    ],
+    [
+      '4 AUG-4 DEC 2025',
+      '2025-08-03T17:00:00.000Z',
+      '2025-12-04T16:59:59.000Z'
+    ],
+    [
+      '15 ก.ย - 2 ม.ค  69',
+      '2025-09-14T17:00:00.000Z',
+      '2026-01-02T16:59:59.000Z'
+    ]
+  ])('reads %s as Bangkok day bounds', (text, startsAt, endsAt) => {
+    expect(parseInternshipPeriod(text)).toEqual({
+      internshipStartsAt: startsAt,
+      internshipEndsAt: endsAt
+    })
+  })
+
+  it.each(['', 'TBD', '31 ก.พ - 5 มี.ค 68', '4 ส.ค 68'])(
+    'ignores unusable period %j instead of guessing',
+    (text) => {
+      expect(parseInternshipPeriod(text)).toBeNull()
+    }
+  )
+
+  it('keeps the period from a Checklist-style header', () => {
+    const buffer = workbookBuffer([
+      {
+        name: 'DTBI',
+        rows: [
+          [
+            'รหัสประจำตัว\nStudent ID',
+            'ชื่อ-สกุล\nName-Surname',
+            'อีเมลนักศึกษา\nStudent Email',
+            'ระยะเวลาการฝึกงาน\nInternship Period'
+          ],
+          [
+            6531301160,
+            'นาย ทดสอบ',
+            '6531301160@lamduan.mfu.ac.th',
+            '4 ส.ค - 21 พ.ย 68'
+          ]
+        ]
+      }
+    ])
+    const row = parseStudentWorkbook(buffer).rows[0]
+    expect(row?.internshipStartsAt).toBe('2025-08-03T17:00:00.000Z')
+    expect(row?.internshipEndsAt).toBe('2025-11-21T16:59:59.000Z')
   })
 })

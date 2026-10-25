@@ -1217,7 +1217,8 @@ async function runExport(
       studentDirectoryExportKeys.delete(keyScope)
       toast.add({
         title: 'ไม่มีข้อมูลสำหรับส่งออก',
-        description: 'ไม่พบข้อมูลนักศึกษาที่ตรงตามเงื่อนไขที่เลือก กรุณาปรับเปลี่ยนตัวกรอง',
+        description:
+          'ไม่พบข้อมูลนักศึกษาที่ตรงตามเงื่อนไขที่เลือก กรุณาปรับเปลี่ยนตัวกรอง',
         color: 'warning',
         icon: 'i-lucide-alert-triangle'
       })
@@ -1265,23 +1266,36 @@ async function runExport(
       throw new Error('Received an invalid download URL')
     }
     studentDirectoryExportKeys.delete(keyScope)
-    const fileRes = await fetch(safeDownloadUrl, {
-      credentials: 'include'
-    })
-    if (!fileRes.ok) {
-      throw new Error(`Failed to download report file (HTTP ${fileRes.status})`)
-    }
-    const blob = await fileRes.blob()
-    const objectUrl = window.URL.createObjectURL(blob)
     const dateStamp = new Date().toISOString().slice(0, 10).replaceAll('-', '')
     const filename = `MFU_Internship_Report_${locale === 'th' ? 'TH' : 'EN'}_${dateStamp}.xlsx`
+    const sameOrigin =
+      new URL(safeDownloadUrl, window.location.href).origin ===
+      window.location.origin
+    let href = safeDownloadUrl
+    let objectUrl: string | undefined
+    if (sameOrigin) {
+      // Same-origin API downloads need the session cookie, so read the file ourselves.
+      const fileRes = await fetch(safeDownloadUrl, {
+        credentials: 'same-origin'
+      })
+      if (!fileRes.ok) {
+        throw new Error(
+          `Failed to download report file (HTTP ${fileRes.status})`
+        )
+      }
+      objectUrl = window.URL.createObjectURL(await fileRes.blob())
+      href = objectUrl
+    }
+    // A cross-origin presigned storage URL is outside connect-src and CORS, so let the browser
+    // navigate to it; the storage response carries Content-Disposition: attachment.
     const a = document.createElement('a')
-    a.href = objectUrl
+    a.href = href
     a.download = filename
+    a.rel = 'noopener'
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    window.URL.revokeObjectURL(objectUrl)
+    if (objectUrl) window.URL.revokeObjectURL(objectUrl)
     toast.add({
       title:
         locale === 'th'
@@ -1626,7 +1640,12 @@ async function runExport(
                 สถานประกอบการ / ที่ตั้งบริษัท
               </th>
               <th scope="col" class="py-3 px-4 min-w-[140px]">สถานะประเมิน</th>
-              <th scope="col" class="py-3 px-4 w-16 text-right">จัดการ</th>
+              <th
+                scope="col"
+                class="py-3 px-4 w-16 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+              >
+                จัดการ
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y divide-default">
@@ -1883,8 +1902,11 @@ async function runExport(
                 </div>
               </td>
 
-              <!-- 9. จัดการ (3 dots dropdown menu) -->
-              <td class="py-3 px-4 text-right" @click.stop>
+              <!-- 9. จัดการ (3 dots dropdown menu, sticky on narrow screens) -->
+              <td
+                class="py-3 px-4 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+                @click.stop
+              >
                 <div class="flex items-center justify-end">
                   <UDropdownMenu
                     :items="getRowActions(row)"
@@ -2706,7 +2728,9 @@ async function runExport(
         @click.stop
       >
         <!-- Header -->
-        <div class="flex items-center justify-between border-b border-default pb-4">
+        <div
+          class="flex items-center justify-between border-b border-default pb-4"
+        >
           <div class="flex items-center gap-3">
             <span
               class="grid size-11 place-items-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/20"
@@ -2716,7 +2740,11 @@ async function runExport(
             <div>
               <div class="flex items-center gap-2">
                 <h2 class="text-lg font-bold text-highlighted tracking-tight">
-                  {{ exportForm.locale === 'th' ? 'ส่งออกรายงาน Excel (ภาษาไทย)' : 'Export Excel Report (English)' }}
+                  {{
+                    exportForm.locale === 'th'
+                      ? 'ส่งออกรายงาน Excel (ภาษาไทย)'
+                      : 'Export Excel Report (English)'
+                  }}
                 </h2>
                 <UBadge
                   :color="exportForm.locale === 'th' ? 'success' : 'primary'"
@@ -2728,7 +2756,8 @@ async function runExport(
                 </UBadge>
               </div>
               <p class="text-xs text-muted mt-0.5">
-                เลือกปีการศึกษา สำนักวิชา และสาขา สำหรับจัดทำไฟล์ Cer PDF + ส่งเมล
+                เลือกปีการศึกษา สำนักวิชา และสาขา สำหรับจัดทำไฟล์ Cer PDF +
+                ส่งเมล
               </p>
             </div>
           </div>
@@ -2765,7 +2794,8 @@ async function runExport(
               class="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1"
             >
               <UIcon name="i-lucide-alert-triangle" class="size-3.5" />
-              จำเป็นต้องระบุปีการศึกษา เพื่อกำหนดขอบเขตข้อมูลที่จะนำออกมาจัดทำไฟล์
+              จำเป็นต้องระบุปีการศึกษา
+              เพื่อกำหนดขอบเขตข้อมูลที่จะนำออกมาจัดทำไฟล์
             </p>
           </div>
 
@@ -2797,7 +2827,11 @@ async function runExport(
               label="สาขาวิชา / หลักสูตร"
               empty-label="🌐 ทุกสาขาวิชาในสำนักวิชา (All Programs)"
               empty-value="all"
-              :query="exportForm.schoolId && exportForm.schoolId !== 'all' ? { schoolId: exportForm.schoolId } : {}"
+              :query="
+                exportForm.schoolId && exportForm.schoolId !== 'all'
+                  ? { schoolId: exportForm.schoolId }
+                  : {}
+              "
               control-class="h-11 rounded-xl text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
           </div>
@@ -2856,20 +2890,25 @@ async function runExport(
           <div
             class="rounded-xl border border-default bg-muted/30 p-3.5 text-xs text-muted space-y-1"
           >
-            <div class="flex items-center gap-1.5 font-semibold text-highlighted">
+            <div
+              class="flex items-center gap-1.5 font-semibold text-highlighted"
+            >
               <UIcon
                 name="i-lucide-file-check"
                 class="size-4 text-emerald-600 dark:text-emerald-400"
               />
               <span>รูปแบบไฟล์ตามแม่แบบมาตรฐาน Cer PDF + ส่งเมล:</span>
             </div>
-            <ul class="list-disc list-inside space-y-0.5 text-[11px] text-muted pl-1">
+            <ul
+              class="list-disc list-inside space-y-0.5 text-[11px] text-muted pl-1"
+            >
               <li>
                 แยกชีตรายหลักสูตร (62 คอลัมน์: Hard Skills รายข้อ, HS, HM, HA,
                 HSD, SS1..SS12, SM, SA, SSD, PDF URL, EMAIL_SENT)
               </li>
               <li>
-                มีชีตสรุป <code>Send Email</code> สำหรับติดตามการส่งเมลและลิงก์ PDF นักศึกษาทุกคน
+                มีชีตสรุป <code>Send Email</code> สำหรับติดตามการส่งเมลและลิงก์
+                PDF นักศึกษาทุกคน
               </li>
             </ul>
           </div>

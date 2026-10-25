@@ -641,7 +641,7 @@ function handleClose(): void {
         </header>
 
         <!-- Body Content by Step -->
-        <main class="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
+        <div class="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
           <div
             v-if="academicLoadError"
             class="flex flex-col gap-3 rounded-lg border border-error/30 bg-error/5 p-3 text-sm text-error sm:flex-row sm:items-center sm:justify-between"
@@ -1157,7 +1157,7 @@ function handleClose(): void {
               />
             </div>
           </section>
-        </main>
+        </div>
 
         <!-- Footer: Wizard Navigation Buttons -->
         <footer

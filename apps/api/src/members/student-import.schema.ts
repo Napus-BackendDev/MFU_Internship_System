@@ -27,6 +27,9 @@ export class StudentImportBatchRecord {
   @Prop({ default: [], type: [String] })
   public questionFields!: string[]
 
+  @Prop({ default: [], type: [{ _id: false, name: String, rows: Number }] })
+  public skippedSheets!: Array<{ name: string; rows: number }>
+
   @Prop({ default: 'preview', enum: ['preview', 'committed'] })
   public status!: 'preview' | 'committed'
 }

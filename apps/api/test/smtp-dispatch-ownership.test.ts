@@ -121,7 +121,9 @@ describe('SMTP test dispatch ownership', () => {
     }
     type Args = ConstructorParameters<typeof SmtpSettingsService>
     const settings = {
-      findOne: () => ({ select: () => ({ exec: () => Promise.resolve(stored) }) })
+      findOne: () => ({
+        select: () => ({ exec: () => Promise.resolve(stored) })
+      })
     }
     const service = new SmtpSettingsService(
       config as unknown as Args[0],

@@ -294,7 +294,7 @@ test('email and academic errors remain retryable without editing unloaded data',
   ).toHaveCount(0)
 })
 
-test('form builder school filters work and modal contains keyboard focus at mobile and desktop', async ({
+test('form builder opens as a full page without horizontal overflow at mobile and desktop', async ({
   page
 }) => {
   test.setTimeout(90_000)
@@ -302,34 +302,24 @@ test('form builder school filters work and modal contains keyboard focus at mobi
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/app/evaluations/forms')
     await page.waitForLoadState('networkidle')
-    const create = page.getByRole('button', { name: 'สร้างแบบฟอร์มใหม่' })
-    await create.click()
-    const dialog = page.getByRole('dialog')
-    await expect(dialog).toBeVisible()
+    await page.getByRole('button', { name: 'สร้างแบบฟอร์มใหม่' }).click()
+    // Creating a form is a dedicated page now, not a modal dialog.
+    await expect(page).toHaveURL(/\/app\/evaluations\/forms\/create$/)
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(
+      page.getByRole('heading', { name: 'สร้างแบบฟอร์มการประเมินใหม่' })
+    ).toBeVisible()
+    await page.getByRole('button', { name: /^2 หมวดเฉพาะสำนักวิชา/ }).click()
+    await expect(
+      page.getByText('สำนักวิชาวิทยาศาสตร์', { exact: false }).first()
+    ).toBeVisible()
     expect(
-      await dialog.evaluate((el) => {
-        const rect = el.getBoundingClientRect()
-        return rect.left >= 0 && rect.right <= innerWidth + 1
-      })
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1
+      )
     ).toBe(true)
-    await dialog.getByRole('button', { name: /^2 หมวดเฉพาะสำนักวิชา/ }).click()
-    const school = dialog.getByRole('button', {
-      name: /SCI.*สำนักวิชาวิทยาศาสตร์/
-    })
-    await dialog.getByRole('button', { name: /^มีเกณฑ์/ }).click()
-    await expect(school).toBeVisible()
-    await dialog.getByRole('button', { name: /^ยังไม่ตั้ง/ }).click()
-    await expect(school).toHaveCount(0)
-    await dialog.getByRole('button', { name: /^ทั้งหมด \(/ }).click()
-    await expect(school).toBeVisible()
-    await school.focus()
-    await school.press('Enter')
-    expect(
-      await dialog.evaluate((el) => el.contains(document.activeElement))
-    ).toBe(true)
-    await page.keyboard.press('Escape')
-    await expect(dialog).toHaveCount(0)
-    await expect(create).toBeFocused()
   }
 })
 

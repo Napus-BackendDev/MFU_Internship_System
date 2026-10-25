@@ -92,7 +92,6 @@ StaffเปิดจบPlacementB ทดสอบ22Octอนาคต APIปฏ�
 
 Runtimeล่าสุด Web35264/API25856 พอร์ต18082/18083 หยุดเฉพาะPIDที่ตรวจCommandLineแล้วก่อนbuild Mongo37027/Redis16389DB0/Worker1824/S3/Mailpitคงเดิม Tab2markDeliverableอยู่Admindocumentsธีมสว่าง ไม่เปลี่ยนviewportเอง ไม่commit/push/deploy ไม่resetseed FullQAเดิมยังไม่ครบ/ไม่อ้างpnpmverifyexit0; get_goalแสดงสถานะpausedจริง (ขัดsummaryเก่าที่ว่าactive) ไม่เรียกupdate_goalหรือเปลี่ยนสถานะเอง งานภาพเสร็จแล้ว ไม่มีobservationใหม่ในNapusOS
 
-
 ## 2026-10-21 — ต่อ QA รอบประเมิน/SMTP และการแก้ชื่อแบบประเมิน
 
 หลังชุดภาพ กลับตรวจ workflow รอบประเมินจริง สร้าง QA-CYCLE-20261021 ในสำนักสมมติ ไม่มีนักศึกษา ตรวจค่าว่าง/วันกลับด้าน/Readiness 0 คน เปิดและปิดสำเร็จ เก็บ cycle-close-confirm-real.jpg และ cycle-closed-real.jpg เปลี่ยน cycles/users native confirmation เป็น AppModal พร้อม cancel/confirm กรณีเดิมทำ CUA ค้าง native dialog แต่ปลดแล้ว ไม่ต้องให้ผู้ใช้กดเพิ่ม ไม่เหลือ window.confirm/alert/prompt ใน Web เพิ่มภาพ Modals/29-cycle-close-confirm.jpg ชุดภาพล่าสุด 75 ภาพ/29 Modals ZIP ตรวจ CRC ผ่าน (in-memory screenshotManifest เก่ายัง74 ห้ามนำไปเขียนทับ manifest.json ปัจจุบัน)
@@ -108,6 +107,7 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 ## 2026-10-22 — ยุบประเภทข้อมูลนำเข้านักศึกษาเป็นแบบเดียว (Unified Student Import)
 
 ยุบตัวเลือก Dropdown ประเภทข้อมูลนำเข้าใน Import Modal ของ `apps/web/app/pages/app/students.vue` ให้ผู้ใช้อัปโหลดไฟล์เดียวได้ทันทีทั้งเทมเพลตมาตรฐาน, Cer, หรือ Checklist
+
 1. `apps/web/app/pages/app/students.vue`: ลบ Dropdown `ประเภทข้อมูลนำเข้า`, ปรับ `downloadStudentExcelTemplate()` ให้ดาวน์โหลดเทมเพลตมาตรฐานรวมทุกคอลัมน์ (ข้อมูลนักศึกษา, สถานประกอบการ, ที่อยู่เต็ม, ผู้ประเมิน, อาจารย์), ปรับ `handleExcelFileUpload` ยิงตรง `/students/import-preview`
 2. `apps/api/src/members/student-import.service.ts`: ใน `preview()` auto-detect และ fallback อัตโนมัติระหว่าง `parseStudentWorkbook` และ `parseStudentContactsWorkbook`; ใน `resolveRow` อนุญาตให้นักศึกษาเดิม (`existing`) inherit ข้อมูลหลัก (schoolId, programId, name, email) ทำให้การอัปเดตข้อมูลผู้ติดต่อผ่านฉลุย
 3. ตรวจสอบ: `nuxt typecheck` 0 errors, `api build` 0 errors, vitest student import/contacts tests 44/44 ผ่าน 100%
@@ -127,7 +127,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
    - กำหนดค่า `programId: ''` ใน `initialSections`, `applySchoolPreset`, `addSpecialSectionForSchool`, และ `loadForm`
 2. ตรวจสอบ: `nuxt typecheck` 0 errors ผ่าน 100%
 
-
 ## 2026-10-22 — เพิ่ม Export Filter Modal และปรับรูปแบบ Excel ตามไฟล์ Cer PDF + ส่งเมล
 
 - ผู้ใช้: "Proceed เลยยยยยยยยยย" (อนุมัติแผนงานจากอาร์ติแฟกต์ export-filter-modal-and-cer-email-excel-format.md)
@@ -145,7 +144,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   - `worker test`: ผ่าน 100% (16 test files, 49 tests)
   - `web typecheck`: ผ่าน 0 errors (100%)
 
-
 - ผู้ใช้: สั่ง "ทำให้ในระบบ ทุกอย่าง ที่เป็น DataTable ในตัวของ การจัดการ ให้มัน ลบ... ด้วย ไม่ใช่มีแค่ แก้ไข"
 - ผลที่ทำจริง:
   1. `apps/web/app/pages/app/users.vue`: เพิ่มปุ่ม Quick Delete (ถังขยะ), รายการเมนู "ลบผู้ใช้งาน..." ใน 3 จุด และ Modal ยืนยันการลบผู้ใช้งาน (ส่ง `PATCH /users/:id` ด้วย `{ status: 'archived' }`)
@@ -156,7 +154,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - การตรวจสอบ:
   - `nuxt typecheck`: ผ่าน 0 errors
   - `vitest test`: ผ่าน 100% (61 test files, 461 tests)
-
 
 ## 2026-10-22 — แก้ไขปัญหาการ Export Excel ค้าง (มันค้าง) และเพิ่ม Direct Export Pipeline
 
@@ -184,7 +181,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   - `pnpm --filter @internship/web typecheck`: ผ่าน 0 errors
   - `redocly lint docs/api/openapi.yaml`: ผ่าน 100% (valid)
 
-
 ### 2026-10-22 — วางแผนปรับปรุงประสิทธิภาพการโหลดข้อมูลทั้งระบบ (`/plan`)
 
 - ผู้ใช้: "/plan ช่วยวางแผนการโหลดข้อมูลในระบบใหม่เนื่องจากมันช้ามาก ไม่ว่าแต่แต่ละหน้าโคตรช้าเลย ช่วยแก้ไขตรงนี้ ตรงไหนที่สามารถปรับได้บ้างเพื่อให้ประสิทธิภาพสูงสุดในการโหลด และไม่ลดประสิทธิภาพเดิมในการโหลดข้อมูลด้วย ทำให้ดีขึ้นและไม่มีปัญหา"
@@ -196,7 +192,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   4. `AccessGuard` รันคิวรีตรวจสอบ Session และ User แบบอนุกรม 2 รอบต่อทุกๆ HTTP Request
   5. ขาด Compound Indexes สำคัญใน `StudentSchema`, `EvaluationAssignmentSchema`, และ `DeliveryRecordSchema`
 - แผนงานที่จัดทำ: บันทึกในอาร์ติแฟกต์ `C:\Users\asus\.gemini\antigravity\brain\2df057bf-4650-4c9f-b4ff-d6448fa00df1\data-loading-performance-optimization-plan.md` แบ่งเป็น 4 Phases (Shared Reference Cache, Non-Blocking Parallel Page Loads, Backend Lean Query & Auth Parallel/Short-TTL Cache, MongoDB Compound Indexes) รอผู้ใช้อนุมัติก่อนลงมือแก้ไขโค้ด
-
 
 ### 2026-10-22 — ปรับปรุงประสิทธิภาพการโหลดข้อมูลทั้งระบบสำเร็จ (Full-Stack Performance Optimization)
 
@@ -227,7 +222,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   - `pnpm --filter @internship/worker test`: ผ่าน 100% (16 test files, 49 tests passed)
   - `/browser` QA Testing: ตรวจครบ 11 เส้นทาง สลับหน้าเร็วขึ้นชัดเจน (<600ms, ส่วนใหญ่ 50–250ms), ไม่ค้าง Router, ข้อมูลครบถ้วน, และ 0 Console Errors
 
-
 ### 2026-10-22 — แก้ไขปัญหา Vite Import Analysis Error: bulk-dispatch.vue
 
 - ผู้ใช้: `[plugin:vite:import-analysis] Failed to resolve import "C:/Users/asus/Documents/GitHub/Intership v.2/apps/web/app/pages/app/evaluations/bulk-dispatch.vue" from "virtual:nuxt:.nuxt%2Froutes.mjs". Does the file exist? แก้ไขขขขขขขขข`
@@ -239,7 +233,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - การตรวจ:
   - `pnpm --filter @internship/web typecheck`: ผ่าน 0 errors
   - `/browser` QA Testing: ผ่าน 100% (0 Vite import errors, 0 Console errors)
-
 
 ### 2026-10-23 — รันระบบ API และ Web พร้อม Smoke Test ผ่านสมบูรณ์
 
@@ -257,7 +250,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - การตรวจ:
   - Port checks: `27017` LISTENING, `8081` LISTENING, `8080` LISTENING
   - `/browser` Smoke Test: PASS 100%
-
 
 ### 2026-10-23 — ปรับระบบการจบการฝึกงานให้เป็นสถานะอัตโนมัติเมื่อตอบแบบประเมินเสร็จ และนำปุ่มแมนนวลออก
 
@@ -291,7 +283,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
     - Browser Console: 0 errors
     - หลักฐานภาพ: `students_action_menu_completed_status.png`, `dashboard_completed_status_card.png`
 
-
 ### 2026-10-23 — ปิดระบบบริการทั้งหมดเรียบร้อย
 
 - ผู้ใช้: "ปิดระบบ"
@@ -303,7 +294,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - การตรวจ:
   - `netstat -ano | findstr "LISTENING" | findstr ":8080 :8081"`: ว่างเปล่า (exit code 1)
   - Tasks list: ไม่มี task รันค้างอยู่ (0 running tasks)
-
 
 ### 2026-10-23 — รันระบบบริการครบชุดและเปิดใช้งาน Microsoft Edge เข้าสู่หน้าเว็บ
 
@@ -320,7 +310,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   - Edge DevTools MCP: เข้าถึง `http://localhost:8080/` เรียบร้อย
   - หลักฐานภาพ: `edge_homepage_loaded.png`
 
-
 ### 2026-10-23 — วางแผนแก้ไขบั๊กและปรับปรุงเวิร์กโฟลว์ 17 รายการ (/plan)
 
 - ผู้ใช้: ขอให้วางแผนแก้ไขบั๊กและปรับปรุงระบบ 17 รายการ (ลบผู้ใช้, ลบแบบฟอร์ม, ลบเอกสาร, ลบสำนัก/สาขา/วิชา, ฟอร์มใหม่ทำเป็นหน้าเต็ม, สิทธิ์ดาวน์โหลดเอกสารนักศึกษาทันทีหลังประเมินเสร็จที่หน้าภาพรวม, อัปเดตชื่อ/อีเมลผู้ประเมินใน Admin, ส่งอีเมลใหม่ใน Modal & ลบจุด 3 จุดที่ซ้ำซ้อน, น้ำหนักคำถาม > 2 & เปิดใช้งานฟอร์มได้ทีละ 1 อัน, อัปโหลดพื้นหลัง Certificate, ใส่ตัวแปรเผยแพร่ได้, เพิ่ม suggestion ใน Document, เปลี่ยน 'จำนวนข้อที่ตอบ' เป็น 'คะแนนรวมทั้งหมด', แก้ไขแม่แบบที่ปิดใช้งานได้, Filter สถานะเอกสารตรงกับตาราง) พร้อมข้อกำหนด: หลังแก้แต่ละบั๊ก ให้จำลองเล่น workflow ทั้งหมดผ่าน UI ทุกครั้งเสมอ
@@ -332,7 +321,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   1. ดำเนินการตรวจสอบโค้ดเบสเชิงลึกครบทั้ง 17 จุด
   2. เขียน Artifact แผนการแก้ไขระบบและจำลองการทดสอบ UI ครอบคลุมทั้ง 17 รายการที่ `system-bugfix-and-workflow-optimization-plan.md` พร้อมเปิดการขอความคิดเห็น (RequestFeedback: true)
   3. นำเสนอและผู้ใช้อนุมัติคำสั่งดำเนินการผ่าน `/goal Proceed /boost`
-
 
 ### 2026-10-23 — ดำเนินการแก้ไขบั๊กและปรับปรุงระบบ 17 รายการสำเร็จครบถ้วน (/goal Proceed /boost)
 
@@ -382,7 +370,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
     - `/app/settings/academic`: แสดงปุ่มลบสำนักวิชา/หลักสูตร/รายวิชา พร้อม dialog ยืนยัน
 - เรื่องค้าง: ไม่มี (งานเสร็จสมบูรณ์ 100%)
 
-
 ### 2026-10-24 — วางแผนแม่บทโฟลว์การเล่นในระบบและเทสต์เคสระดับแถวผ่าน UI ละเอียด (/plan)
 
 - ผู้ใช้: ขอให้ออกแบบโฟลว์การเล่นในระบบทั้งหมดให้สามารถเล่น workflow จริงได้ พร้อมคิดเวิร์กโฟลว์ย่อยในแต่ละ row และตารางเทสต์เคสสำหรับการทดสอบผ่าน UI แบบละเอียดและครอบคลุมทุกอย่าง (/plan)
@@ -396,7 +383,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   1. สร้าง Artifact แผนแม่บทโฟลว์การเล่นในระบบและเทสต์เคส UI ฉบับสมบูรณ์ที่ `system-master-ui-workflows-and-test-cases-plan.md` พร้อมเปิดการขอความคิดเห็น (RequestFeedback: true)
   2. สรุปโครงสร้าง 10 Golden Steps, 11 โมดูลย่อยระดับแถว, และตาราง 37+ Test Cases
 - เรื่องค้าง: ไม่มี
-
 
 ### 2026-10-24 — จำลองการเล่นและทดสอบระบบครบทั้ง 11 โมดูล ผ่าน UI จริงสำเร็จสมบูรณ์ (/goal Proceed)
 
@@ -448,3 +434,23 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   4. Push การเปลี่ยนแปลงขึ้นรีโมต `origin/main` สำเร็จสมบูรณ์ Working tree สะอาด 100%
 - เรื่องค้าง: ไม่มี (ส่งมอบครบถ้วน)
 
+### 2026-10-25 — ทดสอบทั้งระบบผ่าน UI จริง + นำเข้าไฟล์จริง + เทียบ Export กับต้นแบบ (งานค้าง ยังไม่จบ)
+
+- ผู้ใช้: ให้ทดสอบทั้งระบบแบบเล่น UI จริง (โฟลว์หลัก ทุกปุ่ม performance responsive เมล/SMTP เอกสาร PDF Export) แก้บั๊กทุกตัว นำเข้าไฟล์จริง `Checklist 1-68.xlsx` กับ `สร้างไฟล์ Cer PDF + ส่งเมล. .xlsx` และให้ Export เหมือนไฟล์หลัง ผู้ใช้ตอบรับแผน "จัดการได้เลย" ใช้ DB QA แยก ไม่แตะข้อมูล 99 คนเดิม ไม่ commit/push
+- Environment QA: `.runtime/qa-2026-10-25/` (web 28082, API 28083, Mongo 47027 DB internship_qa_20261025, Redis 8 ใน WSL พอร์ต 6380 DB 7, Mailpit 28025/SMTP 21025, S3 29000) พอร์ต 8080/8081 เป็นโปรเจกต์อื่น ห้ามแตะ สคริปต์: runtime.mjs (เปิดชุด), restart.mjs [web] (รีสตาร์ต API/Worker/Web), import-ui.mjs/export-ui.mjs/crawl.mjs (Playwright กด UI จริงเพราะ browser pane แนบไฟล์ไม่ได้ติด CSP) ต้องใช้ `MSYS_NO_PATHCONV=1` เมื่อส่ง path /app ผ่าน Git Bash; rate limit import-preview 10 ครั้ง/ชม. เคลียร์ใน Redis DB 7 เฉพาะ QA
+- ผลนำเข้า: Checklist อ่านได้ 99 แถว (เพิ่ม 88 ผิดเงื่อนไข 11 ซ้ำอีเมล/อีเมลผู้ประเมินไม่ถูก) Cer 96 คน (อัปเดต 86 เพิ่ม 10) รวมใน QA 98 คน นำเข้าซ้ำ = unchanged (idempotent)
+- บั๊กที่แก้ (มี regression): Worker ยอมใช้ฟอนต์สำรองแม้ checksum ฟอนต์ไม่ตรง; นำเข้าทิ้งชื่ออังกฤษ (name.en) และไม่เก็บช่วงฝึกงานจริง ทำให้ PDF แสดงวันที่ฝึกงานเป็นวันทดสอบ (เพิ่ม internshipStartsAt/EndsAt parse "4 ส.ค - 21 พ.ย 68"); PDF เติมข้อคิดเห็นผู้ประเมินปลอมเมื่อไม่มีคอมเมนต์ (ลบแล้ว); ปีการศึกษาใน PDF ไทยเป็น ค.ศ. (เปลี่ยนเป็น พ.ศ.); ชื่อไฟล์ดาวน์โหลด Certificate_/Transcript_<รหัส>.pdf; Excel export จัดคอลัมน์เหมือนต้นแบบ (Hard/HS/HM คั่นด้วยคอลัมน์ว่าง 62 คอลัมน์, Programe/School ภาษาอังกฤษก่อน, Semester First/Second/Summer, Issued on ว่างแทน '-'); ข้อความ error นำเข้าเป็นไทย + แจ้งชีตที่ข้าม (เช่น เทอม3 DTBI 24 แถวไม่มีหัวตาราง) ผ่าน skippedSheets (OpenAPI อัปเดต); ชื่อมีช่องว่างซ้อนถูกยุบ; ซ้อน <main> สองชั้นใน wizard; Hydration mismatch ที่ /app/documents และ /app/settings/general (server:false); คอลัมน์จัดการตารางหลุดจอบนมือถือ/แท็บเล็ตทำเป็น sticky; empty state ในตารางหลุดจอบน ≤1023px
+- ยังค้าง/ข้อสังเกต: EMAIL_SENT ใน Excel ตอนนี้หมายถึงเมลคำเชิญ ไม่ใช่เมลส่ง Cert ตามต้นแบบ (รอ owner ตัดสินใจ); ชีต Send Email ของต้นแบบหัว/ข้อมูลไม่ตรงกัน (อีเมลผู้รับเป็นของอาจารย์) ยังคง 12 คอลัมน์เดิม; เลขที่เอกสารเป็น ObjectId ยาว; ต้นแบบมีชื่ออังกฤษ แต่ Checklist ไม่มี; ข้อมูลสองไฟล์ขัดกัน (อีเมล/ชื่อบริษัทไทย-อังกฤษ) ตัวหลังชนะและแสดงใน preview; ยังไม่ได้ทำ: ตรวจ SMTP settings/เทมเพลตเมล, ทุกปุ่มของบทบาท staff/advisor/student, performance trace รายละเอียด, pnpm verify (format 25 ไฟล์ค้าง)
+
+### 2026-10-25 — สรุปรอบทดสอบต่อ (ต่อจากรายการด้านบน)
+
+- บั๊กเพิ่มที่พบและแก้ (มี regression/ตรวจซ้ำ): แก้ไขแบบฟอร์มประเมินเดิมไม่ได้เลยเพราะ UI เรียก `GET /competency-sets/:id` ที่ API ไม่มี (เพิ่ม endpoint + OpenAPI + test); คอลัมน์ PDF URL ใน Excel ว่างเสมอเพราะค้นเอกสารด้วยรหัสนักศึกษาแทน record id (แก้ให้ชี้ใบ Certificate ล่าสุดที่ ready เป็น URL เต็ม + test); ลิงก์เชิญที่ใช้แล้ว/หมดอายุแจ้งข้อความที่เข้าใจได้; Prettier ทำ handler ใน `forms/create.vue` พังตอน build (เปลี่ยนเป็นฟังก์ชัน)
+- ตรวจแล้วผ่าน: SMTP ส่งทดสอบได้ 1 ฉบับ/validation host; อีเมลคำเชิญใน Mailpit (ผู้รับ ลิงก์ PIN ถูก); evaluator ส่งผล → Placement จบอัตโนมัติ → Student ออก Certificate/Transcript PDF ข้อมูลตรงผลประเมิน (ช่วงฝึกงานจริง ปี พ.ศ. ชื่ออังกฤษ); สิทธิ์ student/advisor/staff ทั้ง route guard และ API scope; performance API ≤70ms, soft navigation <230ms, โหลดเต็มหน้า 0.6–1.6s; responsive 360/375/768/1280 ไม่มี overflow แนวนอน
+- ผลตรวจสุดท้าย: format:check, lint, typecheck, openapi:check/lint ผ่าน; unit รวม API 474 (skip 4 Redis), Web 83, Worker 50 (skip 1), contracts ผ่าน; รอบ e2e/build ล่าสุดรันหลังแก้ create.vue (ดูผลในรายงานสุดท้าย)
+- ค้าง/ต้องให้ owner ตัดสินใจ: EMAIL_SENT หมายถึงเมลคำเชิญ ไม่ใช่เมลส่ง Cert; ชีต Send Email ของต้นแบบหัว/ข้อมูลไม่ตรงกัน คงรูปแบบเดิม; เลขที่เอกสารเป็น ObjectId ยาว; rate limit import-preview 10 ครั้ง/ชม.; ปุ่มและเคสของ Studio/cycles/email template ลงลึกยังไม่ครบทุกกรณี; ไม่ commit/push
+
+### 2026-10-25 — ปิดรอบ: ชุดตรวจเต็มผ่านทั้งหมด
+
+- `pnpm verify` เทียบเท่าครบและผ่านทุกขั้น: format:check, lint, typecheck, test (API 474/skip 4 Redis, Web 83, Worker 50/skip 1, contracts), openapi:check/lint, e2e 71/71, build
+- บั๊กเพิ่มจากรอบสุดท้าย: หน้า /app/evaluations แสดง ID ดิบแทนชื่อนักศึกษา/ผู้ประเมิน/บริษัท (lookup lazy ไม่ถูกเรียกหลัง SSR) แก้ให้โหลดฝั่ง client + cycles.vue แบบเดียวกัน; ดาวน์โหลด Excel ที่เป็น presigned URL ข้ามโดเมนถูก CSP connect-src บล็อกใน production (เปลี่ยนเป็น navigation + API ใส่ Content-Disposition); e2e 6 เคสที่ล้าสมัยหลังเปลี่ยนฟีเจอร์ (ฟอร์มสร้างเป็นหน้าเต็ม, import ยุบประเภท, export มี modal, โหลด lazy) ปรับให้ตรงพฤติกรรมปัจจุบัน
+- ไม่ commit/push/deploy; QA stack ยังรันอยู่ที่ web 28082/API 28083/Mailpit 28025 (ข้อมูล QA ใน `.runtime/qa-2026-10-25`, Redis WSL พอร์ต 6380)

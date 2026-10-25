@@ -172,6 +172,7 @@ export function parseStudentContactsWorkbook(
     counts.set(row.studentId, (counts.get(row.studentId) ?? 0) + 1)
   return {
     questionFields: [],
+    skippedSheets: [],
     rows: rows.map((row) =>
       (counts.get(row.studentId) ?? 0) > 1
         ? {

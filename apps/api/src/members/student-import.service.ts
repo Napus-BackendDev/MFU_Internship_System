@@ -106,10 +106,12 @@ export class StudentImportService {
         try {
           parsed = parseStudentWorkbook(file)
         } catch (innerError) {
-          const innerCode = innerError instanceof Error ? innerError.message : ''
+          const innerCode =
+            innerError instanceof Error ? innerError.message : ''
           if (
             !options.mode &&
-            (innerCode === 'WORKBOOK_NO_STUDENT_ROWS' || innerCode === 'WORKBOOK_INVALID')
+            (innerCode === 'WORKBOOK_NO_STUDENT_ROWS' ||
+              innerCode === 'WORKBOOK_INVALID')
           ) {
             try {
               parsed = parseStudentContactsWorkbook(file)
@@ -212,6 +214,7 @@ export class StudentImportService {
         mode: effectiveMode,
         academicTermId: options.academicTermId,
         questionFields: [...parsed.questionFields],
+        skippedSheets: parsed.skippedSheets.map((sheet) => ({ ...sheet })),
         status: 'preview'
       }).save(session ? { session } : {})
       const batchId = document.id
@@ -448,8 +451,7 @@ export class StudentImportService {
       }
       if (program) {
         const idx = issues.findIndex(
-          (i) =>
-            i.code === 'PROGRAM_REQUIRED' || i.code === 'PROGRAM_NOT_FOUND'
+          (i) => i.code === 'PROGRAM_REQUIRED' || i.code === 'PROGRAM_NOT_FOUND'
         )
         if (idx >= 0) issues.splice(idx, 1)
       }
@@ -563,8 +565,20 @@ export class StudentImportService {
       )
     }
 
-    const resolvedName =
-      source.name || source.nameTh || source.nameEn || existing?.name || ''
+    // Keep the workbook's English name instead of dropping it when it differs from the Thai one.
+    // A later workbook without an English name must not erase the one already stored.
+    const thaiName = source.nameTh || source.name
+    const sourceEnglish =
+      source.nameEn && source.nameEn !== thaiName ? source.nameEn : undefined
+    const storedEnglish =
+      existing && typeof existing.name === 'object'
+        ? existing.name.en
+        : undefined
+    const englishName = sourceEnglish ?? storedEnglish
+    const resolvedName: StudentRecord['name'] =
+      thaiName && englishName && englishName !== thaiName
+        ? { th: thaiName, en: englishName }
+        : source.name || source.nameTh || source.nameEn || existing?.name || ''
     const resolvedEmail = source.email || existing?.email || ''
 
     const payload: ImportPayload = {
@@ -585,6 +599,12 @@ export class StudentImportService {
       ...(source.admissionYear !== undefined
         ? { admissionYear: source.admissionYear }
         : {}),
+      ...(source.internshipStartsAt && source.internshipEndsAt
+        ? {
+            internshipStartsAt: new Date(source.internshipStartsAt),
+            internshipEndsAt: new Date(source.internshipEndsAt)
+          }
+        : {}),
       ...(source.company ? { company: source.company } : {}),
       ...(source.companyAddress
         ? { companyAddress: source.companyAddress }
@@ -604,7 +624,9 @@ export class StudentImportService {
         : {})
     }
 
-    const emailOwner = resolvedEmail ? existingByEmail.get(resolvedEmail) : undefined
+    const emailOwner = resolvedEmail
+      ? existingByEmail.get(resolvedEmail)
+      : undefined
     if (emailOwner && emailOwner.id !== existing?.id) {
       issues.push(
         issue(
@@ -1141,6 +1163,10 @@ export class StudentImportService {
       expiresAt: batch.expiresAt.toISOString(),
       status: batch.status,
       questionFieldsDetected: batch.questionFields,
+      skippedSheets: (batch.skippedSheets ?? []).map((sheet) => ({
+        name: sheet.name,
+        rows: sheet.rows
+      })),
       summary,
       items: rows.map((row) => ({
         id: row.id,

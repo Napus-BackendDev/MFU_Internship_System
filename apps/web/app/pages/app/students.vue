@@ -165,6 +165,10 @@ interface StudentImportBatchResponse extends Pick<
   readonly sourceName: string
   readonly status: 'preview' | 'committed'
   readonly questionFieldsDetected: readonly string[]
+  readonly skippedSheets?: readonly {
+    readonly name: string
+    readonly rows: number
+  }[]
   readonly summary: {
     readonly total: number
     readonly creates: number
@@ -1285,6 +1289,28 @@ const parsedRows = ref<ParsedStudentRow[]>([])
 const selectedFileName = ref<string>('')
 const studentImportBatchId = ref<string | null>(null)
 const importQuestionFields = ref<string[]>([])
+const importSkippedSheets = ref<{ name: string; rows: number }[]>([])
+const IMPORT_ISSUE_TEXT: Record<string, string> = {
+  DUPLICATE_SOURCE_EMAIL:
+    'อีเมลนักศึกษานี้ซ้ำกันในไฟล์ (ตรวจสอบอีเมลของแถวที่ซ้ำ)',
+  DUPLICATE_SOURCE_ID: 'รหัสนักศึกษานี้ซ้ำกันในไฟล์',
+  INVALID_EMAIL: 'อีเมลนักศึกษาไม่ถูกต้องหรือไม่มีในไฟล์',
+  INVALID_EVALUATOR_EMAIL: 'อีเมลผู้ประเมินไม่ถูกต้อง',
+  INVALID_CONTACT_EMAIL: 'อีเมลผู้ติดต่อไม่ถูกต้อง',
+  INVALID_STUDENT_ID: 'รหัสนักศึกษาไม่ถูกต้อง',
+  INVALID_ACADEMIC_YEAR: 'ปีการศึกษาไม่ถูกต้อง',
+  INVALID_ADMISSION_YEAR: 'ปีที่เข้าศึกษาไม่ถูกต้อง',
+  NAME_REQUIRED: 'ไม่พบชื่อนักศึกษา',
+  SCHOOL_REQUIRED: 'ไม่พบสำนักวิชาในไฟล์',
+  SCHOOL_NOT_FOUND: 'ไม่พบสำนักวิชานี้ในระบบ',
+  PROGRAM_REQUIRED: 'ไม่พบหลักสูตรในไฟล์',
+  PROGRAM_NOT_FOUND: 'ไม่พบหลักสูตรนี้ในระบบ',
+  ACADEMIC_TERM_YEAR_REQUIRED: 'ต้องระบุปีการศึกษาเพื่อระบุภาคการศึกษา',
+  CONTACT_VALUE_TOO_LONG: 'ข้อมูลผู้ติดต่อยาวเกินกำหนด'
+}
+function importIssueText(issue: { code: string; message: string }): string {
+  return IMPORT_ISSUE_TEXT[issue.code] ?? issue.message
+}
 const importCommitKeys = ref<Record<string, string>>({})
 const excelPreviewPage = ref(1)
 const excelPreviewPageSize = ref<number>(5)
@@ -1332,6 +1358,7 @@ function clearExcelImportState() {
   selectedFileName.value = ''
   studentImportBatchId.value = null
   importQuestionFields.value = []
+  importSkippedSheets.value = []
   importCommitKeys.value = {}
   excelPreviewPage.value = 1
   excelPreviewPageSize.value = 5
@@ -1419,6 +1446,9 @@ function applyStudentImportBatch(batch: StudentImportBatchResponse) {
   contactImportTermId.value = batch.academicTermId ?? ''
   studentImportBatchId.value = batch.batchId
   importQuestionFields.value = [...batch.questionFieldsDetected]
+  importSkippedSheets.value = (batch.skippedSheets ?? []).map((sheet) => ({
+    ...sheet
+  }))
   if (import.meta.client) {
     if (batch.status === 'committed') {
       sessionStorage.removeItem('student-import-batch-id')
@@ -1558,6 +1588,7 @@ async function handleExcelFileUpload(event: Event) {
   parsedRows.value = []
   studentImportBatchId.value = null
   importQuestionFields.value = []
+  importSkippedSheets.value = []
   importCommitKeys.value = {}
   isExcelImporting.value = true
 
@@ -3106,7 +3137,12 @@ function handleModalBackdropClick() {
               <th scope="col" class="py-3 px-4 min-w-[150px] whitespace-nowrap">
                 อัปเดตล่าสุด / วันที่สร้าง
               </th>
-              <th scope="col" class="py-3 px-4 w-16 text-right">จัดการ</th>
+              <th
+                scope="col"
+                class="py-3 px-4 w-16 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+              >
+                จัดการ
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y divide-default">
@@ -3247,8 +3283,11 @@ function handleModalBackdropClick() {
                 </span>
               </td>
 
-              <!-- 9. จัดการ -->
-              <td class="py-3 px-4 text-right" @click.stop>
+              <!-- 9. จัดการ (stays reachable while the wide table scrolls on narrow screens) -->
+              <td
+                class="py-3 px-4 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+                @click.stop
+              >
                 <div class="flex items-center justify-end">
                   <UDropdownMenu
                     :items="getStudentMenuItems(student)"
@@ -3694,7 +3733,9 @@ function handleModalBackdropClick() {
                 <span>1. ดาวน์โหลดเทมเพลตมาตรฐาน</span>
               </div>
               <p class="mt-1 text-xs text-muted">
-                ดาวน์โหลดไฟล์ตัวอย่างที่มีหัวตารางครบถ้วน ทั้งข้อมูลนักศึกษา สถานประกอบการ และข้อมูลติดต่อผู้ประเมิน/อาจารย์ หรือสามารถนำเข้าไฟล์เดิม (เช่น Checklist, Cer) ได้ทันที
+                ดาวน์โหลดไฟล์ตัวอย่างที่มีหัวตารางครบถ้วน ทั้งข้อมูลนักศึกษา
+                สถานประกอบการ และข้อมูลติดต่อผู้ประเมิน/อาจารย์
+                หรือสามารถนำเข้าไฟล์เดิม (เช่น Checklist, Cer) ได้ทันที
               </p>
             </div>
             <div class="mt-3">
@@ -3954,6 +3995,23 @@ function handleModalBackdropClick() {
               </div>
             </div>
 
+            <!-- Sheets that were not imported because they have no student header -->
+            <div
+              v-if="importSkippedSheets.length"
+              class="rounded-xl border border-amber-500/30 bg-amber-500/5 px-3.5 py-2.5 text-xs text-amber-800 dark:text-amber-300"
+            >
+              <p class="flex items-center gap-2 font-semibold">
+                <UIcon name="i-lucide-info" class="size-4 shrink-0" />
+                มี {{ importSkippedSheets.length }} ชีตที่ไม่ได้นำเข้า
+                เพราะไม่พบหัวตารางนักศึกษา
+              </p>
+              <ul class="mt-1 list-disc pl-6">
+                <li v-for="sheet in importSkippedSheets" :key="sheet.name">
+                  {{ sheet.name }} ({{ sheet.rows }} แถว)
+                </li>
+              </ul>
+            </div>
+
             <!-- Notice when there are invalid items -->
             <div
               v-if="importProgress.summary.invalid > 0"
@@ -4049,7 +4107,7 @@ function handleModalBackdropClick() {
                     :key="issue.code"
                     class="text-error"
                   >
-                    {{ issue.code }}: {{ issue.message }}
+                    {{ importIssueText(issue) }}
                   </p>
                   <p
                     v-for="warning in row.warnings"

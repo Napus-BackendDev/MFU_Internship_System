@@ -327,7 +327,14 @@ const itemToDelete = ref<{
 } | null>(null)
 const isDeletingItem = ref(false)
 
-function openDeleteAcademicModal(type: 'school' | 'program' | 'course' | 'term', item: { id: string; name: { th: string; en?: string } | string; code?: string }): void {
+function openDeleteAcademicModal(
+  type: 'school' | 'program' | 'course' | 'term',
+  item: {
+    id: string
+    name: { th: string; en?: string } | string
+    code?: string
+  }
+): void {
   const nameStr = typeof item.name === 'string' ? item.name : item.name.th
   itemToDelete.value = {
     type,
@@ -376,16 +383,27 @@ async function confirmDeleteAcademicItem(): Promise<void> {
   } catch (err: unknown) {
     let msg = `ไม่สามารถลบ${label}ได้`
     if (err && typeof err === 'object') {
-      const code = (err as { data?: { code?: string }; response?: { _data?: { code?: string } } }).data?.code ||
-                   (err as { response?: { _data?: { code?: string } } }).response?._data?.code
+      const code =
+        (
+          err as {
+            data?: { code?: string }
+            response?: { _data?: { code?: string } }
+          }
+        ).data?.code ||
+        (err as { response?: { _data?: { code?: string } } }).response?._data
+          ?.code
       if (code === 'SCHOOL_HAS_ACTIVE_PROGRAMS') {
-        msg = 'ไม่สามารถลบสำนักวิชานี้ได้ เนื่องจากยังมีหลักสูตรที่เปิดใช้งานอยู่'
+        msg =
+          'ไม่สามารถลบสำนักวิชานี้ได้ เนื่องจากยังมีหลักสูตรที่เปิดใช้งานอยู่'
       } else if (code === 'PROGRAM_HAS_OPEN_WORK') {
-        msg = 'ไม่สามารถลบหลักสูตรนี้ได้ เนื่องจากมีรอบการประเมินหรือการฝึกงานที่กำลังดำเนินการ'
+        msg =
+          'ไม่สามารถลบหลักสูตรนี้ได้ เนื่องจากมีรอบการประเมินหรือการฝึกงานที่กำลังดำเนินการ'
       } else if (code === 'COURSE_ARCHIVE_REQUIRES_MIGRATION') {
-        msg = 'ไม่สามารถลบรายวิชานี้ได้ เนื่องจากรายวิชานี้ผูกกับข้อมูลในระบบที่ต้องผ่านการย้ายข้อมูลก่อน'
+        msg =
+          'ไม่สามารถลบรายวิชานี้ได้ เนื่องจากรายวิชานี้ผูกกับข้อมูลในระบบที่ต้องผ่านการย้ายข้อมูลก่อน'
       } else if (code === 'ACADEMIC_TERM_ARCHIVE_GUARD_UNAVAILABLE') {
-        msg = 'ไม่สามารถลบภาคการศึกษานี้ได้ เนื่องจากมีรอบการประเมินหรือการฝึกงานที่เปิดอยู่'
+        msg =
+          'ไม่สามารถลบภาคการศึกษานี้ได้ เนื่องจากมีรอบการประเมินหรือการฝึกงานที่เปิดอยู่'
       } else if (err instanceof Error) {
         msg = err.message
       }
@@ -1305,7 +1323,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                 <th>ชื่อภาษาไทย</th>
                 <th>ชื่อภาษาอังกฤษ</th>
                 <th class="w-32">หลักสูตรในสังกัด</th>
-                <th v-if="canManage" class="w-24 text-right">การจัดการ</th>
+                <th
+                  v-if="canManage"
+                  class="w-24 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+                >
+                  การจัดการ
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1349,7 +1372,10 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                     variant="subtle"
                   />
                 </td>
-                <td v-if="canManage" class="text-right">
+                <td
+                  v-if="canManage"
+                  class="text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+                >
                   <div class="flex items-center justify-end gap-1">
                     <UButton
                       color="neutral"
@@ -1381,7 +1407,8 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                             label: 'ลบสำนักวิชา...',
                             icon: 'i-lucide-trash-2',
                             color: 'error',
-                            onSelect: () => openDeleteAcademicModal('school', school)
+                            onSelect: () =>
+                              openDeleteAcademicModal('school', school)
                           }
                         ]
                       ]"
@@ -1521,7 +1548,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                 <th>ชื่อหลักสูตร (ภาษาไทย)</th>
                 <th>ชื่อภาษาอังกฤษ</th>
                 <th class="w-48">สำนักวิชาสังกัด</th>
-                <th v-if="canManage" class="w-24 text-right">การจัดการ</th>
+                <th
+                  v-if="canManage"
+                  class="w-24 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+                >
+                  การจัดการ
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1573,7 +1605,10 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                     {{ prog.schoolId }}
                   </span>
                 </td>
-                <td v-if="canManage" class="text-right">
+                <td
+                  v-if="canManage"
+                  class="text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+                >
                   <div class="flex items-center justify-end gap-1">
                     <UButton
                       color="neutral"
@@ -1605,7 +1640,8 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                             label: 'ลบหลักสูตร...',
                             icon: 'i-lucide-trash-2',
                             color: 'error',
-                            onSelect: () => openDeleteAcademicModal('program', prog)
+                            onSelect: () =>
+                              openDeleteAcademicModal('program', prog)
                           }
                         ]
                       ]"
@@ -1722,7 +1758,12 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                 <th>ชื่อรายวิชา (ภาษาไทย)</th>
                 <th>ชื่อภาษาอังกฤษ</th>
                 <th class="w-48">สาขาวิชาที่เปิดรับ</th>
-                <th v-if="canManage" class="w-24 text-right">การจัดการ</th>
+                <th
+                  v-if="canManage"
+                  class="w-24 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+                >
+                  การจัดการ
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1792,7 +1833,10 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                     />
                   </span>
                 </td>
-                <td v-if="canManage" class="text-right">
+                <td
+                  v-if="canManage"
+                  class="text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+                >
                   <div class="flex items-center justify-end gap-1">
                     <UButton
                       color="neutral"
@@ -1824,7 +1868,8 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                             label: 'ลบรายวิชา...',
                             icon: 'i-lucide-trash-2',
                             color: 'error',
-                            onSelect: () => openDeleteAcademicModal('course', course)
+                            onSelect: () =>
+                              openDeleteAcademicModal('course', course)
                           }
                         ]
                       ]"
@@ -2126,7 +2171,11 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                   <th class="px-3 py-2 font-medium">ภาคเรียน</th>
                   <th class="px-3 py-2 font-medium">ช่วงวันที่</th>
                   <th class="px-3 py-2 font-medium">สถานะ</th>
-                  <th class="px-3 py-2 text-right font-medium">จัดการ</th>
+                  <th
+                    class="px-3 py-2 text-right font-medium max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+                  >
+                    จัดการ
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -2185,7 +2234,13 @@ async function handleToggleTermStatus(term: AcademicTerm) {
                         title="ลบภาคการศึกษา"
                         variant="ghost"
                         class="hover:bg-red-500/10 text-red-600 dark:text-red-400"
-                        @click="openDeleteAcademicModal('term', { id: term.id, name: `${term.semester}/${term.academicYear}`, code: term.code })"
+                        @click="
+                          openDeleteAcademicModal('term', {
+                            id: term.id,
+                            name: `${term.semester}/${term.academicYear}`,
+                            code: term.code
+                          })
+                        "
                       />
                       <UButton
                         :color="term.status === 'open' ? 'warning' : 'success'"
@@ -2950,25 +3005,49 @@ async function handleToggleTermStatus(term: AcademicTerm) {
     >
       <div class="space-y-4 p-6">
         <div class="flex items-center gap-3">
-          <div class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
-            <UIcon name="i-lucide-trash-2" class="size-6 text-red-600 dark:text-red-400" />
+          <div
+            class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400"
+          >
+            <UIcon
+              name="i-lucide-trash-2"
+              class="size-6 text-red-600 dark:text-red-400"
+            />
           </div>
           <div>
-            <h2 class="text-lg font-semibold text-foreground">ยืนยันการลบ{{
-              itemToDelete.type === 'school' ? 'สำนักวิชา' :
-              itemToDelete.type === 'program' ? 'หลักสูตร' :
-              itemToDelete.type === 'course' ? 'รายวิชา' : 'ภาคการศึกษา'
-            }}</h2>
-            <p class="text-xs text-muted">ข้อมูลจะถูกเปลี่ยนสถานะเป็นเก็บถาวร (Archived)</p>
+            <h2 class="text-lg font-semibold text-foreground">
+              ยืนยันการลบ{{
+                itemToDelete.type === 'school'
+                  ? 'สำนักวิชา'
+                  : itemToDelete.type === 'program'
+                    ? 'หลักสูตร'
+                    : itemToDelete.type === 'course'
+                      ? 'รายวิชา'
+                      : 'ภาคการศึกษา'
+              }}
+            </h2>
+            <p class="text-xs text-muted">
+              ข้อมูลจะถูกเปลี่ยนสถานะเป็นเก็บถาวร (Archived)
+            </p>
           </div>
         </div>
         <p class="text-sm text-foreground">
-          คุณต้องการลบ {{
-            itemToDelete.type === 'school' ? 'สำนักวิชา' :
-            itemToDelete.type === 'program' ? 'หลักสูตร' :
-            itemToDelete.type === 'course' ? 'รายวิชา' : 'ภาคการศึกษา'
-          }} <strong class="font-medium text-red-600 dark:text-red-400">{{ itemToDelete.name }}</strong>
-          <span v-if="itemToDelete.code" class="text-xs text-muted"> ({{ itemToDelete.code }})</span> ใช่หรือไม่?
+          คุณต้องการลบ
+          {{
+            itemToDelete.type === 'school'
+              ? 'สำนักวิชา'
+              : itemToDelete.type === 'program'
+                ? 'หลักสูตร'
+                : itemToDelete.type === 'course'
+                  ? 'รายวิชา'
+                  : 'ภาคการศึกษา'
+          }}
+          <strong class="font-medium text-red-600 dark:text-red-400">{{
+            itemToDelete.name
+          }}</strong>
+          <span v-if="itemToDelete.code" class="text-xs text-muted">
+            ({{ itemToDelete.code }})</span
+          >
+          ใช่หรือไม่?
         </p>
         <div class="flex justify-end gap-2 pt-2 border-t border-default">
           <UButton

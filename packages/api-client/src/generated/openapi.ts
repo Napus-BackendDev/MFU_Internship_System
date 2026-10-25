@@ -290,7 +290,8 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /** Archive a School */
+        delete: operations["deleteSchool"];
         options?: never;
         head?: never;
         /** Update an active School */
@@ -363,7 +364,8 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /** Archive a Program */
+        delete: operations["deleteProgram"];
         options?: never;
         head?: never;
         /** Update a Program */
@@ -382,7 +384,8 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /** Archive a Course */
+        delete: operations["deleteCourse"];
         options?: never;
         head?: never;
         /** Update a Course */
@@ -401,7 +404,8 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /** Archive an academic term */
+        delete: operations["deleteTerm"];
         options?: never;
         head?: never;
         /** Update an academic term */
@@ -609,10 +613,15 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Read one competency set so its editor can load
+         * @description Uses the same read scope as the competency set list; an out-of-scope or unknown set returns 404.
+         */
+        get: operations["getCompetencySet"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Archive a competency set */
+        delete: operations["deleteCompetencySet"];
         options?: never;
         head?: never;
         /**
@@ -1290,6 +1299,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/document-templates/{templateId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Deactivate or archive a document template */
+        delete: operations["deleteDocumentTemplate"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/document-templates/{templateId}/activate": {
         parameters: {
             query?: never;
@@ -1541,6 +1569,23 @@ export interface paths {
         };
         /** Issue a short-lived private download URL for an owned export */
         get: operations["createReportExportDownloadUrl"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/exports/{exportId}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download the generated report export file directly */
+        get: operations["getReportExportFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2003,6 +2048,11 @@ export interface components {
             /** @enum {string} */
             status: "preview" | "committed";
             questionFieldsDetected: string[];
+            /** @description Sheets that have content but no student header row and were not imported. */
+            skippedSheets?: {
+                name: string;
+                rows: number;
+            }[];
             summary: components["schemas"]["StudentImportSummary"];
             items: components["schemas"]["StudentImportItem"][];
         };
@@ -2097,7 +2147,9 @@ export interface components {
         /** @enum {string} */
         TemplateStatus: "draft" | "published" | "retired";
         CompetencySetNamePatch: {
-            name: components["schemas"]["LocalizedText"];
+            name?: components["schemas"]["LocalizedText"];
+            /** @enum {string} */
+            status?: "active" | "archived";
         };
         CompetencySetInput: {
             /** @description Immutable after creation. */
@@ -2756,6 +2808,7 @@ export interface components {
             filters?: {
                 search?: string;
                 schoolId?: components["schemas"]["ObjectId"];
+                programId?: components["schemas"]["ObjectId"];
                 cycleId?: components["schemas"]["ObjectId"];
                 academicYear?: number;
                 semester?: string;
@@ -3463,6 +3516,27 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    deleteSchool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schoolId: components["parameters"]["SchoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description School archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
     updateSchool: {
         parameters: {
             query?: never;
@@ -3665,6 +3739,27 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    deleteProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                programId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Program archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
     updateProgram: {
         parameters: {
             query?: never;
@@ -3695,6 +3790,27 @@ export interface operations {
             503: components["responses"]["ServiceUnavailable"];
         };
     };
+    deleteCourse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                courseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Course archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
     updateCourse: {
         parameters: {
             query?: never;
@@ -3722,6 +3838,27 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    deleteTerm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                termId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Academic term archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     updateAcademicTerm: {
@@ -4251,6 +4388,52 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    getCompetencySet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                competencySetId: components["parameters"]["CompetencySetId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Competency set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompetencySet"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteCompetencySet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                competencySetId: components["parameters"]["CompetencySetId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Competency set archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     updateCompetencySet: {
@@ -5480,6 +5663,27 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    deleteDocumentTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                templateId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document template archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
     activateDocumentTemplate: {
         parameters: {
             query?: never;
@@ -5911,6 +6115,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportExportDownload"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getReportExportFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                exportId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary report export file (XLSX or CSV) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                    "text/csv": string;
                 };
             };
             401: components["responses"]["Unauthenticated"];

@@ -1910,7 +1910,10 @@ try {
       })
     )
   } catch (err: unknown) {
-    console.warn('S3 font upload skipped (S3 service not running):', (err as Error)?.message || err)
+    console.warn(
+      'S3 font upload skipped (S3 service not running):',
+      (err as Error)?.message || err
+    )
   }
   await upsertId(
     database,

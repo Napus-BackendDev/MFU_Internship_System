@@ -314,7 +314,14 @@ onMounted(async () => {
     const token = entry.token
     const pinParam = entry.pin
     if (token) {
-      await auth.exchangeInvitation(token)
+      try {
+        await auth.exchangeInvitation(token)
+      } catch {
+        // Stay generic: the link may be used, expired, or revoked.
+        pinError.value =
+          'ลิงก์เชิญนี้ใช้งานไม่ได้ (อาจส่งผลประเมินแล้ว หมดอายุ หรือถูกยกเลิก) กรุณากรอก PIN 16 หลักจากอีเมล หรือติดต่อผู้ดูแลระบบ'
+        return
+      }
     } else if (pinParam) {
       const clean = pinParam.replace(/[^a-zA-Z0-9]/gu, '').toUpperCase()
       if (clean.length === 16) {

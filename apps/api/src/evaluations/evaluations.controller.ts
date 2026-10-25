@@ -197,6 +197,15 @@ export class EvaluationsController {
     )
   }
 
+  @RequirePermissions('competencies.read')
+  @Get('competency-sets/:competencySetId')
+  public getCompetencySet(
+    @Req() request: AuthenticatedRequest,
+    @Param('competencySetId') id: string
+  ): Promise<unknown> {
+    return this.service.getCompetencySet(request.actor!, id)
+  }
+
   @RequirePermissions('competencies.manage')
   @Patch('competency-sets/:competencySetId')
   public updateCompetencySet(

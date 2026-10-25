@@ -990,7 +990,12 @@ onMounted(() => {
               <th scope="col" class="py-3 px-4 min-w-[120px] text-center">
                 สถานะ
               </th>
-              <th scope="col" class="py-3 px-4 w-20 text-right">จัดการ</th>
+              <th
+                scope="col"
+                class="py-3 px-4 w-20 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-muted"
+              >
+                จัดการ
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y divide-default">
@@ -1077,7 +1082,11 @@ onMounted(() => {
                             : 'bg-emerald-600 dark:bg-emerald-500'
                     ]"
                   >
-                    {{ (user.displayName || user.email || 'U').slice(0, 1).toUpperCase() }}
+                    {{
+                      (user.displayName || user.email || 'U')
+                        .slice(0, 1)
+                        .toUpperCase()
+                    }}
                   </div>
                   <div class="space-y-0.5 min-w-0">
                     <div class="flex items-center gap-1.5 flex-wrap">
@@ -1196,7 +1205,10 @@ onMounted(() => {
               </td>
 
               <!-- 6. จัดการ -->
-              <td class="py-3 px-4 text-right" @click.stop>
+              <td
+                class="py-3 px-4 text-right max-lg:sticky max-lg:right-0 max-lg:z-[1] max-lg:bg-default"
+                @click.stop
+              >
                 <div class="flex items-center justify-end gap-1">
                   <!-- Quick Switch Persona for Dev mode -->
                   <UButton
@@ -1528,16 +1540,29 @@ onMounted(() => {
     >
       <div class="space-y-4 p-6">
         <div class="flex items-center gap-3">
-          <div class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
-            <UIcon name="i-lucide-trash-2" class="size-6 text-red-600 dark:text-red-400" />
+          <div
+            class="p-2.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400"
+          >
+            <UIcon
+              name="i-lucide-trash-2"
+              class="size-6 text-red-600 dark:text-red-400"
+            />
           </div>
           <div>
-            <h2 class="text-lg font-semibold text-foreground">ยืนยันการลบผู้ใช้งาน</h2>
-            <p class="text-xs text-muted">การดำเนินการนี้จะเก็บถาวรและนำบัญชีผู้ใช้ออกจากระบบ</p>
+            <h2 class="text-lg font-semibold text-foreground">
+              ยืนยันการลบผู้ใช้งาน
+            </h2>
+            <p class="text-xs text-muted">
+              การดำเนินการนี้จะเก็บถาวรและนำบัญชีผู้ใช้ออกจากระบบ
+            </p>
           </div>
         </div>
         <p class="text-sm text-foreground">
-          คุณต้องการลบผู้ใช้งาน <strong class="font-medium text-red-600 dark:text-red-400">{{ userToDelete.displayName }}</strong> ({{ userToDelete.email }}) ใช่หรือไม่?
+          คุณต้องการลบผู้ใช้งาน
+          <strong class="font-medium text-red-600 dark:text-red-400">{{
+            userToDelete.displayName
+          }}</strong>
+          ({{ userToDelete.email }}) ใช่หรือไม่?
         </p>
         <div class="flex justify-end gap-2 pt-2">
           <UButton

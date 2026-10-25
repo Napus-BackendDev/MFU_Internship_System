@@ -21,6 +21,8 @@ export interface StudentImportSourceRow {
   readonly semester?: string
   readonly academicYear?: number
   readonly admissionYear?: number
+  readonly internshipStartsAt?: string
+  readonly internshipEndsAt?: string
   readonly company?: string
   readonly companyAddress?: string
   readonly province?: string
@@ -40,9 +42,16 @@ export interface StudentImportIssue {
   readonly message: string
 }
 
+export interface SkippedStudentSheet {
+  readonly name: string
+  readonly rows: number
+}
+
 export interface ParsedStudentWorkbook {
   readonly rows: readonly StudentImportSourceRow[]
   readonly questionFields: readonly string[]
+  // Sheets with content but no recognisable student header, reported so nothing is dropped silently.
+  readonly skippedSheets: readonly SkippedStudentSheet[]
 }
 
 const HEADER_ALIASES = {
@@ -142,6 +151,13 @@ const HEADER_ALIASES = {
     'ปีที่เข้าศึกษา',
     'ปี'
   ],
+  internshipPeriod: [
+    'internshipPeriod',
+    'Internship Period',
+    'ระยะเวลาการฝึกงาน',
+    'ระยะเวลาฝึกงาน',
+    'ช่วงเวลาฝึกงาน'
+  ],
   company: [
     'company',
     'Company',
@@ -194,6 +210,7 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
 
   const questionFields = new Set<string>()
   const rows: StudentImportSourceRow[] = []
+  const skippedSheets: SkippedStudentSheet[] = []
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName]
     if (!sheet) continue
@@ -221,7 +238,15 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
           })
         })
     )
-    if (headerRowIndex < 0) continue
+    if (headerRowIndex < 0) {
+      const filled = grid.filter(
+        (row) => Array.isArray(row) && row.some((val) => toText(val) !== '')
+      ).length
+      if (filled > 0) {
+        skippedSheets.push({ name: sheetName.slice(0, 80), rows: filled })
+      }
+      continue
+    }
 
     const rawHeaders = (grid[headerRowIndex] as unknown[]).map((h) => toText(h))
     const records: Array<{ index: number; record: Record<string, unknown> }> =
@@ -284,12 +309,15 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
       const admissionYear = parseYear(
         pick(record, HEADER_ALIASES.admissionYear)
       )
-      const explicitName = toText(pick(record, HEADER_ALIASES.name))
-      let rawNameTh = toText(pick(record, HEADER_ALIASES.nameTh))
-      let rawNameEn = toText(pick(record, HEADER_ALIASES.nameEn))
+      const explicitName = toName(pick(record, HEADER_ALIASES.name))
+      let rawNameTh = toName(pick(record, HEADER_ALIASES.nameTh))
+      let rawNameEn = toName(pick(record, HEADER_ALIASES.nameEn))
       let company = toText(pick(record, HEADER_ALIASES.company))
       const companyAddress = toText(pick(record, HEADER_ALIASES.companyAddress))
       const province = toText(pick(record, HEADER_ALIASES.province))
+      const internshipPeriod = parseInternshipPeriod(
+        toText(pick(record, HEADER_ALIASES.internshipPeriod))
+      )
 
       let evaluatorEmail = ''
       let evaluatorName = ''
@@ -453,6 +481,7 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
         ...(semester ? { semester } : {}),
         ...(academicYear !== null ? { academicYear } : {}),
         ...(admissionYear !== null ? { admissionYear } : {}),
+        ...(internshipPeriod ?? {}),
         ...(company ? { company } : {}),
         ...(companyAddress ? { companyAddress } : {}),
         ...(province ? { province } : {}),
@@ -504,7 +533,8 @@ export function parseStudentWorkbook(buffer: Buffer): ParsedStudentWorkbook {
 
   return {
     rows: rowsWithDuplicates,
-    questionFields: [...questionFields].sort()
+    questionFields: [...questionFields].sort(),
+    skippedSheets
   }
 }
 
@@ -608,12 +638,92 @@ function normalizeStudentId(value: unknown): string {
   return toText(value).replace(/\.0$/, '')
 }
 
+const PERIOD_MONTHS: Record<string, number> = {
+  'ม.ค': 1,
+  'ก.พ': 2,
+  'มี.ค': 3,
+  'เม.ย': 4,
+  'พ.ค': 5,
+  'มิ.ย': 6,
+  'ก.ค': 7,
+  'ส.ค': 8,
+  'ก.ย': 9,
+  'ต.ค': 10,
+  'พ.ย': 11,
+  'ธ.ค': 12,
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  sept: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12
+}
+
+// Parses workbook periods such as "4 ส.ค - 21 พ.ย 68" or "4 AUG-21 NOV 2025" into Bangkok-day bounds.
+export function parseInternshipPeriod(
+  text: string
+): { internshipStartsAt: string; internshipEndsAt: string } | null {
+  const match =
+    /^\s*(\d{1,2})\s*([^\d\s\-–—]+)\s*[-–—]\s*(\d{1,2})\s*([^\d\s\-–—]+?)\s*(\d{2,4})\s*$/u.exec(
+      text.replace(/\s+/gu, ' ')
+    )
+  if (!match) return null
+  const month = (token: string): number | undefined =>
+    PERIOD_MONTHS[token.replace(/\.+$/u, '').toLowerCase()]
+  const startMonth = month(match[2]!)
+  const endMonth = month(match[4]!)
+  const rawYear = Number(match[5])
+  if (!startMonth || !endMonth || !Number.isFinite(rawYear)) return null
+  const endYear =
+    rawYear > 2400
+      ? rawYear - 543
+      : rawYear < 100
+        ? rawYear + 2500 - 543
+        : rawYear
+  const startYear = startMonth > endMonth ? endYear - 1 : endYear
+  const startDay = Number(match[1])
+  const endDay = Number(match[3])
+  // Asia/Bangkok day bounds expressed in UTC.
+  const startsAt = new Date(Date.UTC(startYear, startMonth - 1, startDay, -7))
+  const endsAt = new Date(Date.UTC(endYear, endMonth - 1, endDay, 16, 59, 59))
+  if (
+    new Date(Date.UTC(startYear, startMonth - 1, startDay)).getUTCMonth() !==
+      startMonth - 1 ||
+    new Date(Date.UTC(endYear, endMonth - 1, endDay)).getUTCMonth() !==
+      endMonth - 1
+  ) {
+    return null
+  }
+  if (
+    Number.isNaN(startsAt.getTime()) ||
+    Number.isNaN(endsAt.getTime()) ||
+    endsAt <= startsAt
+  )
+    return null
+  return {
+    internshipStartsAt: startsAt.toISOString(),
+    internshipEndsAt: endsAt.toISOString()
+  }
+}
+
 function parseYear(value: unknown): number | null {
   if (value === undefined || value === null || value === '') return null
   const parsed = typeof value === 'number' ? value : Number(toText(value))
   return Number.isSafeInteger(parsed) && parsed >= 2000 && parsed <= 3000
     ? parsed
     : null
+}
+
+// Person names from spreadsheets often carry doubled spaces; collapse them so documents print cleanly.
+function toName(value: unknown): string {
+  return toText(value).replace(/\s+/gu, ' ')
 }
 
 function toText(value: unknown): string {

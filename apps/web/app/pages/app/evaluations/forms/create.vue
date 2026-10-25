@@ -112,7 +112,9 @@ const editorForm = reactive({
   sections: [] as Section[]
 })
 
-const editorActiveTab = ref<'general' | 'special' | 'suggestion' | 'simulator'>('general')
+const editorActiveTab = ref<'general' | 'special' | 'suggestion' | 'simulator'>(
+  'general'
+)
 const selectedForm = ref<CompetencySet | null>(null)
 const selectedVersion = ref<CompetencyVersion | null>(null)
 const selectedSchoolHubId = ref<string>('')
@@ -157,7 +159,10 @@ watch(
     if (newTab === 'simulator') {
       if (selectedSchoolHubId.value) {
         previewSelectedSchoolId.value = selectedSchoolHubId.value
-      } else if (!previewSelectedSchoolId.value && schoolsData.value?.items?.length) {
+      } else if (
+        !previewSelectedSchoolId.value &&
+        schoolsData.value?.items?.length
+      ) {
         const first = schoolsData.value.items[0]
         if (first) {
           previewSelectedSchoolId.value = first.id
@@ -251,7 +256,9 @@ function getSchoolSections(schoolId: string): Section[] {
 }
 
 function getSchoolPrograms(schoolId: string): Program[] {
-  return (programsData.value?.items || []).filter((p) => p.schoolId === schoolId)
+  return (programsData.value?.items || []).filter(
+    (p) => p.schoolId === schoolId
+  )
 }
 
 function isSchoolAllProgramsMode(schoolId: string): boolean {
@@ -443,7 +450,8 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
         weight: 2
       },
       {
-        labelTh: 'การเรียบเรียง การจับใจความ และการถ่ายทอดสารอย่างมีประสิทธิภาพ',
+        labelTh:
+          'การเรียบเรียง การจับใจความ และการถ่ายทอดสารอย่างมีประสิทธิภาพ',
         labelEn: 'Information Synthesis, Writing & Effective Articulation',
         type: 'rating',
         weight: 1
@@ -455,13 +463,15 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     titleEn: 'Professional Competencies: School of Science',
     questions: [
       {
-        labelTh: 'ความเข้าใจระเบียบวิธีวิจัย การวิเคราะห์ข้อมูล และเครื่องมือวิทยาศาสตร์',
+        labelTh:
+          'ความเข้าใจระเบียบวิธีวิจัย การวิเคราะห์ข้อมูล และเครื่องมือวิทยาศาสตร์',
         labelEn: 'Research Methodology, Scientific Tools & Data Analysis',
         type: 'rating',
         weight: 2
       },
       {
-        labelTh: 'การปฏิบัติตามมาตรฐานความปลอดภัยในห้องปฏิบัติการและพื้นที่ปฏิบัติงาน',
+        labelTh:
+          'การปฏิบัติตามมาตรฐานความปลอดภัยในห้องปฏิบัติการและพื้นที่ปฏิบัติงาน',
         labelEn: 'Compliance with Laboratory & Workplace Safety Standards',
         type: 'rating',
         weight: 2
@@ -499,7 +509,8 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     ]
   },
   IT: {
-    titleTh: 'ทักษะวิชาชีพ: สำนักวิชาเทคโนโลยีสารสนเทศ (Information Technology)',
+    titleTh:
+      'ทักษะวิชาชีพ: สำนักวิชาเทคโนโลยีสารสนเทศ (Information Technology)',
     titleEn: 'Professional Competencies: School of Information Technology',
     questions: [
       {
@@ -509,14 +520,17 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
         weight: 2
       },
       {
-        labelTh: 'การปฏิบัติตามมาตรฐานการควบคุมเวอร์ชันโค้ด (Git) และความปลอดภัยไซเบอร์',
-        labelEn: 'Compliance with Version Control (Git) & Cyber Security Best Practices',
+        labelTh:
+          'การปฏิบัติตามมาตรฐานการควบคุมเวอร์ชันโค้ด (Git) และความปลอดภัยไซเบอร์',
+        labelEn:
+          'Compliance with Version Control (Git) & Cyber Security Best Practices',
         type: 'rating',
         weight: 2
       },
       {
         labelTh: 'การค้นคว้าเทคโนโลยีใหม่และการแก้ปัญหาทางเทคนิคด้วยตนเอง',
-        labelEn: 'Self-directed Technical Troubleshooting & Technology Adoption',
+        labelEn:
+          'Self-directed Technical Troubleshooting & Technology Adoption',
         type: 'rating',
         weight: 1
       }
@@ -527,7 +541,8 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     titleEn: 'Professional Competencies: School of Agro-Industry',
     questions: [
       {
-        labelTh: 'ความเข้าใจมาตรฐานความปลอดภัยอาหารและการควบคุมคุณภาพ (GMP/HACCP)',
+        labelTh:
+          'ความเข้าใจมาตรฐานความปลอดภัยอาหารและการควบคุมคุณภาพ (GMP/HACCP)',
         labelEn: 'Food Safety Standards & Quality Control (GMP/HACCP)',
         type: 'rating',
         weight: 2
@@ -564,7 +579,8 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
       },
       {
         labelTh: 'จรรยาบรรณวิชาชีพด้านสุขภาพและการรักษาความลับของผู้รับบริการ',
-        labelEn: 'Healthcare Ethics, Professional Demeanor & Patient Confidentiality',
+        labelEn:
+          'Healthcare Ethics, Professional Demeanor & Patient Confidentiality',
         type: 'rating',
         weight: 1
       }
@@ -582,13 +598,16 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
       },
       {
         labelTh: 'ความปลอดภัยของผู้ป่วย การควบคุมการติดเชื้อ และการบริหารยา',
-        labelEn: 'Patient Safety, Infection Control & Medication Administration',
+        labelEn:
+          'Patient Safety, Infection Control & Medication Administration',
         type: 'rating',
         weight: 2
       },
       {
-        labelTh: 'จรรยาบรรณ การเคารพสิทธิผู้ป่วย และการทำงานร่วมกับทีมสหวิชาชีพ',
-        labelEn: 'Professional Ethics, Patient Rights & Interprofessional Teamwork',
+        labelTh:
+          'จรรยาบรรณ การเคารพสิทธิผู้ป่วย และการทำงานร่วมกับทีมสหวิชาชีพ',
+        labelEn:
+          'Professional Ethics, Patient Rights & Interprofessional Teamwork',
         type: 'rating',
         weight: 1
       }
@@ -600,19 +619,23 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     questions: [
       {
         labelTh: 'ทักษะการซักประวัติ ตรวจร่างกาย และวิเคราะห์ปัญหาทางคลินิก',
-        labelEn: 'Clinical History Taking, Physical Examination & Problem Analysis',
+        labelEn:
+          'Clinical History Taking, Physical Examination & Problem Analysis',
         type: 'rating',
         weight: 2
       },
       {
-        labelTh: 'การตัดสินใจทางคลินิกบนพื้นฐานความปลอดภัยและการแพทย์เชิงประจักษ์',
+        labelTh:
+          'การตัดสินใจทางคลินิกบนพื้นฐานความปลอดภัยและการแพทย์เชิงประจักษ์',
         labelEn: 'Evidence-Based Clinical Decision Making & Patient Safety',
         type: 'rating',
         weight: 2
       },
       {
-        labelTh: 'จรรยาบรรณแพทย์ ความเห็นอกเห็นใจ และการสื่อสารกับผู้ป่วยและญาติ',
-        labelEn: 'Medical Ethics, Compassion & Communication with Patients/Families',
+        labelTh:
+          'จรรยาบรรณแพทย์ ความเห็นอกเห็นใจ และการสื่อสารกับผู้ป่วยและญาติ',
+        labelEn:
+          'Medical Ethics, Compassion & Communication with Patients/Families',
         type: 'rating',
         weight: 1
       }
@@ -623,7 +646,8 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     titleEn: 'Professional Competencies: School of Dentistry',
     questions: [
       {
-        labelTh: 'ทักษะหัตถการทางทันตกรรมและการจัดการพื้นที่คลินิกอย่างถูกสุขลักษณะ',
+        labelTh:
+          'ทักษะหัตถการทางทันตกรรมและการจัดการพื้นที่คลินิกอย่างถูกสุขลักษณะ',
         labelEn: 'Dental Operative Skills & Clinical Sterilization Standards',
         type: 'rating',
         weight: 2
@@ -648,13 +672,15 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     questions: [
       {
         labelTh: 'ทักษะการตรวจวินิจฉัยและการประยุกต์ศาสตร์การแพทย์บูรณาการ',
-        labelEn: 'Integrative Medical Assessment & Therapeutic Technique Application',
+        labelEn:
+          'Integrative Medical Assessment & Therapeutic Technique Application',
         type: 'rating',
         weight: 2
       },
       {
         labelTh: 'ความปลอดภัยในการใช้สมุนไพรและหัตถการเฉพาะทาง',
-        labelEn: 'Safety Standards in Herbal Medicine & Specialized Therapeutics',
+        labelEn:
+          'Safety Standards in Herbal Medicine & Specialized Therapeutics',
         type: 'rating',
         weight: 2
       },
@@ -667,23 +693,29 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     ]
   },
   AS: {
-    titleTh: 'ทักษะวิชาชีพ: สำนักวิชาเวชศาสตร์ชะลอวัยและฟื้นฟูสุขภาพ (Anti-Aging)',
-    titleEn: 'Professional Competencies: School of Anti-Aging & Regenerative Medicine',
+    titleTh:
+      'ทักษะวิชาชีพ: สำนักวิชาเวชศาสตร์ชะลอวัยและฟื้นฟูสุขภาพ (Anti-Aging)',
+    titleEn:
+      'Professional Competencies: School of Anti-Aging & Regenerative Medicine',
     questions: [
       {
         labelTh: 'ความเข้าใจเวชศาสตร์ชะลอวัย สารอาหารบำบัด และการปรับวิถีชีวิต',
-        labelEn: 'Principles of Anti-Aging, Nutraceuticals & Lifestyle Medicine',
+        labelEn:
+          'Principles of Anti-Aging, Nutraceuticals & Lifestyle Medicine',
         type: 'rating',
         weight: 2
       },
       {
-        labelTh: 'การวิเคราะห์ผลตรวจทางห้องปฏิบัติการเฉพาะทางและการวางโปรแกรมสุขภาพ',
-        labelEn: 'Specialized Biomarker Interpretation & Wellness Program Design',
+        labelTh:
+          'การวิเคราะห์ผลตรวจทางห้องปฏิบัติการเฉพาะทางและการวางโปรแกรมสุขภาพ',
+        labelEn:
+          'Specialized Biomarker Interpretation & Wellness Program Design',
         type: 'rating',
         weight: 2
       },
       {
-        labelTh: 'การให้คำปรึกษาด้านสุขภาพและการรักษาความลับข้อมูลสุขภาพส่วนบุคคล',
+        labelTh:
+          'การให้คำปรึกษาด้านสุขภาพและการรักษาความลับข้อมูลสุขภาพส่วนบุคคล',
         labelEn: 'Wellness Coaching Ethics & Personal Health Data Privacy',
         type: 'rating',
         weight: 1
@@ -707,8 +739,10 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
         weight: 2
       },
       {
-        labelTh: 'จรรยาบรรณนักกฎหมาย ความซื่อสัตย์สุจริต และการรักษาความลับของลูกความ',
-        labelEn: 'Legal Professional Ethics, Integrity & Client Confidentiality',
+        labelTh:
+          'จรรยาบรรณนักกฎหมาย ความซื่อสัตย์สุจริต และการรักษาความลับของลูกความ',
+        labelEn:
+          'Legal Professional Ethics, Integrity & Client Confidentiality',
         type: 'rating',
         weight: 1
       }
@@ -725,14 +759,16 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
         weight: 2
       },
       {
-        labelTh: 'ความเข้าใจวัฒนธรรม ธรรมเนียมปฏิบัติ และการเจรจาต่อรองในบริบทจีน',
+        labelTh:
+          'ความเข้าใจวัฒนธรรม ธรรมเนียมปฏิบัติ และการเจรจาต่อรองในบริบทจีน',
         labelEn: 'Chinese Business Culture, Etiquette & Negotiation Dynamics',
         type: 'rating',
         weight: 2
       },
       {
         labelTh: 'การแปลเอกสาร การล่าม และการสื่อสารข้ามวัฒนธรรมอย่างแม่นยำ',
-        labelEn: 'Accurate Translation, Interpretation & Cross-Cultural Delivery',
+        labelEn:
+          'Accurate Translation, Interpretation & Cross-Cultural Delivery',
         type: 'rating',
         weight: 1
       }
@@ -744,13 +780,16 @@ const SCHOOL_PRESETS: Record<string, PresetCriteria> = {
     questions: [
       {
         labelTh: 'การคิดเชิงออกแบบ การวิเคราะห์ปัญหาชุมชน และนวัตกรรมทางสังคม',
-        labelEn: 'Design Thinking, Community Needs Analysis & Social Innovation',
+        labelEn:
+          'Design Thinking, Community Needs Analysis & Social Innovation',
         type: 'rating',
         weight: 2
       },
       {
-        labelTh: 'การมีส่วนร่วมกับชุมชน การประสานงานภาคีเครือข่าย และการลงพื้นที่',
-        labelEn: 'Community Engagement, Multi-Stakeholder Facilitation & Fieldwork',
+        labelTh:
+          'การมีส่วนร่วมกับชุมชน การประสานงานภาคีเครือข่าย และการลงพื้นที่',
+        labelEn:
+          'Community Engagement, Multi-Stakeholder Facilitation & Fieldwork',
         type: 'rating',
         weight: 2
       },
@@ -847,7 +886,8 @@ function initNewForm() {
         },
         {
           labelTh: 'การคิดวิเคราะห์ การแก้ปัญหา และการประยุกต์ใช้งานจริง',
-          labelEn: 'Analytical Thinking, Problem Solving & Practical Application',
+          labelEn:
+            'Analytical Thinking, Problem Solving & Practical Application',
           type: 'rating' as const,
           weight: 1
         }
@@ -1148,6 +1188,11 @@ function removeSectionFromSchool(section: Section) {
   }
 }
 
+function onSectionProgramSelect(section: Section, event: Event): void {
+  section.programId = (event.target as HTMLSelectElement).value
+  onSectionProgramChange(section)
+}
+
 function onSectionProgramChange(section: Section) {
   if (section.programId) {
     const prog = programMap.value.get(section.programId)
@@ -1156,7 +1201,9 @@ function onSectionProgramChange(section: Section) {
       section.title.en = `Specialized Skills: ${prog.name.en}`
     }
   } else {
-    const school = section.schoolId ? schoolMap.value.get(section.schoolId) : null
+    const school = section.schoolId
+      ? schoolMap.value.get(section.schoolId)
+      : null
     section.title.th = `ทักษะเฉพาะทางสำหรับสำนักวิชา${school?.name.th || ''}`
     section.title.en = `Specialized Skills for ${school?.name.en || 'School'}`
   }
@@ -1437,7 +1484,9 @@ onMounted(async () => {
       const latest = versions?.[0]
       if (latest) {
         selectedVersion.value = latest
-        const loadedSections = JSON.parse(JSON.stringify(latest.sections || [])) as Section[]
+        const loadedSections = JSON.parse(
+          JSON.stringify(latest.sections || [])
+        ) as Section[]
         editorForm.sections = loadedSections.map((sec) => ({
           ...sec,
           programId: sec.programId || ''
@@ -1657,17 +1706,17 @@ onMounted(async () => {
       class="rounded-2xl border border-default bg-default p-4 sm:p-6 shadow-xs min-h-[500px]"
     >
       <div v-if="loadingForm" class="py-16 text-center text-muted">
-        <UIcon name="i-lucide-loader" class="size-8 animate-spin mx-auto mb-3" />
+        <UIcon
+          name="i-lucide-loader"
+          class="size-8 animate-spin mx-auto mb-3"
+        />
         <p class="font-medium">กำลังโหลดข้อมูลแบบฟอร์ม...</p>
       </div>
 
       <!-- ================================================================= -->
       <!-- PANEL 1: ข้อมูลทั่วไป & หมวดทั่วไป (Core) -->
       <!-- ================================================================= -->
-      <div
-        v-else-if="editorActiveTab === 'general'"
-        class="space-y-6"
-      >
+      <div v-else-if="editorActiveTab === 'general'" class="space-y-6">
         <!-- Form Settings Bar -->
         <div class="rounded-xl border border-default bg-muted/10 p-4 space-y-3">
           <div class="flex items-center justify-between">
@@ -1678,8 +1727,8 @@ onMounted(async () => {
               <span>ข้อมูลทั่วไปของแบบฟอร์ม (Form Information)</span>
             </h3>
             <span class="text-[11px] text-muted">
-              ทุกคนในทุกสำนักวิชาจะได้รับเกณฑ์ในหมวดนี้เหมือนกันทั้งหมด
-              (General Core Competencies)
+              ทุกคนในทุกสำนักวิชาจะได้รับเกณฑ์ในหมวดนี้เหมือนกันทั้งหมด (General
+              Core Competencies)
             </span>
           </div>
 
@@ -1834,12 +1883,8 @@ onMounted(async () => {
                         <option value="rating">
                           ⭐️ มาตราส่วนคะแนน (Rating)
                         </option>
-                        <option value="text">
-                          📝 ความเห็นปลายเปิด (Text)
-                        </option>
-                        <option value="boolean">
-                          ☑️ ใช่/ไม่ใช่ (Yes/No)
-                        </option>
+                        <option value="text">📝 ความเห็นปลายเปิด (Text)</option>
+                        <option value="boolean">☑️ ใช่/ไม่ใช่ (Yes/No)</option>
                       </select>
                     </div>
 
@@ -1895,10 +1940,7 @@ onMounted(async () => {
       <!-- ================================================================= -->
       <!-- PANEL 2: หมวดเฉพาะสำนักวิชา (SCHOOL HUB) -->
       <!-- ================================================================= -->
-      <div
-        v-else-if="editorActiveTab === 'special'"
-        class="space-y-4"
-      >
+      <div v-else-if="editorActiveTab === 'special'" class="space-y-4">
         <!-- Subtitle & Stats Bar -->
         <div
           class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-secondary/20 bg-secondary/[0.04] px-4 py-2.5 text-xs"
@@ -2136,7 +2178,8 @@ onMounted(async () => {
                 />
                 <UButton
                   v-if="
-                    currentHubSchool && canAddProgramToSchool(currentHubSchool.id)
+                    currentHubSchool &&
+                    canAddProgramToSchool(currentHubSchool.id)
                   "
                   color="warning"
                   icon="i-lucide-plus"
@@ -2264,7 +2307,9 @@ onMounted(async () => {
 
             <!-- Empty State -->
             <div
-              v-if="currentHubSchool && !isSchoolConfigured(currentHubSchool.id)"
+              v-if="
+                currentHubSchool && !isSchoolConfigured(currentHubSchool.id)
+              "
               class="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-default/70 p-8 text-center space-y-3 my-auto"
             >
               <span
@@ -2346,9 +2391,7 @@ onMounted(async () => {
                           v-if="section.programId"
                           class="text-[10px] font-mono font-bold text-secondary"
                         >
-                          [{{
-                            programMap.get(section.programId)?.programCode
-                          }}]
+                          [{{ programMap.get(section.programId)?.programCode }}]
                         </span>
                       </label>
                       <input
@@ -2372,10 +2415,7 @@ onMounted(async () => {
                       <select
                         :value="section.programId || ''"
                         class="mt-0.5 h-8 w-full rounded-md border border-default bg-default px-2 text-xs text-highlighted focus:border-secondary focus:outline-none"
-                        @change="
-                          section.programId = ($event.target as HTMLSelectElement).value;
-                          onSectionProgramChange(section);
-                        "
+                        @change="onSectionProgramSelect(section, $event)"
                       >
                         <option value="">
                           🌐 ทุกหลักสูตรในสำนักวิชา (ใช้เกณฑ์ร่วมกัน)
@@ -2544,10 +2584,7 @@ onMounted(async () => {
       <!-- ================================================================= -->
       <!-- PANEL 3: หมวดคำแนะนำ (SUGGESTION) -->
       <!-- ================================================================= -->
-      <div
-        v-else-if="editorActiveTab === 'suggestion'"
-        class="space-y-4"
-      >
+      <div v-else-if="editorActiveTab === 'suggestion'" class="space-y-4">
         <!-- Info Callout -->
         <div
           class="flex items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] px-4 py-2.5 text-xs"
@@ -2561,8 +2598,8 @@ onMounted(async () => {
               >หมวดคำแนะนำและข้อเสนอแนะ (Suggestion & Recommendations)</span
             >
             <span class="text-muted hidden sm:inline"
-              >— คำถามปลายเปิดสำหรับให้ผู้ประเมินบันทึกจุดเด่น
-              สิ่งที่ควรพัฒนา หรือคำแนะนำแก่นักศึกษา</span
+              >— คำถามปลายเปิดสำหรับให้ผู้ประเมินบันทึกจุดเด่น สิ่งที่ควรพัฒนา
+              หรือคำแนะนำแก่นักศึกษา</span
             >
           </div>
         </div>
@@ -2849,7 +2886,9 @@ onMounted(async () => {
                       :key="val"
                       class="flex flex-col items-center gap-1"
                     >
-                      <span class="size-8 rounded-lg border border-default grid place-items-center text-xs font-bold text-muted hover:border-primary hover:text-primary cursor-pointer">
+                      <span
+                        class="size-8 rounded-lg border border-default grid place-items-center text-xs font-bold text-muted hover:border-primary hover:text-primary cursor-pointer"
+                      >
                         {{ (q.scaleMin || 1) + val - 1 }}
                       </span>
                     </div>
@@ -2870,11 +2909,18 @@ onMounted(async () => {
                 </div>
 
                 <!-- Boolean Simulator -->
-                <div v-else-if="q.type === 'boolean'" class="pt-2 flex items-center gap-4">
-                  <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+                <div
+                  v-else-if="q.type === 'boolean'"
+                  class="pt-2 flex items-center gap-4"
+                >
+                  <label
+                    class="flex items-center gap-1.5 text-xs cursor-pointer"
+                  >
                     <input type="radio" disabled name="demo" /> ใช่ / ผ่าน
                   </label>
-                  <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+                  <label
+                    class="flex items-center gap-1.5 text-xs cursor-pointer"
+                  >
                     <input type="radio" disabled name="demo" /> ไม่ใช่ / ไม่ผ่าน
                   </label>
                 </div>
@@ -3018,12 +3064,15 @@ onMounted(async () => {
             >
               [{{ sc.schoolCode }}] {{ sc.name.th }} ({{
                 getSchoolQuestionsCount(sc.id)
-              }} ข้อ)
+              }}
+              ข้อ)
             </option>
           </select>
         </div>
 
-        <div class="flex items-center justify-end gap-2 pt-2 border-t border-default">
+        <div
+          class="flex items-center justify-end gap-2 pt-2 border-t border-default"
+        >
           <UButton
             color="neutral"
             label="ยกเลิก"

@@ -183,14 +183,14 @@ function semesterEnglishLabel(rawValue: string | undefined): string {
     normalized === '1' ||
     normalized === 'ภาคการศึกษาต้น'
   ) {
-    return 'Semester 1'
+    return 'First'
   }
   if (
     normalized === 'second' ||
     normalized === '2' ||
     normalized === 'ภาคการศึกษาปลาย'
   ) {
-    return 'Semester 2'
+    return 'Second'
   }
   if (
     normalized === 'third' ||
@@ -198,7 +198,7 @@ function semesterEnglishLabel(rawValue: string | undefined): string {
     normalized === 'summer' ||
     normalized.includes('ฤดูร้อน')
   ) {
-    return 'Summer Session'
+    return 'Summer'
   }
   return raw || '-'
 }
@@ -357,9 +357,19 @@ export function toStudentDirectoryExportValues(
     hardSkillScore: formatScore(scores?.hardSkill, locale),
     softSkillScore: formatScore(scores?.softSkill, locale),
     ...(() => {
-      let hardSkills: Array<{ index: number; titleTh: string; titleEn: string; score: number | null }> = []
-      let softSkills: Array<{ index: number; titleTh: string; titleEn: string; score: number | null }> = []
-      let issuedOn = meta?.issuedOn || '-'
+      let hardSkills: Array<{
+        index: number
+        titleTh: string
+        titleEn: string
+        score: number | null
+      }> = []
+      let softSkills: Array<{
+        index: number
+        titleTh: string
+        titleEn: string
+        score: number | null
+      }> = []
+      let issuedOn = meta?.issuedOn || ''
 
       if (assignment?.answers && assignment?.questionSnapshot) {
         const answers = assignment.answers as Record<string, unknown>
@@ -376,7 +386,8 @@ export function toStudentDirectoryExportValues(
         if (hardSection?.questions) {
           hardSkills = hardSection.questions.map((q, idx) => {
             const val = answers[q.id]
-            const numVal = typeof val === 'number' && Number.isFinite(val) ? val : null
+            const numVal =
+              typeof val === 'number' && Number.isFinite(val) ? val : null
             return {
               index: idx + 1,
               titleTh: q.label?.th || q.label?.en || `Hard Skill ${idx + 1}`,
@@ -390,7 +401,8 @@ export function toStudentDirectoryExportValues(
         if (softSection?.questions) {
           softSkills = softSection.questions.map((q, idx) => {
             const val = answers[q.id]
-            const numVal = typeof val === 'number' && Number.isFinite(val) ? val : null
+            const numVal =
+              typeof val === 'number' && Number.isFinite(val) ? val : null
             return {
               index: idx + 1,
               titleTh: q.label?.th || q.label?.en || `Soft Skill ${idx + 1}`,
@@ -403,7 +415,7 @@ export function toStudentDirectoryExportValues(
 
       if (!meta?.issuedOn && assignment?.submittedAt) {
         const d = new Date(assignment.submittedAt)
-        issuedOn = Number.isNaN(d.getTime()) ? '-' : d.toISOString().slice(0, 10)
+        issuedOn = Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
       }
 
       return {

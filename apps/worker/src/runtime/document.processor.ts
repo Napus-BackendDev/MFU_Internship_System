@@ -125,6 +125,7 @@ export class DocumentProcessor {
       if (snapshot.template.fontAssets.length === 1) {
         const fontAsset = snapshot.template.fontAssets[0]
         if (!fontAsset) throw new Error('FONT_ASSET_REQUIRED')
+        let pinnedFont: Uint8Array | undefined
         try {
           const fontResponse = await this.s3.send(
             new GetObjectCommand({
@@ -132,15 +133,20 @@ export class DocumentProcessor {
               Key: fontAsset.key
             })
           )
-          if (!fontResponse.Body) throw new Error('FONT_ASSET_NOT_FOUND')
-          fontBytes = await fontResponse.Body.transformToByteArray()
+          pinnedFont = await fontResponse.Body?.transformToByteArray()
+        } catch {
+          pinnedFont = undefined
+        }
+        if (pinnedFont) {
+          // A fetched pinned font must match its snapshot checksum; never fall back past a mismatch.
           if (
-            createHash('sha256').update(fontBytes).digest('hex') !==
+            createHash('sha256').update(pinnedFont).digest('hex') !==
             fontAsset.sha256
           ) {
             throw new Error('FONT_ASSET_CHECKSUM_MISMATCH')
           }
-        } catch {
+          fontBytes = pinnedFont
+        } else {
           fontBytes = await fs.promises.readFile(localFontFallback)
         }
       } else if (snapshot.template.fontAssets.length === 0) {
