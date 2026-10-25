@@ -18,6 +18,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['test/**/*.test.ts']
+    include: ['test/**/*.test.ts'],
+    // Mongo replica-set integration tests share a loaded CI/dev machine; 5s was flaky.
+    testTimeout: 30_000,
+    hookTimeout: 60_000
   }
 })

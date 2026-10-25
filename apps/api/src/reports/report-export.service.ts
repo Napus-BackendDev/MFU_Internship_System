@@ -684,18 +684,23 @@ export class ReportExportService {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     const objectKey = `report-exports/${reportExport.id}/${sha256}.xlsx`
 
-    // Cache to disk
-    try {
-      const dir = join(process.cwd(), 'tmp', 'exports')
-      await mkdir(dir, { recursive: true })
-      await writeFile(join(dir, `${reportExport.id}.xlsx`), bytes)
-    } catch (err) {
-      this.logger.warn(
-        `Failed to write export to local disk: ${(err as Error).message}`
-      )
+    const production = process.env.NODE_ENV === 'production'
+
+    // Local disk cache is a development convenience only: production exports hold student
+    // personal data, and API replicas do not share a disk.
+    if (!production) {
+      try {
+        const dir = join(process.cwd(), 'tmp', 'exports')
+        await mkdir(dir, { recursive: true })
+        await writeFile(join(dir, `${reportExport.id}.xlsx`), bytes)
+      } catch (err) {
+        this.logger.warn(
+          `Failed to write export to local disk: ${(err as Error).message}`
+        )
+      }
     }
 
-    // Best-effort S3 upload
+    let uploaded = false
     try {
       await this.s3.send(
         new PutObjectCommand({
@@ -707,10 +712,15 @@ export class ReportExportService {
           Metadata: { sha256 }
         })
       )
+      uploaded = true
     } catch (err) {
       this.logger.warn(
         `S3 upload skipped or unavailable: ${(err as Error).message}`
       )
+    }
+    if (!uploaded && production) {
+      // Never mark a report ready when its object does not exist; the queue retries it.
+      throw new Error('REPORT_EXPORT_STORAGE_UNAVAILABLE')
     }
 
     await this.exports.updateOne(

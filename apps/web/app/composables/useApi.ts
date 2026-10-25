@@ -1,3 +1,5 @@
+import { friendlyApiMessage } from '../utils/api-error'
+
 interface ApiRequestOptions {
   readonly method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   readonly body?: Readonly<Record<string, unknown>> | FormData
@@ -99,6 +101,15 @@ export function useApi() {
         )
       }
 
+      // Callers show err.message to people; keep the technical text on the error object.
+      const friendly = friendlyApiMessage(err)
+      if (friendly && err instanceof Error) {
+        Object.defineProperty(err, 'rawMessage', {
+          value: err.message,
+          enumerable: false
+        })
+        err.message = friendly
+      }
       throw err
     }
   }
