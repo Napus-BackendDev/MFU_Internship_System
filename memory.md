@@ -480,3 +480,10 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - เพิ่ม `pnpm env:check:production <ไฟล์ env>` (scripts/check-production-env.mjs) ตรวจค่า production ด้วยกฎเดียวกับที่ API/Worker บังคับตอนบูต ไม่พิมพ์ secret; มี contract test 3 เคส (config ครบผ่าน, localhost/plaintext/capture/dev-auth/cookie ไม่ปลอดภัยล้ม, ไม่รั่ว secret) และบันทึกวิธีใช้ใน PRODUCTION_RUNBOOK.md
 - ผลตรวจสุดท้ายบนต้นไม้สุดท้าย รันตัวเดียว: format, openapi check/lint, lint, typecheck, test (contracts 25, API 478, Worker 51, Web 87), e2e 71/71, build ผ่านทั้งหมด
 - ยังต้องทำโดยเจ้าของระบบ: ค่าจริง OIDC/Mongo TLS/Redis TLS/S3/SMTP + ทดสอบบน staging, ตัดสินใจรูปแบบเลขที่เอกสารและการส่งเมล Certificate, ซ่อม pnpm store กลางของเครื่อง
+
+### 2026-10-26 — ตรวจสอบและยืนยันการ Push ขึ้น GitHub (origin/main)
+
+- ผู้ใช้: "push ขึ้น github ให้หน่อยสิ"
+- ข้อตกลงที่ยืนยัน: ตรวจสอบสถานะ Git ของโครงการและทำการ Push การเปลี่ยนแปลงทั้งหมดขึ้น GitHub remote `origin/main`
+- ผลที่ทำจริง: ตรวจสอบและรัน `git push origin main` เรียบร้อย ล่าสุดอยู่ที่ commit `333bfb5` สาขา `main` ซิงค์ตรงกับ `origin/main` บน GitHub (https://github.com/Napus-BackendDev/MFU_Internship_System.git) ต้นไม้ทำงานสะอาด 100%
+- เรื่องค้าง: ไม่มี
