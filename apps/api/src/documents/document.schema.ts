@@ -148,6 +148,10 @@ export class GeneratedDocumentRecord {
   @Prop({ required: true })
   public templateVersionId!: string
 
+  // Human-readable sequential number, e.g. MFU-CERT-2569-000123. Older documents lack it.
+  @Prop({ trim: true })
+  public documentNumber?: string
+
   @Prop({ default: [], type: [String] })
   public evaluationIds!: string[]
 

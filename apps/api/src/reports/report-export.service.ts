@@ -922,11 +922,6 @@ export class ReportExportService {
       })
     }
     const studentIds = result.items.map((s) => s.studentId)
-    const assignmentIds = result.items.flatMap((s) =>
-      (s.directoryRelations?.assignments ?? []).flatMap((a) =>
-        a.id ? [a.id] : []
-      )
-    )
 
     // generatedDocuments reference the student's record id, not the student number in the workbook.
     const docByStudentId = new Map<string, { _id?: Types.ObjectId | string }>()
@@ -995,24 +990,6 @@ export class ReportExportService {
       }
     }
 
-    const deliveryByAssignmentId = new Map<string, { status?: string }>()
-    if (assignmentIds.length > 0) {
-      try {
-        const dels = await this.connection
-          .collection('deliveries')
-          .find({ assignmentId: { $in: assignmentIds } })
-          .toArray()
-        for (const del of dels) {
-          deliveryByAssignmentId.set(
-            String(del.assignmentId),
-            del as { status?: string }
-          )
-        }
-      } catch {
-        // collection may not exist yet in test
-      }
-    }
-
     return result.items.map((student) => {
       if (!student.schoolId || !student.programId) {
         throw new UnprocessableEntityException({
@@ -1020,20 +997,12 @@ export class ReportExportService {
         })
       }
       const doc = docByStudentId.get(student.studentId)
-      const studentAssignments = student.directoryRelations?.assignments ?? []
-      const assignment = filters.cycleId
-        ? studentAssignments.find((a) => a.cycleId === filters.cycleId)
-        : studentAssignments[0]
-      const delivery = assignment?.id
-        ? deliveryByAssignmentId.get(assignment.id)
-        : undefined
       const pdfUrl = doc?._id
         ? `${this.publicWebUrl}/api/v2/documents/generated-documents/${String(doc._id)}/download-url`
         : ''
-      const emailSent =
-        delivery?.status === 'delivered' || delivery?.status === 'sent'
-          ? 'EMAIL_SENT'
-          : ''
+      // EMAIL_SENT belongs to the Cer PDF mail-merge workflow (certificate mailed). This system only
+      // sends evaluation invitations, so pre-filling it would make that workflow skip students.
+      const emailSent = ''
 
       return {
         schoolId: student.schoolId,

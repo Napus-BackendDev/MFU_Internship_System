@@ -996,6 +996,28 @@ export class DocumentsService {
     return document.toJSON()
   }
 
+  // MFU-CERT-<Buddhist year>-<6 digit sequence>. The counter shares the creation transaction,
+  // so an aborted request never burns or duplicates a number.
+  private async allocateDocumentNumber(
+    documentType: string,
+    session?: ClientSession
+  ): Promise<string> {
+    const prefix = documentType === 'certificate' ? 'CERT' : 'TR'
+    const year = new Date().getFullYear() + 543
+    const counter = await this.documents.db
+      .collection<{ _id: string; seq: number }>('documentCounters')
+      .findOneAndUpdate(
+        { _id: `${prefix}-${year}` },
+        { $inc: { seq: 1 } },
+        {
+          upsert: true,
+          returnDocument: 'after',
+          ...(session ? { session } : {})
+        }
+      )
+    return `MFU-${prefix}-${year}-${String(counter?.seq ?? 1).padStart(6, '0')}`
+  }
+
   private async createGenerationRequest(input: {
     readonly actor: AuthenticatedActor
     readonly canonicalStudentId: string
@@ -1030,14 +1052,20 @@ export class DocumentsService {
         ),
         status: 'queued' as const
       }
+      const documentNumber = await this.allocateDocumentNumber(
+        input.sourceSnapshot.template.documentType,
+        session
+      )
       const [document] = session
-        ? await this.documents.create([record], { session })
-        : await this.documents.create([record])
+        ? await this.documents.create([{ ...record, documentNumber }], {
+            session
+          })
+        : await this.documents.create([{ ...record, documentNumber }])
       if (!document)
         throw new Error('Document request write returned no record')
       document.sourceSnapshot = {
         ...input.sourceSnapshot,
-        documentNumber: `MFU-${input.sourceSnapshot.template.documentType === 'certificate' ? 'CERT' : 'TR'}-${document.id.toUpperCase()}`
+        documentNumber
       }
       await document.save()
       await this.auditService.record(
@@ -1127,7 +1155,8 @@ export class DocumentsService {
           documentType,
           documentNumber:
             document.status === 'ready' && documentType
-              ? `MFU-${documentType === 'certificate' ? 'CERT' : 'TR'}-${document.id.toUpperCase()}`
+              ? (document.documentNumber ??
+                `MFU-${documentType === 'certificate' ? 'CERT' : 'TR'}-${document.id.toUpperCase()}`)
               : null
         }
       }),
@@ -1192,7 +1221,8 @@ export class DocumentsService {
       documentType,
       documentNumber:
         document.status === 'ready' && documentType
-          ? `MFU-${documentType === 'certificate' ? 'CERT' : 'TR'}-${id.toUpperCase()}`
+          ? (document.documentNumber ??
+            `MFU-${documentType === 'certificate' ? 'CERT' : 'TR'}-${id.toUpperCase()}`)
           : null
     }
   }

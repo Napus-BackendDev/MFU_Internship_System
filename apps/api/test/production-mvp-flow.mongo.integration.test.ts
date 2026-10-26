@@ -816,9 +816,11 @@ describe('production MVP flow across import, invitation, evaluation, and documen
       .findById(document.id)
       .select('+sourceSnapshot')
       .lean()
+    // Readable sequential number, stored on the document and frozen into its snapshot.
+    expect(persistedDocument?.documentNumber).toMatch(/^MFU-CERT-\d{4}-\d{6}$/u)
     expect(persistedDocument?.sourceSnapshot).toMatchObject({
       snapshotVersion: 1,
-      documentNumber: `MFU-CERT-${document.id.toUpperCase()}`,
+      documentNumber: persistedDocument?.documentNumber,
       template: {
         versionId: documentVersion.id,
         documentType: 'certificate',

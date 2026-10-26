@@ -467,3 +467,10 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - pnpm store กลางของเครื่อง (`AppData\Local\pnpm\store\v11\index.db`) เสียหาย ติดตั้งใช้ `--store-dir ./.pnpm-store` ในโปรเจกต์ (อยู่ใน .gitignore) ไม่ได้ลบของเดิม
 - Playwright: expect 15s, test 60s (dev server คอมไพล์ช้ารอบแรก) ห้ามรันสองชุด e2e พร้อมกัน (แย่งพอร์ต 18080/18081); ตั้ง `TEST_REDIS_URL` ชี้ Redis จริงทำให้เทสต์ที่เคยข้ามรันครบ (API 478, Worker 51, Web 87)
 - ผลสุดท้ายที่สะอาด: format, lint, typecheck, test, openapi check/lint, build ผ่าน; e2e 71/71 (รันตัวเดียว)
+
+### 2026-10-26 — ปิดงาน: เลขที่เอกสารอ่านง่าย, EMAIL_SENT, ทดสอบอีเมล, push
+
+- เลขที่เอกสารใหม่เป็นลำดับต่อเนื่อง `MFU-CERT|TR-<พ.ศ.>-<6 หลัก>` (เก็บใน `documentNumber`, ตัวนับ atomic ใน `documentCounters`); เอกสารเก่ายังใช้เลขแบบเดิมจาก id (รูปแบบนี้เป็นค่าเริ่มต้นที่ผมเลือก owner เปลี่ยนได้)
+- EMAIL_SENT ใน Excel เว้นว่างเสมอ: ในต้นแบบหมายถึง "ส่งเมล Certificate แล้ว" ซึ่งระบบนี้ไม่ส่ง การเติมจากสถานะเมลคำเชิญจะทำให้ workflow เมลเมิร์จของต้นแบบข้ามนักศึกษา
+- ทดสอบอีเมลบน Mailpit (capture เท่านั้น ไม่ส่งออกนอก): SMTP test ได้ 1 ฉบับ, เมลคำเชิญมีลิงก์และ PIN 16 หลักถูกต้อง; ผู้ใช้อนุญาตให้ push ขึ้น origin/main (ตรวจแล้ว github.com / Napus-BackendDev)
+- Production bundle ของเว็บไม่มี simple-git/shell-quote/node-forge/brace-expansion/launch-editor (ตรวจ `.output/server/node_modules`) ช่องโหว่ที่เหลือจึงเป็น tooling ของ dev/build
