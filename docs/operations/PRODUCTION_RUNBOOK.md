@@ -47,6 +47,14 @@ Production transport requirements are enforced at startup: `MONGODB_URI` must us
 
 Environment SMTP remains the default. Production delivery uses implicit TLS when `secure=true`; when `secure=false`, the Worker requires STARTTLS and fails rather than downgrade to plaintext. A System Administrator may activate the encrypted database override from `/app/settings/smtp`; the password is write-only and encrypted with AES-256-GCM. Store the encryption key only in Secret Manager, inject the same value into API and Worker, back it up separately, and do not rotate it until existing SMTP ciphertext has been re-encrypted through an approved procedure. Test sending in Production is an external side effect and requires an approved recipient.
 
+Before deploying, validate the real values offline with the same rules the services enforce at startup (secrets are never printed):
+
+```bash
+pnpm env:check:production <path-to-production-env-file>
+```
+
+A `FAIL` result lists each rule that is not met (placeholder, localhost, plaintext transport, missing OIDC value, and so on). Fix the file and re-run until it prints `OK`. This only proves the configuration shape; connect to the real OIDC provider, MongoDB, Redis, S3 and SMTP in staging as described below.
+
 ## 5. Build and stage
 
 Production runtime Compose is digest-only and has no `build:` configuration. The protected `publish-images.yaml` workflow runs only by explicit dispatch from `main` with confirmation and the `production-images` environment. Configure that GitHub Environment to require approval by a separate release owner; protect `main` with required CI checks, reviewed changes, and restricted direct pushes before enabling the workflow. It runs the full quality gate, Gitleaks history scan and CodeQL analysis; publishes commit/run-tagged GHCR candidates with BuildKit max-level provenance and SBOM; scans each exact pushed digest for HIGH/CRITICAL vulnerabilities; then keylessly signs and verifies that digest with Cosign. A failed scan or signature step may leave an unsigned candidate in GHCR; it is not deployable and must not be copied into Production configuration. Review the per-image digest summary and retain the run and scan evidence with the release record.

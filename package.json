@@ -17,7 +17,7 @@
     "start": "pnpm --parallel --filter @internship/web --filter @internship/api --filter @internship/worker start",
     "lint": "pnpm -r --if-present lint && pnpm exec eslint --config eslint.config.mjs playwright.config.ts tests/e2e/*.ts tests/**/*.mjs infrastructure/**/*.mjs packages/**/*.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test:contracts": "node --test tests/infra/compose-security.test.mjs tests/infra/quality-gate-contract.test.mjs tests/web/document-template-editor.node.test.mjs",
+    "test:contracts": "node --test tests/infra/compose-security.test.mjs tests/infra/production-env-check.test.mjs tests/infra/quality-gate-contract.test.mjs tests/web/document-template-editor.node.test.mjs",
     "test": "pnpm test:contracts && pnpm -r --if-present test",
     "test:e2e": "pnpm exec tsc --noEmit -p tests/e2e/tsconfig.json && vitest run tests/e2e/foundation.test.ts && playwright test",
     "format:check": "prettier --check .",
@@ -30,6 +30,7 @@
     "openapi:lint": "redocly lint docs/api/openapi.yaml",
     "openapi:generate": "openapi-typescript docs/api/openapi.yaml -o packages/api-client/src/generated/openapi.ts",
     "openapi:check": "openapi-typescript docs/api/openapi.yaml -o packages/api-client/src/generated/openapi.ts --check",
+    "env:check:production": "pnpm --filter @internship/config build && node scripts/check-production-env.mjs",
     "verify": "pnpm format:check && pnpm openapi:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e && pnpm openapi:lint && pnpm build"
   },
   "devDependencies": {

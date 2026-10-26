@@ -474,3 +474,9 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - EMAIL_SENT ใน Excel เว้นว่างเสมอ: ในต้นแบบหมายถึง "ส่งเมล Certificate แล้ว" ซึ่งระบบนี้ไม่ส่ง การเติมจากสถานะเมลคำเชิญจะทำให้ workflow เมลเมิร์จของต้นแบบข้ามนักศึกษา
 - ทดสอบอีเมลบน Mailpit (capture เท่านั้น ไม่ส่งออกนอก): SMTP test ได้ 1 ฉบับ, เมลคำเชิญมีลิงก์และ PIN 16 หลักถูกต้อง; ผู้ใช้อนุญาตให้ push ขึ้น origin/main (ตรวจแล้ว github.com / Napus-BackendDev)
 - Production bundle ของเว็บไม่มี simple-git/shell-quote/node-forge/brace-expansion/launch-editor (ตรวจ `.output/server/node_modules`) ช่องโหว่ที่เหลือจึงเป็น tooling ของ dev/build
+
+### 2026-10-26 — เครื่องมือตรวจ config โปรดักชัน และผลตรวจสุดท้าย
+
+- เพิ่ม `pnpm env:check:production <ไฟล์ env>` (scripts/check-production-env.mjs) ตรวจค่า production ด้วยกฎเดียวกับที่ API/Worker บังคับตอนบูต ไม่พิมพ์ secret; มี contract test 3 เคส (config ครบผ่าน, localhost/plaintext/capture/dev-auth/cookie ไม่ปลอดภัยล้ม, ไม่รั่ว secret) และบันทึกวิธีใช้ใน PRODUCTION_RUNBOOK.md
+- ผลตรวจสุดท้ายบนต้นไม้สุดท้าย รันตัวเดียว: format, openapi check/lint, lint, typecheck, test (contracts 25, API 478, Worker 51, Web 87), e2e 71/71, build ผ่านทั้งหมด
+- ยังต้องทำโดยเจ้าของระบบ: ค่าจริง OIDC/Mongo TLS/Redis TLS/S3/SMTP + ทดสอบบน staging, ตัดสินใจรูปแบบเลขที่เอกสารและการส่งเมล Certificate, ซ่อม pnpm store กลางของเครื่อง
