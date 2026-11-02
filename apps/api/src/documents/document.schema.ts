@@ -29,8 +29,8 @@ export class DocumentTemplateRecord {
   @Prop({ enum: ['transcript', 'certificate'] })
   public documentType?: 'transcript' | 'certificate'
 
-  @Prop({ default: 'active', enum: ['active', 'archived'] })
-  public status!: 'active' | 'archived'
+  @Prop({ default: 'active', enum: ['active', 'inactive', 'archived'] })
+  public status!: 'active' | 'inactive' | 'archived'
 }
 
 export const DocumentTemplateSchema = SchemaFactory.createForClass(

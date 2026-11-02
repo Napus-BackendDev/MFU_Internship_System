@@ -487,3 +487,45 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - ข้อตกลงที่ยืนยัน: ตรวจสอบสถานะ Git ของโครงการและทำการ Push การเปลี่ยนแปลงทั้งหมดขึ้น GitHub remote `origin/main`
 - ผลที่ทำจริง: ตรวจสอบและรัน `git push origin main` เรียบร้อย ล่าสุดอยู่ที่ commit `333bfb5` สาขา `main` ซิงค์ตรงกับ `origin/main` บน GitHub (https://github.com/Napus-BackendDev/MFU_Internship_System.git) ต้นไม้ทำงานสะอาด 100%
 - เรื่องค้าง: ไม่มี
+
+### 2026-10-28 — สกัดโครงสร้างหัวข้อและข้อกำหนดโปสเตอร์ ADT INNOFEST 2026 (SE-08.png)
+
+- ผู้ใช้: ขอให้ดูภาพ `C:\Users\asus\Downloads\SE_Poster_ADT Innofest 2026\SE-08.png` และสกัดหัวข้อทั้งหมดออกมาว่าโปสเตอร์ต้องการข้อมูลอะไรบ้าง
+- ข้อตกลงที่ยืนยัน: อ่านไฟล์ภาพผ่าน multimodal vision และแยกหัวข้อ โครงสร้างข้อมูล และสิ่งที่ต้องกรอกในโปสเตอร์อย่างละเอียดครบถ้วน
+- ผลที่ทำจริง: ตรวจสอบภาพโปสเตอร์ SE-08 (Internship Transcript System) พบโครงสร้าง 8 ส่วนหลัก:
+  1. Title & Header (ชื่อโครงการ: Internship Transcript System, สถาบัน MFU, งาน ADT INNOFEST 2026)
+  2. Project Overview / Introduction (ภาพรวม ปัญหา ที่มา)
+  3. Scope / Methods (ขอบเขตงานและเทคนิคที่ใช้ 5 บูลเล็ต)
+  4. Success Metrics (ตัววัดความสำเร็จ 4 บูลเล็ต)
+  5. Objective (วัตถุประสงค์ 5 บูลเล็ต)
+  6. Key Stakeholders (ผู้มีส่วนได้ส่วนเสีย 4 ฝ่าย)
+  7. Target Audience (กลุ่มเป้าหมายผู้ใช้งาน)
+  8. Contact Information (ชื่อ PM, เบอร์โทร, อีเมล)
+  9. Footer Team Members (ข้อมูลสมาชิก 4 คน: ID No. และ Name ภาษาอังกฤษ)
+- เรื่องค้าง: ไม่มี
+
+### 2026-10-28 — จัดทำเนื้อหาโปสเตอร์วิชาการ ADT INNOFEST 2026 สำหรับ Internship Transcript System
+
+- ผู้ใช้: ขอให้ดูระบบจริงและเขียนข้อมูลใส่โปสเตอร์ SE-08.png ให้โดดเด่น ใช้คำเรียบง่าย ทรงพลัง น่าดึงดูด
+- ข้อตกลงที่ยืนยัน: นำฟีเจอร์และจุดแข็งจริงของระบบ (End-to-End Evaluation, Zero-Friction PIN, Instant PDF Issuance, Multi-Skill Transcript, 62-Column Report, Audit Trail) มาสังเคราะห์เป็นข้อความภาษาอังกฤษระดับ Professional Academic Showcase พร้อมคำแปลภาษาไทย
+- ผลที่ทำจริง: จัดทำชุดข้อความครบทั้ง 8 ส่วนหลัก (Overview, Objective, Scope/Methods, Key Stakeholders, Target Audience, Success Metrics, Contact, Footer)
+- เรื่องค้าง: ไม่มี
+
+### 2026-10-28 — ออกแบบแนวคิดพื้นหลังและสร้างภาพพื้นหลังโปสเตอร์ ADT INNOFEST 2026
+
+- ผู้ใช้: ขอให้ออกแบบพื้นหลังโปสเตอร์ให้น่าสนใจ โดดเด่น
+- ข้อตกลงที่ยืนยัน: พัฒนาแนวคิดพื้นหลังโปสเตอร์วิชาการระดับพรีเมียม (Cyber-Academic / Modern Tech Expo) ที่ผสานสีประจำสำนัก ADT (Navy & Cyan) และสาขา SE (Emerald Green) คงความอ่านง่าย 100% พร้อมสร้างภาพพื้นหลังกราฟิกความละเอียดสูง
+- ผลที่ทำจริง: ส่งงานให้ image-generator สร้างภาพพื้นหลัง A1/Portrait สไตล์ Mesh Gradient + Blueprint Grid + Frosted Glass Cards
+- เรื่องค้าง: รอผลลัพธ์ภาพจาก subagent และส่งมอบให้ผู้ใช้
+
+- ผลสำเร็จ: สร้างไฟล์ภาพพื้นหลังโปสเตอร์สำเร็จและคัดลอกไปยัง `C:\Users\asus\Downloads\SE_Poster_ADT Innofest 2026\SE-08-background.jpg`
+- เรื่องค้าง: ไม่มี
+
+### 2026-11-02 — แก้บั๊ก Document Designer, PDF, PIN, อีเมลล้มเหลว และเพิ่มสรุป Feedback ด้วย Gemini
+
+- ผู้ใช้: ส่งรายการบั๊กเอกสารและงานเพิ่ม (เปิด/ปิดแม่แบบ, ปรับขนาด selection, พื้นหลัง, guides, multi-select, ข้อมูลทับกัน, คะแนน Earned Score, ข้อเสนอแนะซ้ำ, กลับหน้าเอกสาร, รูปทรง, ขนาดตาราง, การเว้นวรรค, กล่องขอบมน, Gemini, PIN, อีเมลผิดพลาด) จากนั้นสั่ง "ทำต่อให้เสร็จ" และ "commit และ push"
+- ผลที่ทำจริง: ดูสรุปใน AI_HANDOFF.md หัวข้อ 2026-11-02 แม่แบบมีสถานะ inactive; พื้นหลังออกใน PDF; คะแนนใช้คะแนนที่ได้/คะแนนเต็ม; ตัดคำไทยตามขอบเขตคำ; เก็บ PIN ที่ Assignment เท่านั้น ส่วน Invitation เก็บ hash; ตรวจโดเมนผู้รับเฉพาะโหมด smtp; เพิ่มหน้า /app/settings/ai และปุ่มสรุปในหน้าการประเมิน
+- การตรวจ: lint, typecheck, test, openapi, build ผ่าน; ตรวจภาพ PDF ตัวอย่างจาก renderer จริง (subset แบบเดียวกับ Worker) ผ่าน
+- ยังไม่ได้ตรวจ: กด Designer บนระบบจริงยังไม่ได้ทำ, ยังไม่ได้เรียก Gemini จริงเพราะไม่มีคีย์, การปฏิเสธผู้รับใน smtp จริงยังไม่ได้ลอง
+- ข้อสันนิษฐานของ AI: "กล่องขอบมน ตอนออกแบบตัวหนัง" ข้อความไม่ครบ ตีความว่าการแสดงผลต้องตรงกับ PDF ยังไม่ได้รับการยืนยัน; "ข้อมูลทับกัน" ตีความเป็นองค์ประกอบซ้อนกันในแม่แบบ
+- เรื่องค้าง: แม่แบบที่เคยถูก archived จากการเปิดใช้งานรอบก่อนยังไม่กลับมา; PIN เก่าว่างจนกว่าจะออกคำเชิญใหม่; อีเมล mailbox ไม่มีจริงบนโดเมนจริงต้องมีระบบรับ bounce; เจ้าของระบบต้องอนุมัติการส่งข้อความผู้ประเมินให้ Google ก่อนเปิด AI บนโปรดักชัน

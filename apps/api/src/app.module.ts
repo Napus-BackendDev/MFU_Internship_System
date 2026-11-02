@@ -28,6 +28,7 @@ import { EvaluationsModule } from './evaluations/evaluations.module.js'
 import { MembersModule } from './members/members.module.js'
 import { ReportsModule } from './reports/reports.module.js'
 import { GeneralSettingsModule } from './system-settings/general-settings.module.js'
+import { AiSettingsModule } from './system-settings/ai-settings.module.js'
 import { SmtpSettingsModule } from './system-settings/smtp-settings.module.js'
 
 @Module({
@@ -86,7 +87,8 @@ import { SmtpSettingsModule } from './system-settings/smtp-settings.module.js'
     DocumentsModule,
     ReportsModule,
     GeneralSettingsModule,
-    SmtpSettingsModule
+    SmtpSettingsModule,
+    AiSettingsModule
   ],
   controllers: [HealthController],
   providers: [

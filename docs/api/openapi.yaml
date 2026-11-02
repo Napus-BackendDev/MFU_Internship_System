@@ -2206,6 +2206,133 @@ paths:
         '200': { description: General settings updated }
         '422': { $ref: '#/components/responses/ValidationError' }
 
+  /system-settings/ai:
+    get:
+      tags: [System Settings]
+      operationId: getAiSettings
+      summary: Get AI feedback-summary settings without returning the API key
+      x-permissions: [system.config.manage]
+      responses:
+        '200':
+          description: AI settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiSettings'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      tags: [System Settings]
+      operationId: updateAiSettings
+      summary: Replace AI feedback-summary settings using optimistic versioning
+      description: The API key is write-only. Omitting apiKey preserves the stored key; clearApiKey removes it.
+      x-permissions: [system.config.manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled, model, prompt, version]
+              properties:
+                enabled: { type: boolean }
+                model: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9.-]{0,63}$' }
+                prompt: { type: string, minLength: 10, maxLength: 2000 }
+                apiKey: { type: string, minLength: 1, maxLength: 512 }
+                clearApiKey: { type: boolean, default: false }
+                version: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: AI settings saved; no API key is returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiSettings'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /system-settings/ai/test:
+    post:
+      tags: [System Settings]
+      operationId: testAiSettings
+      summary: Verify the stored Gemini configuration with a minimal request
+      x-permissions: [system.config.manage]
+      responses:
+        '201':
+          description: Provider answered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, model]
+                properties:
+                  ok: { type: boolean }
+                  model: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /evaluation-assignments/{assignmentId}/feedback-summary:
+    parameters:
+      - name: assignmentId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ObjectId'
+    get:
+      tags: [Evaluations]
+      operationId: getFeedbackSummary
+      summary: Read the evaluator's feedback text and any stored AI summary
+      x-permissions: [cycles.manage]
+      responses:
+        '200':
+          description: Feedback text and stored summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackSummary'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [Evaluations]
+      operationId: generateFeedbackSummary
+      summary: Generate or replace the AI summary of the evaluator's feedback
+      description: Sends only question wording and free-text answers to the configured provider. The final evaluation itself is not changed.
+      x-permissions: [cycles.manage]
+      responses:
+        '201':
+          description: Summary stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackSummary'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
   /system-settings/smtp:
     get:
       tags: [System Settings]
@@ -2367,6 +2494,37 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
+  /document-assets/preview:
+    get:
+      tags: [Documents]
+      operationId: previewDocumentAsset
+      summary: Read a private image asset for the template designer
+      description: Only System Admin and tenant-scoped Internship Staff can read shared tenant image assets. Font assets are not served.
+      x-permissions: [documentTemplates.manage]
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 512 }
+      responses:
+        '200':
+          description: Image content as a data URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dataUrl]
+                properties:
+                  dataUrl: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
   /document-templates:
     get:
       tags: [Documents]
@@ -2433,7 +2591,8 @@ paths:
     delete:
       tags: [Documents]
       operationId: deleteDocumentTemplate
-      summary: Deactivate or archive a document template
+      summary: Archive a document template
+      description: Hides this document template from the default list; issued documents and versions are kept.
       x-permissions: [documentTemplates.manage]
       responses:
         '204':
@@ -2451,7 +2610,7 @@ paths:
       tags: [Documents]
       operationId: activateDocumentTemplate
       summary: Activate a document template as the primary active template for its document type
-      description: Activates this document template and archives any other active template of the same document type, enforcing strictly one active template per type.
+      description: Activates this document template and marks any other active template of the same document type inactive, enforcing strictly one active template per type. A template with only a Draft runs the publication checks first.
       x-permissions: [documentTemplates.manage]
       responses:
         '200':
@@ -2479,7 +2638,7 @@ paths:
       tags: [Documents]
       operationId: deactivateDocumentTemplate
       summary: Deactivate a document template
-      description: Archives this document template.
+      description: Marks this document template inactive. It stays listed for managers and can be activated again.
       x-permissions: [documentTemplates.manage]
       responses:
         '200':
@@ -5005,9 +5164,29 @@ components:
     DocumentType:
       type: string
       enum: [transcript, certificate]
+    AiSettings:
+      type: object
+      required: [enabled, provider, model, prompt, apiKeyConfigured, version]
+      properties:
+        enabled: { type: boolean }
+        provider: { type: string, enum: [gemini] }
+        model: { type: string }
+        prompt: { type: string }
+        apiKeyConfigured: { type: boolean }
+        version: { type: integer, minimum: 0 }
+        updatedAt: { type: [string, 'null'], format: date-time }
+        updatedBy: { type: [string, 'null'] }
+    FeedbackSummary:
+      type: object
+      required: [feedback, summary, model, generatedAt]
+      properties:
+        feedback: { type: string }
+        summary: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        generatedAt: { type: [string, 'null'], format: date-time }
     DocumentTemplateStatus:
       type: string
-      enum: [active, archived]
+      enum: [active, inactive, archived]
     DocumentAssetType:
       type: string
       enum: [font, emblem, signature, background]
@@ -5090,6 +5269,7 @@ components:
         status:
           $ref: '#/components/schemas/DocumentTemplateStatus'
         createdAt: { type: string, format: date-time }
+        hasPublishedVersion: { type: boolean }
         latestVersion:
           oneOf:
             - $ref: '#/components/schemas/DocumentTemplateLatestVersion'

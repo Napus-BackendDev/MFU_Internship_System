@@ -490,14 +490,9 @@ function parseCanonicalDocument(
 
 function collectImageAssetRequirements(
   canonical: CanonicalDocumentV1 | CanonicalDocumentV2
-): Map<string, 'emblem' | 'signature'> {
-  if (
-    !('elements' in canonical) ||
-    !canonical.elements.some((element) => 'id' in element)
-  ) {
-    return new Map()
-  }
-  const requirements = new Map<string, 'emblem' | 'signature'>()
+): Map<string, 'emblem' | 'signature' | 'background'> {
+  if (!('elements' in canonical)) return new Map()
+  const requirements = new Map<string, 'emblem' | 'signature' | 'background'>()
   for (const element of canonical.elements as CanonicalDocumentV2['elements']) {
     if (element.type === 'emblem' && element.assetKey) {
       requirements.set(element.assetKey, 'emblem')
@@ -510,6 +505,13 @@ function collectImageAssetRequirements(
         requirements.set(key, 'signature')
       }
     }
+  }
+  const metadata = (canonical as CanonicalDocumentV2).editorMetadata
+  if (
+    metadata?.backgroundType === 'custom' &&
+    typeof metadata.backgroundAssetKey === 'string'
+  ) {
+    requirements.set(metadata.backgroundAssetKey, 'background')
   }
   return requirements
 }

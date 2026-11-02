@@ -174,6 +174,10 @@ const supportedPlaceholdersV2 = new Set([
   'hard_skill_answered_count',
   'soft_skill_average',
   'soft_skill_answered_count',
+  'hard_skill_score',
+  'hard_skill_max_score',
+  'soft_skill_score',
+  'soft_skill_max_score',
   'suggestion',
   'evaluator_suggestion'
 ])
@@ -250,7 +254,7 @@ export function parseCanonicalDocumentV2(
       !isOptionalCanvasColor(element.bgColor) ||
       !isOptionalFiniteInRange(element.borderWidth, 0, 32) ||
       !isOptionalCanvasColor(element.borderColor) ||
-      !isOptionalFiniteInRange(element.borderRadius, 0, 256) ||
+      !isOptionalFiniteInRange(element.borderRadius, 0, 9999) ||
       !isOptionalFiniteInRange(element.padding, 0, 256) ||
       !isOptionalShapeType(element.shapeType) ||
       !isOptionalNonEmptyString(element.assetKey, 512) ||

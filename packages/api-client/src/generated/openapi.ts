@@ -1193,6 +1193,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system-settings/ai": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get AI feedback-summary settings without returning the API key */
+        get: operations["getAiSettings"];
+        /**
+         * Replace AI feedback-summary settings using optimistic versioning
+         * @description The API key is write-only. Omitting apiKey preserves the stored key; clearApiKey removes it.
+         */
+        put: operations["updateAiSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system-settings/ai/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Verify the stored Gemini configuration with a minimal request */
+        post: operations["testAiSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/evaluation-assignments/{assignmentId}/feedback-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                assignmentId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        /** Read the evaluator's feedback text and any stored AI summary */
+        get: operations["getFeedbackSummary"];
+        put?: never;
+        /**
+         * Generate or replace the AI summary of the evaluator's feedback
+         * @description Sends only question wording and free-text answers to the configured provider. The final evaluation itself is not changed.
+         */
+        post: operations["generateFeedbackSummary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/system-settings/smtp": {
         parameters: {
             query?: never;
@@ -1275,6 +1336,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/document-assets/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a private image asset for the template designer
+         * @description Only System Admin and tenant-scoped Internship Staff can read shared tenant image assets. Font assets are not served.
+         */
+        get: operations["previewDocumentAsset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/document-templates": {
         parameters: {
             query?: never;
@@ -1311,7 +1392,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Deactivate or archive a document template */
+        /**
+         * Archive a document template
+         * @description Hides this document template from the default list; issued documents and versions are kept.
+         */
         delete: operations["deleteDocumentTemplate"];
         options?: never;
         head?: never;
@@ -1331,7 +1415,7 @@ export interface paths {
         put?: never;
         /**
          * Activate a document template as the primary active template for its document type
-         * @description Activates this document template and archives any other active template of the same document type, enforcing strictly one active template per type.
+         * @description Activates this document template and marks any other active template of the same document type inactive, enforcing strictly one active template per type. A template with only a Draft runs the publication checks first.
          */
         post: operations["activateDocumentTemplate"];
         delete?: never;
@@ -1353,7 +1437,7 @@ export interface paths {
         put?: never;
         /**
          * Deactivate a document template
-         * @description Archives this document template.
+         * @description Marks this document template inactive. It stays listed for managers and can be activated again.
          */
         post: operations["deactivateDocumentTemplate"];
         delete?: never;
@@ -2601,8 +2685,27 @@ export interface components {
         };
         /** @enum {string} */
         DocumentType: "transcript" | "certificate";
+        AiSettings: {
+            enabled: boolean;
+            /** @enum {string} */
+            provider: "gemini";
+            model: string;
+            prompt: string;
+            apiKeyConfigured: boolean;
+            version: number;
+            /** Format: date-time */
+            updatedAt?: string | null;
+            updatedBy?: string | null;
+        };
+        FeedbackSummary: {
+            feedback: string;
+            summary: string | null;
+            model: string | null;
+            /** Format: date-time */
+            generatedAt: string | null;
+        };
         /** @enum {string} */
-        DocumentTemplateStatus: "active" | "archived";
+        DocumentTemplateStatus: "active" | "inactive" | "archived";
         /** @enum {string} */
         DocumentAssetType: "font" | "emblem" | "signature" | "background";
         DocumentAsset: {
@@ -2658,6 +2761,7 @@ export interface components {
             status: components["schemas"]["DocumentTemplateStatus"];
             /** Format: date-time */
             createdAt: string;
+            hasPublishedVersion?: boolean;
             latestVersion?: components["schemas"]["DocumentTemplateLatestVersion"] | null;
             versions?: components["schemas"]["DocumentTemplateVersion"][];
         };
@@ -5443,6 +5547,143 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    getAiSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description AI settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiSettings"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateAiSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                    model: string;
+                    prompt: string;
+                    apiKey?: string;
+                    /** @default false */
+                    clearApiKey?: boolean;
+                    version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description AI settings saved; no API key is returned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiSettings"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    testAiSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider answered */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        model: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getFeedbackSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                assignmentId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Feedback text and stored summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackSummary"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    generateFeedbackSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                assignmentId: components["schemas"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Summary stored */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackSummary"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     getSmtpSettings: {
         parameters: {
             query?: never;
@@ -5605,6 +5846,34 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    previewDocumentAsset: {
+        parameters: {
+            query: {
+                key: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Image content as a data URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        dataUrl: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };

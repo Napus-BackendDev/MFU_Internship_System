@@ -30,6 +30,7 @@ import { HealthController } from '../src/health.controller.js'
 import { MembersModule } from '../src/members/members.module.js'
 import { ReportsModule } from '../src/reports/reports.module.js'
 import { GeneralSettingsModule } from '../src/system-settings/general-settings.module.js'
+import { AiSettingsModule } from '../src/system-settings/ai-settings.module.js'
 import { SmtpSettingsModule } from '../src/system-settings/smtp-settings.module.js'
 import { AccessGuard } from '../src/auth/access.guard.js'
 import { ROLE_PERMISSIONS } from '../src/auth/permission-map.js'
@@ -44,7 +45,8 @@ const API_MODULES = [
   MembersModule,
   ReportsModule,
   GeneralSettingsModule,
-  SmtpSettingsModule
+  SmtpSettingsModule,
+  AiSettingsModule
 ]
 
 const ALLOWED_PUBLIC_ROUTES = new Set([

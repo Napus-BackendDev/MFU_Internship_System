@@ -95,6 +95,12 @@ const allNavigationItems: readonly AppNavigationItem[] = [
     to: '/app/settings/smtp',
     icon: 'i-lucide-mail',
     allowedRoles: ['systemAdmin']
+  },
+  {
+    label: 'ตั้งค่า AI',
+    to: '/app/settings/ai',
+    icon: 'i-lucide-sparkles',
+    allowedRoles: ['systemAdmin']
   }
 ]
 
@@ -212,6 +218,11 @@ const pageMetadataMap: Readonly<Record<string, PageHeaderMeta>> = {
   '/app/settings/smtp': {
     title: 'ตั้งค่าระบบส่งอีเมล (SMTP)',
     description: 'กำหนดค่าเซิร์ฟเวอร์ส่งอีเมลระบบและการแจ้งเตือนอัตโนมัติ'
+  },
+  '/app/settings/ai': {
+    title: 'ตั้งค่า AI สรุป Feedback',
+    description:
+      'กำหนดโมเดล Gemini คีย์ และคำสั่งสำหรับสรุปข้อเสนอแนะของผู้ประเมิน'
   },
   '/app/support': {
     title: 'ช่วยเหลือและสนับสนุน',

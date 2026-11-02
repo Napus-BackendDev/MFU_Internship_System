@@ -126,8 +126,8 @@ function projectTemplateEditorMetadata(
   ) {
     summary.backgroundType = source.backgroundType
   }
-  if (typeof source.customBgUrl === 'string') {
-    summary.customBgUrl = source.customBgUrl
+  if (typeof source.backgroundAssetKey === 'string') {
+    summary.backgroundAssetKey = source.backgroundAssetKey
   }
   if (
     typeof source.bgOpacity === 'number' &&
@@ -343,11 +343,43 @@ export class DocumentsService {
     )
   }
 
+  public async previewImageAsset(
+    actor: AuthenticatedActor,
+    key: string
+  ): Promise<unknown> {
+    if (!hasTenantDocumentTemplateManagementScope(actor)) {
+      throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
+    }
+    const asset = await this.assets
+      .findOne({
+        key,
+        status: 'active',
+        assetType: { $in: ['emblem', 'signature', 'background'] }
+      })
+      .select('key contentType')
+      .exec()
+    if (!asset) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    try {
+      const response = await this.s3.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: asset.key })
+      )
+      const bytes = await response.Body?.transformToByteArray()
+      if (!bytes) throw new Error('DOCUMENT_ASSET_EMPTY')
+      return {
+        dataUrl: `data:${asset.contentType};base64,${Buffer.from(bytes).toString('base64')}`
+      }
+    } catch {
+      throw new ServiceUnavailableException({
+        code: 'DOCUMENT_ASSET_STORAGE_UNAVAILABLE'
+      })
+    }
+  }
+
   public listTemplates(
     actor: AuthenticatedActor,
     page: PaginationInput,
     filters: {
-      readonly status?: 'active' | 'archived'
+      readonly status?: 'active' | 'inactive' | 'archived'
       readonly documentType?: 'transcript' | 'certificate'
     } = {}
   ): Promise<unknown> {
@@ -358,7 +390,7 @@ export class DocumentsService {
     actor: AuthenticatedActor,
     page: PaginationInput,
     filters: {
-      readonly status?: 'active' | 'archived'
+      readonly status?: 'active' | 'inactive' | 'archived'
       readonly documentType?: 'transcript' | 'certificate'
     }
   ): Promise<unknown> {
@@ -405,15 +437,20 @@ export class DocumentsService {
       string,
       HydratedDocument<DocumentTemplateVersionRecord>
     >()
+    const withPublishedVersion = new Set<string>()
     for (const version of versions) {
       if (!latest.has(version.templateId))
         latest.set(version.templateId, version)
+      if (version.status === 'published') {
+        withPublishedVersion.add(version.templateId)
+      }
     }
     return {
       items: templates.map((template) => {
         const version = latest.get(template.id)
         return {
           ...template.toJSON(),
+          hasPublishedVersion: withPublishedVersion.has(template.id),
           latestVersion: version
             ? {
                 id: version.id,
@@ -536,23 +573,21 @@ export class DocumentsService {
         .findOne({ templateId: template.id, status: 'draft' })
         .sort({ versionNumber: -1, _id: -1 })
         .exec()
-      if (draftVersion) {
-        draftVersion.status = 'published'
-        draftVersion.publishedAt = new Date()
-        await draftVersion.save()
-      } else {
+      if (!draftVersion) {
         throw new UnprocessableEntityException({
           code: 'PUBLISHED_VERSION_REQUIRED'
         })
       }
+      // Activation must not bypass the checks that protect PDF generation.
+      await this.publishVersion(actor, draftVersion.id)
     }
 
-    // Enforce strictly 1 active template per type:
-    // Archive other templates of the same documentType
+    // Enforce strictly 1 active template per type. The others stay listed as
+    // inactive so they can be switched back on; only explicit delete archives.
     await this.templates
       .updateMany(
-        { documentType, _id: { $ne: template._id } },
-        { $set: { status: 'archived' } }
+        { documentType, _id: { $ne: template._id }, status: 'active' },
+        { $set: { status: 'inactive' } }
       )
       .exec()
 
@@ -593,7 +628,7 @@ export class DocumentsService {
       throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
     }
 
-    template.status = 'archived'
+    template.status = 'inactive'
     await template.save()
 
     const latest = await this.versions
@@ -616,6 +651,21 @@ export class DocumentsService {
           }
         : null
     }
+  }
+
+  public async archiveTemplate(
+    actor: AuthenticatedActor,
+    templateId: string
+  ): Promise<void> {
+    if (!hasTenantDocumentTemplateManagementScope(actor)) {
+      throw new ForbiddenException({ code: 'PERMISSION_DENIED' })
+    }
+    const template = await this.templates.findById(templateId).exec()
+    if (!template) {
+      throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    }
+    template.status = 'archived'
+    await template.save()
   }
 
   public async listVersions(
@@ -686,7 +736,7 @@ export class DocumentsService {
         this.templates.db,
         async (session) => {
           const template = await this.templates
-            .findOne({ _id: templateId, status: 'active' })
+            .findOne({ _id: templateId, status: { $ne: 'archived' } })
             .session(session ?? null)
             .exec()
           if (!template)
@@ -815,7 +865,7 @@ export class DocumentsService {
     }
     const template = await this.templates.findOne({
       _id: current.templateId,
-      status: 'active'
+      status: { $ne: 'archived' }
     })
     if (!template) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
     this.validateCanonicalTemplate(
@@ -1776,12 +1826,11 @@ export class DocumentsService {
         code: 'DOCUMENT_FONT_MAPPING_UNSUPPORTED'
       })
     }
+    const backgroundType = canonical.editorMetadata?.backgroundType
     if (
-      typeof canonicalJson.editorMetadata === 'object' &&
-      canonicalJson.editorMetadata !== null &&
-      !Array.isArray(canonicalJson.editorMetadata) &&
-      'backgroundType' in canonicalJson.editorMetadata &&
-      canonicalJson.editorMetadata.backgroundType !== 'none'
+      backgroundType !== undefined &&
+      (typeof backgroundType !== 'string' ||
+        !DOCUMENT_TEMPLATE_BACKGROUND_TYPES.has(backgroundType))
     ) {
       throw new UnprocessableEntityException({
         code: 'DOCUMENT_BACKGROUND_RENDERER_UNSUPPORTED'
@@ -1838,7 +1887,7 @@ export class DocumentsService {
   ): Promise<
     readonly {
       key: string
-      assetType: 'emblem' | 'signature'
+      assetType: 'emblem' | 'signature' | 'background'
       sha256: string
     }[]
   > {
@@ -1862,11 +1911,21 @@ export class DocumentsService {
   ): Promise<
     readonly {
       key: string
-      assetType: 'emblem' | 'signature'
+      assetType: 'emblem' | 'signature' | 'background'
       sha256: string
     }[]
   > {
-    const required = new Map<string, 'emblem' | 'signature'>()
+    const required = new Map<string, 'emblem' | 'signature' | 'background'>()
+    const metadata = canonical.editorMetadata
+    if (metadata?.backgroundType === 'custom') {
+      if (typeof metadata.backgroundAssetKey === 'string') {
+        required.set(metadata.backgroundAssetKey, 'background')
+      } else if (requireAssets) {
+        throw new UnprocessableEntityException({
+          code: 'DOCUMENT_BACKGROUND_ASSET_REQUIRED'
+        })
+      }
+    }
     for (const element of canonical.elements) {
       if (element.type === 'emblem') {
         if (!element.assetKey) {

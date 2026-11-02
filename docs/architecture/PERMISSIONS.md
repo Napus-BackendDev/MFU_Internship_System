@@ -196,6 +196,8 @@ Audit read always includes the authenticated actor's own log records. Staff and 
 - Assignment close, invitation revoke, expiry, or final submit removes Draft/submit ability.
 - A submitted assignment permits reading the final result and replaying the original submit key/payload while the same bound invitation remains active, unexpired and at the same version. A new key or changed payload remains rejected; revocation still invalidates the session. This does not allow editing the final result.
 - Assignment listings expose stored PINs only to actors with `campaigns.send` within the listing's existing resource scope. Read-only listing never generates or rotates credentials, and never exposes PIN hashes.
+- `/evaluation-assignments/{id}/feedback-summary` requires `cycles.manage` within the assignment's resource scope; out-of-scope assignments return `404`. Only question wording and free-text answers are sent to the configured AI provider.
+- `GET /document-assets/preview` requires `documentTemplates.manage` with tenant scope and serves image assets only, never fonts.
 - Reopen is unavailable in the Production MVP; legacy `reopened` records do not grant invitation exchange, PIN verification, Draft, or submit access.
 
 ### 7.3 Evaluation
@@ -247,6 +249,7 @@ The OpenAPI file carries matching `x-permissions` metadata. Minimum mapping:
 | `/campaigns`                             | `campaigns.read`                                                      | `campaigns.send`                                           |
 | `/deliveries`                            | `campaigns.read` (Admin/Staff/Auditor rows; Coordinator summary only) | `deliveries.retry` (Admin/Staff, assignment scope)         |
 | `/system-settings/smtp*`                 | `system.config.manage`                                                | `system.config.manage`                                     |
+| `/system-settings/ai*`                   | `system.config.manage`                                                | `system.config.manage`                                     |
 | `/document-templates`                    | `documentTemplates.read`                                              | `documentTemplates.manage`, `documentTemplates.publish`    |
 | `/generated-documents`                   | own/scoped document permission                                        | own/scoped generate permission                             |
 | `/reports`                               | `reports.read`                                                        | —                                                          |

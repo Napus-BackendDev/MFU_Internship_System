@@ -1,4 +1,19 @@
 <script setup lang="ts">
+import {
+  boundingRect,
+  findOverlappingPairs,
+  measureDistances,
+  normalizeCanvasElement,
+  rectsIntersect,
+  resizeRect,
+  snapToGuides,
+  tableRowHeight,
+  upgradeLegacyScoreTable,
+  type CanvasDistance,
+  type CanvasGuide,
+  type CanvasRect,
+  type ResizeHandle
+} from '~/utils/document-canvas'
 import { resolveUniqueStudentPlacement } from '~/utils/document-preview'
 import { adaptCanonicalDocumentForEditor } from '~/utils/document-template-editor'
 import { loadAllPages, type PaginatedItems } from '~/utils/load-all-pages'
@@ -97,7 +112,8 @@ export interface DocumentTemplateItem {
   versionNumber?: number
   revision?: number
   versionStatus?: 'draft' | 'published' | 'retired'
-  templateStatus?: 'active' | 'archived'
+  templateStatus?: 'active' | 'inactive' | 'archived'
+  hasPublishedVersion?: boolean
   canvasWidth?: number
   canvasHeight?: number
   requiresSchemaMigration?: boolean
@@ -111,6 +127,8 @@ export interface DocumentTemplateItem {
   createdAt: string
   status: 'active' | 'inactive'
   backgroundType: BackgroundType
+  backgroundAssetKey?: string
+  // Browser-only preview of the background asset; never saved in the template.
   customBgUrl?: string
   bgOpacity: number
   elements: CanvasElement[]
@@ -121,7 +139,7 @@ interface DocumentTemplateEditorMetadata {
   readonly nameEn?: string
   readonly description?: string
   readonly backgroundType?: BackgroundType
-  readonly customBgUrl?: string
+  readonly backgroundAssetKey?: string
   readonly bgOpacity?: number
 }
 
@@ -156,7 +174,8 @@ interface DocumentTemplateApiItem {
   readonly code: string
   readonly name: string
   readonly documentType?: 'transcript' | 'certificate' | null
-  readonly status: 'active' | 'archived'
+  readonly status: 'active' | 'inactive' | 'archived'
+  readonly hasPublishedVersion?: boolean
   readonly createdAt: string
   readonly latestVersion?: DocumentTemplateVersionSummary | null
 }
@@ -219,35 +238,22 @@ const selectableImageAssets = computed(() =>
 )
 
 function showTemplateApiError(error: unknown): void {
-  const statusCode =
-    typeof error === 'object' && error !== null && 'statusCode' in error
-      ? Number(error.statusCode)
-      : typeof error === 'object' && error !== null && 'status' in error
-        ? Number(error.status)
-        : undefined
-  const errorObj = error as {
-    data?: { error?: { message?: string; code?: string } }
-    message?: string
-  }
-  const detailMessage =
-    errorObj?.data?.error?.message ||
-    (errorObj?.data?.error?.code
-      ? `รหัสข้อผิดพลาด: ${errorObj.data.error.code}`
-      : undefined)
-
-  const description =
-    statusCode === 403
-      ? 'บัญชีนี้ไม่มีสิทธิ์จัดการแม่แบบเอกสาร'
-      : statusCode === 409
-        ? 'ข้อมูลแม่แบบเปลี่ยนไปแล้ว กรุณาโหลดใหม่ก่อนบันทึก'
-        : statusCode === 422 && detailMessage
-          ? `ข้อมูลไม่ถูกต้อง: ${detailMessage}`
-          : 'บันทึกไม่สำเร็จ ข้อมูลในตัวแก้ไขยังอยู่ กรุณาลองใหม่'
+  // useApi has already turned API codes into a message a person can act on.
   toast.add({
     title: 'จัดการแม่แบบไม่สำเร็จ',
-    description,
+    description:
+      error instanceof Error && error.message
+        ? error.message
+        : 'บันทึกไม่สำเร็จ ข้อมูลในตัวแก้ไขยังอยู่ กรุณาลองใหม่',
     color: 'error'
   })
+}
+
+function isTemplateLive(doc: DocumentTemplateItem): boolean {
+  return (
+    doc.templateStatus === 'active' &&
+    (doc.hasPublishedVersion ?? doc.versionStatus === 'published')
+  )
 }
 
 function isBackgroundType(value: unknown): value is BackgroundType {
@@ -288,6 +294,9 @@ function mapApiTemplate(
     ...(version ? { revision: version.revision } : {}),
     ...(version ? { versionStatus: version.status } : {}),
     templateStatus: template.status,
+    ...(template.hasPublishedVersion === undefined
+      ? {}
+      : { hasPublishedVersion: template.hasPublishedVersion }),
     isLegacy: false,
     code: template.code,
     nameTh:
@@ -298,7 +307,8 @@ function mapApiTemplate(
       typeof metadata.description === 'string' ? metadata.description : '',
     createdAt: template.createdAt,
     status:
-      template.status === 'active' && version?.status === 'published'
+      template.status === 'active' &&
+      (template.hasPublishedVersion ?? version?.status === 'published')
         ? 'active'
         : 'inactive',
     backgroundType: isBackgroundType(metadata.backgroundType)
@@ -306,9 +316,9 @@ function mapApiTemplate(
       : inferredDocType === 'certificate'
         ? 'certificate_pattern'
         : 'none',
-    customBgUrl:
-      typeof metadata.customBgUrl === 'string'
-        ? metadata.customBgUrl
+    backgroundAssetKey:
+      typeof metadata.backgroundAssetKey === 'string'
+        ? metadata.backgroundAssetKey
         : undefined,
     bgOpacity:
       typeof metadata.bgOpacity === 'number' &&
@@ -1202,7 +1212,20 @@ const hasUnsavedChanges = computed(() => {
     savedEditorState.value !== currentState
   )
 })
-const selectedElementId = ref<string | null>(null)
+const selectedElementIds = ref<string[]>([])
+// The last selected element drives the properties panel and resize handles.
+const selectedElementId = computed<string | null>({
+  get: () => selectedElementIds.value.at(-1) ?? null,
+  set: (id) => {
+    selectedElementIds.value = id ? [id] : []
+  }
+})
+const showCenterGuides = ref(true)
+const activeGuides = ref<readonly CanvasGuide[]>([])
+const activeDistances = ref<readonly CanvasDistance[]>([])
+const marqueeRect = ref<CanvasRect | null>(null)
+const overlappingPairs = ref<readonly [string, string][]>([])
+const previewScores = ref<Readonly<Record<string, string>>>({})
 const canvasScale = ref<number>(0.9) // zoom level
 const studioPanel = ref<'canvas' | 'tools' | 'properties'>('canvas')
 const canvaSidebarTab = ref<
@@ -1210,10 +1233,22 @@ const canvaSidebarTab = ref<
 >('variables')
 const livePreviewMode = ref<'variables' | 'real_data'>('real_data')
 
-const dynamicStudentValues = computed(() => {
-  const std = studentsData.value?.items?.find(
-    (s) => s.studentId === activeStudentId.value
-  )
+const dynamicStudentValues = computed<Record<string, string>>(() => ({
+  ...previewValuesFor(
+    studentsData.value?.items?.find(
+      (s) => s.studentId === activeStudentId.value
+    )
+  ),
+  hard_skill_score: '—',
+  hard_skill_max_score: '—',
+  soft_skill_score: '—',
+  soft_skill_max_score: '—',
+  ...previewScores.value
+}))
+
+function previewValuesFor(
+  std: StudentItem | undefined
+): Record<string, string> {
   const school = schoolsData.value?.items?.find((s) => s.id === std?.schoolId)
   const program = programsData.value?.items?.find(
     (p) => p.id === std?.programId
@@ -1276,30 +1311,93 @@ const dynamicStudentValues = computed(() => {
     evaluator_suggestion:
       'มีความกระตือรือร้นในการเรียนรู้ และทำงานร่วมกับผู้อื่นได้ดีมาก'
   }
+}
+
+function fillPlaceholders(
+  text: string,
+  values: Readonly<Record<string, string>>
+): string {
+  return text.replace(
+    /\{\{\s*([\w.-]+)\s*\}\}/g,
+    (match, key: string) => values[key] ?? match
+  )
+}
+
+// The designer shows the same earned score the PDF prints for the previewed student.
+async function loadPreviewScores(studentId: string): Promise<void> {
+  previewScores.value = {}
+  if (!studentId || !isCanvaStudioOpen.value) return
+  try {
+    const result = await api<{
+      readonly items: readonly {
+        readonly studentId: string
+        readonly directoryRelations?: {
+          readonly assignments?: readonly {
+            readonly categoryScores?: Readonly<
+              Record<
+                string,
+                {
+                  readonly average: number | null
+                  readonly answeredCount: number
+                  readonly scaleMax: number | null
+                }
+              >
+            >
+          }[]
+        }
+      }[]
+    }>('/students', {
+      query: {
+        search: studentId,
+        page: 1,
+        pageSize: 5,
+        includeDirectoryData: true
+      }
+    })
+    if (studentId !== activeStudentId.value) return
+    const assignments =
+      result.items.find((item) => item.studentId === studentId)
+        ?.directoryRelations?.assignments ?? []
+    const scores: Record<string, string> = {}
+    for (const [category, prefix] of [
+      ['hardSkill', 'hard_skill'],
+      ['softSkill', 'soft_skill']
+    ] as const) {
+      let earned = 0
+      let max = 0
+      let answered = 0
+      for (const assignment of assignments) {
+        const score = assignment.categoryScores?.[category]
+        if (!score || score.average === null) continue
+        earned += score.average * score.answeredCount
+        max += (score.scaleMax ?? 0) * score.answeredCount
+        answered += score.answeredCount
+      }
+      if (answered > 0) {
+        scores[`${prefix}_score`] = String(Math.round(earned * 100) / 100)
+        scores[`${prefix}_max_score`] = String(Math.round(max * 100) / 100)
+      }
+    }
+    previewScores.value = scores
+  } catch {
+    // Scores are preview-only; the table keeps showing "—" when unavailable.
+    previewScores.value = {}
+  }
+}
+watch([activeStudentId, isCanvaStudioOpen], ([studentId]) => {
+  void loadPreviewScores(studentId)
 })
 
 // Replace dynamic variables in element content
 function renderElementContent(text: string): string {
   if (livePreviewMode.value === 'variables') return text
-  const vals = dynamicStudentValues.value
-  return text
-    .replace(/\{\{student_id\}\}/g, vals.student_id)
-    .replace(/\{\{academic_year\}\}/g, vals.academic_year)
-    .replace(/\{\{student_name\}\}/g, vals.student_name)
-    .replace(/\{\{student_name_th\}\}/g, vals.student_name_th)
-    .replace(/\{\{student_name_en\}\}/g, vals.student_name_en)
-    .replace(/\{\{school_name\}\}/g, vals.school_name)
-    .replace(/\{\{program_name\}\}/g, vals.program_name)
-    .replace(/\{\{organization_name\}\}/g, vals.organization_name)
-    .replace(/\{\{company_name\}\}/g, vals.company_name)
-    .replace(/\{\{position_title\}\}/g, vals.position_title)
-    .replace(/\{\{training_period\}\}/g, vals.training_period)
-    .replace(/\{\{total_hours\}\}/g, vals.total_hours)
-    .replace(/\{\{evaluation_grade\}\}/g, vals.evaluation_grade)
-    .replace(/\{\{issue_date\}\}/g, vals.issue_date)
-    .replace(/\{\{doc_number\}\}/g, vals.doc_number)
-    .replace(/\{\{suggestion\}\}/g, vals.suggestion)
-    .replace(/\{\{evaluator_suggestion\}\}/g, vals.evaluator_suggestion)
+  return fillPlaceholders(text, dynamicStudentValues.value)
+}
+
+function scorePreviewCell(key: string): string {
+  return livePreviewMode.value === 'variables'
+    ? `{{${key}}}`
+    : (dynamicStudentValues.value[key] ?? '—')
 }
 
 // Available Dynamic Variables Chips
@@ -1342,13 +1440,18 @@ const availableVariables = [
   { key: 'total_hours', label: 'จำนวนชั่วโมงรวม', tag: '{{total_hours}}' },
   {
     key: 'suggestion',
-    label: 'ข้อเสนอแนะ (Suggestion)',
+    label: 'ข้อเสนอแนะผู้ประเมิน (Suggestion)',
     tag: '{{suggestion}}'
   },
   {
-    key: 'evaluator_suggestion',
-    label: 'ข้อเสนอแนะผู้ประเมิน',
-    tag: '{{evaluator_suggestion}}'
+    key: 'hard_skill_score',
+    label: 'คะแนนที่ได้ Hard Skill',
+    tag: '{{hard_skill_score}}'
+  },
+  {
+    key: 'soft_skill_score',
+    label: 'คะแนนที่ได้ Soft Skill',
+    tag: '{{soft_skill_score}}'
   },
   { key: 'issue_date', label: 'วันที่ออกเอกสาร', tag: '{{issue_date}}' },
   { key: 'doc_number', label: 'เลขที่เอกสาร', tag: '{{doc_number}}' }
@@ -1697,6 +1800,7 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
 
       activeEditingDoc.value = {
         ...doc,
+        customBgUrl: undefined,
         canvasWidth: width,
         canvasHeight: height,
         requiresSchemaMigration: true,
@@ -1704,7 +1808,6 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
         nameEn: doc.nameEn,
         description: doc.description,
         backgroundType: doc.backgroundType,
-        customBgUrl: doc.customBgUrl,
         bgOpacity: doc.bgOpacity,
         versionId: version.id,
         versionNumber: version.versionNumber,
@@ -1744,10 +1847,10 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
       backgroundType: isBackgroundType(metadata.backgroundType)
         ? metadata.backgroundType
         : doc.backgroundType,
-      customBgUrl:
-        typeof metadata.customBgUrl === 'string'
-          ? metadata.customBgUrl
-          : doc.customBgUrl,
+      backgroundAssetKey:
+        typeof metadata.backgroundAssetKey === 'string'
+          ? metadata.backgroundAssetKey
+          : doc.backgroundAssetKey,
       bgOpacity:
         typeof metadata.bgOpacity === 'number'
           ? metadata.bgOpacity
@@ -1763,7 +1866,12 @@ async function openCanvaStudio(doc?: DocumentTemplateItem) {
     }
     selectedElementId.value = activeEditingDoc.value.elements[0]?.id || null
     savedEditorState.value = getStudioEditorState(activeEditingDoc.value)
+    // Tables made before earned scores held a literal "—"; the upgrade counts as an edit.
+    activeEditingDoc.value.elements = activeEditingDoc.value.elements.map(
+      upgradeLegacyScoreTable
+    )
     isCanvaStudioOpen.value = true
+    void loadBackgroundPreview(activeEditingDoc.value)
     if (adapted.migratedFromV1) {
       toast.add({
         title: 'เปิดแม่แบบรุ่นเก่าในตัวแก้ไขได้แล้ว',
@@ -1892,7 +2000,9 @@ function buildCanonicalJson(
       nameEn: doc.nameEn,
       description: doc.description,
       backgroundType: doc.backgroundType,
-      customBgUrl: doc.customBgUrl,
+      ...(doc.backgroundAssetKey
+        ? { backgroundAssetKey: doc.backgroundAssetKey }
+        : {}),
       bgOpacity: doc.bgOpacity
     }
   }
@@ -1912,7 +2022,17 @@ async function requestCloseStudio(): Promise<void> {
   isCanvaStudioOpen.value = false
   activeEditingDoc.value = null
   savedEditorState.value = null
+  selectedElementIds.value = []
+  overlappingPairs.value = []
 }
+
+// The designer is a dialog over this page, so leaving it must return here rather
+// than follow browser history to whichever page came before.
+onBeforeRouteLeave(() => {
+  if (!isCanvaStudioOpen.value) return true
+  void requestCloseStudio()
+  return false
+})
 
 function getTemplatePlaceholders(elements: readonly CanvasElement[]): string[] {
   const content = JSON.stringify(elements)
@@ -1935,7 +2055,7 @@ async function publishStudioDraft(): Promise<void> {
     !doc.templateId ||
     !doc.versionId ||
     doc.versionStatus !== 'draft' ||
-    doc.templateStatus !== 'active' ||
+    doc.templateStatus === 'archived' ||
     isLoadingFontAssets.value ||
     isUploadingFontAsset.value ||
     isSavingTemplate.value ||
@@ -1972,21 +2092,14 @@ async function publishStudioDraft(): Promise<void> {
       versionNumber: publishedVersion.versionNumber,
       revision: publishedVersion.revision,
       versionStatus: publishedVersion.status,
-      status: 'active',
-      templateStatus: 'active'
+      hasPublishedVersion: true,
+      status: doc.templateStatus === 'active' ? 'active' : 'inactive'
     }
     activeEditingDoc.value = publishedDoc
-    documents.value = documents.value.map((item) => {
-      if (item.templateId === doc.templateId) return publishedDoc
-      if (item.docType === doc.docType) {
-        return {
-          ...item,
-          status: 'inactive',
-          templateStatus: 'archived'
-        }
-      }
-      return item
-    })
+    savedEditorState.value = getStudioEditorState(publishedDoc)
+    documents.value = documents.value.map((item) =>
+      item.templateId === doc.templateId ? publishedDoc : item
+    )
     toast.add({
       title: 'เผยแพร่แม่แบบแล้ว',
       description:
@@ -2002,23 +2115,12 @@ async function publishStudioDraft(): Promise<void> {
       })
     })
   } catch (error: unknown) {
-    const statusCode =
-      typeof error === 'object' && error !== null && 'statusCode' in error
-        ? Number(error.statusCode)
-        : typeof error === 'object' && error !== null && 'status' in error
-          ? Number(error.status)
-          : undefined
-    const description =
-      statusCode === 403
-        ? 'บัญชีนี้ไม่มีสิทธิ์เผยแพร่แม่แบบเอกสาร'
-        : statusCode === 409
-          ? 'Draft เปลี่ยนสถานะหรือ revision แล้ว กรุณาโหลดแม่แบบใหม่'
-          : statusCode === 422
-            ? 'แม่แบบไม่ผ่านการตรวจ schema, placeholder, geometry, asset หรือข้อมูลฟอนต์ แก้ Draft แล้วลองใหม่'
-            : 'เผยแพร่ไม่สำเร็จ Draft ยังอยู่ กรุณาตรวจการเชื่อมต่อแล้วลองใหม่'
     toast.add({
       title: 'เผยแพร่แม่แบบไม่สำเร็จ',
-      description,
+      description:
+        error instanceof Error && error.message
+          ? error.message
+          : 'เผยแพร่ไม่สำเร็จ Draft ยังอยู่ กรุณาตรวจการเชื่อมต่อแล้วลองใหม่',
       color: 'error'
     })
   } finally {
@@ -2053,13 +2155,14 @@ async function confirmTemplateActivation(): Promise<void> {
             ...item,
             status: 'active',
             templateStatus: 'active',
-            versionStatus: 'published'
+            hasPublishedVersion: true
           }
         }
         return {
           ...item,
           status: 'inactive',
-          templateStatus: 'archived'
+          templateStatus:
+            item.templateStatus === 'active' ? 'inactive' : item.templateStatus
         }
       }
       return item
@@ -2073,6 +2176,39 @@ async function confirmTemplateActivation(): Promise<void> {
 
     void refreshTemplates().catch(() => {})
     activationTarget.value = null
+  } catch (error: unknown) {
+    showTemplateApiError(error)
+  } finally {
+    isActivatingTemplate.value = null
+  }
+}
+
+async function deactivateDocumentTemplate(
+  doc: DocumentTemplateItem
+): Promise<void> {
+  if (!canManageDocumentTemplates.value || isActivatingTemplate.value) return
+  if (
+    !(await confirmStudioAction(
+      'ยืนยันปิดใช้งานแม่แบบ',
+      `ปิดใช้งาน ${doc.nameTh || doc.code} นักศึกษาจะออกเอกสารจากแม่แบบนี้ไม่ได้จนกว่าจะเปิดใช้งานอีกครั้ง เอกสารที่ออกแล้วไม่เปลี่ยน`
+    ))
+  ) {
+    return
+  }
+  isActivatingTemplate.value = doc.id
+  try {
+    await api(`/document-templates/${doc.id}/deactivate`, { method: 'POST' })
+    documents.value = documents.value.map((item) =>
+      item.id === doc.id
+        ? { ...item, status: 'inactive', templateStatus: 'inactive' }
+        : item
+    )
+    toast.add({
+      title: 'ปิดใช้งานแม่แบบแล้ว',
+      description: `${doc.code} ยังอยู่ในรายการและเปิดใช้งานอีกครั้งได้`,
+      color: 'success'
+    })
+    void refreshTemplates().catch(() => {})
   } catch (error: unknown) {
     showTemplateApiError(error)
   } finally {
@@ -2122,15 +2258,7 @@ interface ActionMenuItem {
 }
 
 function getDocMenuItems(doc: DocumentTemplateItem): ActionMenuItem[][] {
-  const isCurrentlyActive =
-    doc.templateStatus === 'active' &&
-    doc.versionStatus === 'published' &&
-    documents.value.filter(
-      (item) =>
-        item.docType === doc.docType &&
-        item.templateStatus === 'active' &&
-        item.versionStatus === 'published'
-    ).length === 1
+  const isCurrentlyActive = isTemplateLive(doc)
   const typeLabel = doc.docType === 'certificate' ? 'Certification' : 'PDF'
 
   const items: ActionMenuItem[] = [
@@ -2145,9 +2273,11 @@ function getDocMenuItems(doc: DocumentTemplateItem): ActionMenuItem[][] {
 
   if (isCurrentlyActive) {
     items.push({
-      label: `เปิดใช้งานอยู่ (${typeLabel} หลัก)`,
-      icon: 'i-lucide-check-circle-2',
-      disabled: true
+      label: `ปิดใช้งาน (${typeLabel} หลัก)`,
+      icon: 'i-lucide-power-off',
+      onSelect: () => {
+        void deactivateDocumentTemplate(doc)
+      }
     })
   } else {
     items.push({
@@ -2186,6 +2316,15 @@ async function saveStudioChanges() {
     isPublishingTemplate.value
   )
     return
+  // A template without its font can never be published, so choose it up front.
+  if (!doc.fontAssetKeys?.length) await useStandardDocumentFont()
+  const documentFontFamily = availableFontAssets.value.find(
+    (asset) => asset.key === doc.fontAssetKeys?.[0]
+  )?.fontFamily
+  const page = getDocumentCanvasSize(doc)
+  doc.elements = doc.elements.map((element) =>
+    normalizeCanvasElement(element, page, documentFontFamily)
+  )
   if (
     doc.templateId &&
     !doc.requiresSchemaMigration &&
@@ -2269,9 +2408,17 @@ async function saveStudioChanges() {
     toast.add({
       title: 'บันทึกฉบับร่างลงระบบแล้ว',
       description:
-        'แม่แบบถูกบันทึกเป็น versioned Draft; ยังไม่เผยแพร่และยังออก PDF จริงไม่ได้',
+        'แม่แบบถูกบันทึกเป็น Draft แล้ว กดเผยแพร่เมื่อพร้อมใช้ออก PDF',
       color: 'success'
     })
+    refreshOverlaps()
+    if (overlappingPairs.value.length > 0) {
+      toast.add({
+        title: `มีองค์ประกอบทับกัน ${overlappingPairs.value.length} จุด`,
+        description: 'บันทึกแล้ว แต่ข้อความอาจซ้อนกันใน PDF กรุณาตรวจตำแหน่ง',
+        color: 'warning'
+      })
+    }
     await refreshTemplates()
   } catch (error: unknown) {
     showTemplateApiError(error)
@@ -2469,12 +2616,13 @@ function addShape(
       id: `el-shape-${Date.now()}`,
       type: 'shape',
       shapeType: 'star',
-      content: '★',
+      content: '',
       x: 200,
       y: 200,
       width: 64,
       height: 64,
-      fontSize: 48,
+      fontSize: 12,
+      bgColor: '#f59e0b',
       color: '#f59e0b',
       fontWeight: 'bold',
       textAlign: 'center'
@@ -2518,10 +2666,10 @@ function addCustomTable(preset: 'competency' | 'hours_log' | 'blank_3x3') {
     }
   } else {
     tableData = {
-      headers: ['หมวดทักษะ', 'คะแนนเฉลี่ย', 'คะแนนรวมทั้งหมด'],
+      headers: ['หมวดทักษะ', 'คะแนนที่ได้ (Earned Score)', 'คะแนนเต็ม'],
       rows: [
-        ['Hard Skill', '—', '—'],
-        ['Soft Skill', '—', '—']
+        ['Hard Skill', '{{hard_skill_score}}', '{{hard_skill_max_score}}'],
+        ['Soft Skill', '{{soft_skill_score}}', '{{soft_skill_max_score}}']
       ]
     }
   }
@@ -2534,6 +2682,7 @@ function addCustomTable(preset: 'competency' | 'hours_log' | 'blank_3x3') {
     x: 60,
     y: 400,
     width: 674,
+    height: (tableData.rows.length + 1) * 30,
     fontSize: 11,
     fontFamily: 'Sarabun, sans-serif',
     fontWeight: 'normal',
@@ -2547,10 +2696,12 @@ function addCustomTable(preset: 'competency' | 'hours_log' | 'blank_3x3') {
 }
 
 function addTableRow() {
-  if (!selectedElement.value?.tableData) return
-  const cols = selectedElement.value.tableData.headers.length
-  const newRow = Array(cols).fill('')
-  selectedElement.value.tableData.rows.push(newRow)
+  const table = selectedElement.value
+  if (!table?.tableData) return
+  const cols = table.tableData.headers.length
+  const rowCount = table.tableData.rows.length + 1
+  if (table.height) table.height += table.height / rowCount
+  table.tableData.rows.push(Array(cols).fill(''))
 }
 
 function addTableColumn() {
@@ -2563,8 +2714,11 @@ function addTableColumn() {
 }
 
 function removeTableRow(idx: number) {
-  if (!selectedElement.value?.tableData) return
-  selectedElement.value.tableData.rows.splice(idx, 1)
+  const table = selectedElement.value
+  if (!table?.tableData) return
+  const rowCount = table.tableData.rows.length + 1
+  if (table.height && rowCount > 1) table.height -= table.height / rowCount
+  table.tableData.rows.splice(idx, 1)
 }
 
 // Text & Variable elements addition
@@ -2586,6 +2740,8 @@ function addVariableElement(vKey: string, vTag: string) {
   }
   activeEditingDoc.value.elements.push(newEl)
   selectedElementId.value = newEl.id
+  const added = activeEditingDoc.value.elements.at(-1)
+  if (added) fitVariableToContent(added)
   toast.add({
     title: 'เพิ่มตัวแปรสำเร็จ',
     description: `เพิ่มตัวแปร ${vTag} ลงบนเอกสารแล้ว`,
@@ -2619,75 +2775,467 @@ function addTextElement(type: 'heading' | 'subheading' | 'body') {
 }
 
 function duplicateSelectedElement() {
-  if (!activeEditingDoc.value || !selectedElement.value) return
-  const copy: CanvasElement = {
-    ...JSON.parse(JSON.stringify(selectedElement.value)),
-    id: `el-copy-${Date.now()}`,
-    x: selectedElement.value.x + 20,
-    y: selectedElement.value.y + 20
-  }
-  activeEditingDoc.value.elements.push(copy)
-  selectedElementId.value = copy.id
+  const doc = activeEditingDoc.value
+  if (!doc) return
+  const page = getDocumentCanvasSize(doc)
+  const copies = doc.elements
+    .filter((el) => selectedElementIds.value.includes(el.id))
+    .map((el, index): CanvasElement =>
+      normalizeCanvasElement(
+        {
+          ...(JSON.parse(JSON.stringify(el)) as CanvasElement),
+          id: `el-copy-${Date.now()}-${index}`,
+          x: el.x + 20,
+          y: el.y + 20
+        },
+        page
+      )
+    )
+  doc.elements.push(...copies)
+  selectedElementIds.value = copies.map((copy) => copy.id)
 }
 
 function deleteSelectedElement() {
-  if (!activeEditingDoc.value || !selectedElementId.value) return
+  if (!activeEditingDoc.value) return
   activeEditingDoc.value.elements = activeEditingDoc.value.elements.filter(
-    (el) => el.id !== selectedElementId.value
+    (el) => !selectedElementIds.value.includes(el.id)
   )
-  selectedElementId.value = null
+  selectedElementIds.value = []
 }
 
-// Drag & Drop Handling on Canvas
-let isDragging = false
-let startMouseX = 0
-let startMouseY = 0
-let startElemX = 0
-let startElemY = 0
+// =========================================================================
+// CANVAS GEOMETRY, GUIDES AND SELECTION
+// =========================================================================
+function elementRect(el: CanvasElement): CanvasRect {
+  // Auto-sized text has no stored size; offset sizes ignore the zoom transform.
+  const node = import.meta.client
+    ? document.querySelector<HTMLElement>(
+        `[data-element-id="${CSS.escape(el.id)}"]`
+      )
+    : null
+  return {
+    x: el.x,
+    y: el.y,
+    width: el.width ?? node?.offsetWidth ?? 0,
+    height: el.height ?? node?.offsetHeight ?? 0
+  }
+}
+
+function elementLabel(el: CanvasElement | undefined): string {
+  if (!el) return 'องค์ประกอบ'
+  if (el.type === 'table' || el.type === 'custom_table') return 'ตาราง'
+  if (el.type === 'signature') return 'ลายเซ็น'
+  if (el.type === 'emblem') return 'ตราสัญลักษณ์'
+  const text = el.content.trim()
+  if (!text) return 'รูปทรง'
+  return text.length > 24 ? `${text.slice(0, 24)}…` : text
+}
+
+// Decorative shapes are meant to sit behind content, so they never count as a clash.
+function refreshOverlaps(): void {
+  const doc = activeEditingDoc.value
+  overlappingPairs.value = doc
+    ? findOverlappingPairs(
+        doc.elements
+          .filter((el) => el.type !== 'shape' && el.type !== 'divider')
+          .map((el) => ({ id: el.id, ...elementRect(el) }))
+      )
+    : []
+}
+watch(
+  () => activeEditingDoc.value?.elements,
+  () => {
+    void nextTick(refreshOverlaps)
+  },
+  { deep: true }
+)
+function overlapLabel([first, second]: readonly [string, string]): string {
+  const find = (id: string) =>
+    activeEditingDoc.value?.elements.find((el) => el.id === id)
+  return `${elementLabel(find(first))} ↔ ${elementLabel(find(second))}`
+}
+
+const textMeasureContext = import.meta.client
+  ? document.createElement('canvas').getContext('2d')
+  : null
+// Free-text comments have no meaningful longest value to size against.
+const FREE_TEXT_VARIABLES = new Set(['suggestion', 'evaluator_suggestion'])
+
+function longestContentWidth(el: CanvasElement): number {
+  if (!textMeasureContext) return 0
+  textMeasureContext.font = `${el.fontStyle === 'italic' ? 'italic ' : ''}${el.fontWeight === 'normal' ? 400 : 700} ${el.fontSize}px ${el.fontFamily || 'Sarabun, sans-serif'}`
+  const students = studentsData.value?.items ?? []
+  const texts = students.length
+    ? students.map((student) => {
+        // "[ไม่พบ...]" stand-ins never reach a PDF, so they must not widen the box.
+        const known = Object.entries(previewValuesFor(student)).map(
+          ([key, value]) => [key, value.startsWith('[') ? '' : value] as const
+        )
+        return fillPlaceholders(el.content, Object.fromEntries(known))
+      })
+    : [renderElementContent(el.content)]
+  const widest = Math.max(
+    ...texts.map((text) => textMeasureContext.measureText(text).width)
+  )
+  // The PDF font's metrics differ slightly from the browser's; leave room for that.
+  return Math.ceil(widest * 1.04) + 2 * (el.padding ?? 0)
+}
+
+function fitVariableToContent(el: CanvasElement): void {
+  if (el.type !== 'variable' || !activeEditingDoc.value) return
+  if (FREE_TEXT_VARIABLES.has(el.variableKey ?? '')) return
+  const page = getDocumentCanvasSize(activeEditingDoc.value)
+  const width = Math.min(page.width, Math.max(8, longestContentWidth(el)))
+  el.width = width
+  el.x = Math.min(el.x, page.width - width)
+}
+watch(
+  () => {
+    const el = selectedElement.value
+    return el?.type === 'variable'
+      ? `${el.id}|${el.content}|${el.fontSize}|${el.fontWeight}|${el.fontStyle}|${el.fontFamily}|${el.padding}`
+      : ''
+  },
+  (next, previous) => {
+    // Selecting another element is not an edit; only a change to this one refits.
+    if (next.split('|')[0] !== previous.split('|')[0]) return
+    if (selectedElement.value) fitVariableToContent(selectedElement.value)
+  }
+)
+
+function canvasPage(): { width: number; height: number } {
+  return { width: studioCanvasWidth.value, height: studioCanvasHeight.value }
+}
+
+let dragStart: {
+  readonly mouseX: number
+  readonly mouseY: number
+  readonly rect: CanvasRect
+  readonly origins: ReadonlyMap<string, { x: number; y: number }>
+} | null = null
 
 function handleElementMouseDown(e: MouseEvent, el: CanvasElement) {
   e.stopPropagation()
-  selectedElementId.value = el.id
-  isDragging = true
-  startMouseX = e.clientX
-  startMouseY = e.clientY
-  startElemX = el.x
-  startElemY = el.y
-
+  if (e.shiftKey || e.ctrlKey || e.metaKey) {
+    selectedElementIds.value = selectedElementIds.value.includes(el.id)
+      ? selectedElementIds.value.filter((id) => id !== el.id)
+      : [...selectedElementIds.value, el.id]
+    return
+  }
+  if (!selectedElementIds.value.includes(el.id)) {
+    selectedElementIds.value = [el.id]
+  }
+  const moving = (activeEditingDoc.value?.elements ?? []).filter((item) =>
+    selectedElementIds.value.includes(item.id)
+  )
+  dragStart = {
+    mouseX: e.clientX,
+    mouseY: e.clientY,
+    rect: boundingRect(moving.map(elementRect)),
+    origins: new Map(moving.map((item) => [item.id, { x: item.x, y: item.y }]))
+  }
   window.addEventListener('mousemove', handleWindowMouseMove)
   window.addEventListener('mouseup', handleWindowMouseUp)
 }
 
 function handleWindowMouseMove(e: MouseEvent) {
-  if (!isDragging || !selectedElement.value) return
+  const doc = activeEditingDoc.value
+  if (!dragStart || !doc) return
   const scale = canvasScale.value || 1
-  const dx = (e.clientX - startMouseX) / scale
-  const dy = (e.clientY - startMouseY) / scale
-
-  selectedElement.value.x = Math.round(startElemX + dx)
-  selectedElement.value.y = Math.round(startElemY + dy)
+  const page = canvasPage()
+  const { rect, origins } = dragStart
+  const clampX = (x: number) =>
+    Math.max(0, Math.min(page.width - rect.width, x))
+  const clampY = (y: number) =>
+    Math.max(0, Math.min(page.height - rect.height, y))
+  const moved = {
+    ...rect,
+    x: clampX(rect.x + (e.clientX - dragStart.mouseX) / scale),
+    y: clampY(rect.y + (e.clientY - dragStart.mouseY) / scale)
+  }
+  const others = doc.elements
+    .filter((el) => !origins.has(el.id))
+    .map(elementRect)
+  // Holding Alt places freely, without snapping to guides.
+  const snap = e.altKey
+    ? {
+        dx: 0,
+        dy: 0,
+        guides: [],
+        distances: measureDistances(moved, others)
+      }
+    : snapToGuides(moved, others, page)
+  const finalX = Math.round(clampX(moved.x + snap.dx))
+  const finalY = Math.round(clampY(moved.y + snap.dy))
+  activeGuides.value = snap.guides
+  activeDistances.value = snap.distances
+  for (const el of doc.elements) {
+    const origin = origins.get(el.id)
+    if (!origin) continue
+    el.x = origin.x + finalX - rect.x
+    el.y = origin.y + finalY - rect.y
+  }
 }
 
 function handleWindowMouseUp() {
-  isDragging = false
+  dragStart = null
+  activeGuides.value = []
+  activeDistances.value = []
   window.removeEventListener('mousemove', handleWindowMouseMove)
   window.removeEventListener('mouseup', handleWindowMouseUp)
 }
 
+const RESIZE_HANDLES: readonly {
+  readonly id: ResizeHandle
+  readonly className: string
+}[] = [
+  { id: 'nw', className: '-left-1 -top-1 cursor-nwse-resize' },
+  { id: 'n', className: 'left-1/2 -top-1 -ml-1 cursor-ns-resize' },
+  { id: 'ne', className: '-right-1 -top-1 cursor-nesw-resize' },
+  { id: 'e', className: '-right-1 top-1/2 -mt-1 cursor-ew-resize' },
+  { id: 'se', className: '-bottom-1 -right-1 cursor-nwse-resize' },
+  { id: 's', className: '-bottom-1 left-1/2 -ml-1 cursor-ns-resize' },
+  { id: 'sw', className: '-bottom-1 -left-1 cursor-nesw-resize' },
+  { id: 'w', className: '-left-1 top-1/2 -mt-1 cursor-ew-resize' }
+]
+
+function minimumSize(el: CanvasElement): { width: number; height: number } {
+  const lineHeight = el.fontSize * 1.25
+  if (el.type === 'table' || el.type === 'custom_table') {
+    // Below this the PDF renderer rejects the table layout.
+    const rows = (el.tableData?.rows.length ?? 2) + 1
+    return { width: 40, height: rows * (el.fontSize + 8) }
+  }
+  if (el.type === 'shape' || el.type === 'divider') {
+    return { width: 1, height: 1 }
+  }
+  return {
+    width:
+      el.type === 'variable' && !FREE_TEXT_VARIABLES.has(el.variableKey ?? '')
+        ? longestContentWidth(el)
+        : 8,
+    height: lineHeight
+  }
+}
+
+function startElementResize(
+  e: MouseEvent,
+  el: CanvasElement,
+  handle: ResizeHandle
+): void {
+  e.stopPropagation()
+  e.preventDefault()
+  const start = elementRect(el)
+  const { clientX, clientY } = e
+  const minimum = minimumSize(el)
+  const page = canvasPage()
+  const others = (activeEditingDoc.value?.elements ?? [])
+    .filter((item) => item.id !== el.id)
+    .map(elementRect)
+  const onMove = (event: MouseEvent): void => {
+    const scale = canvasScale.value || 1
+    const next = resizeRect(
+      start,
+      handle,
+      (event.clientX - clientX) / scale,
+      (event.clientY - clientY) / scale,
+      {
+        pageWidth: page.width,
+        pageHeight: page.height,
+        minWidth: minimum.width,
+        minHeight: minimum.height
+      }
+    )
+    Object.assign(el, next)
+    activeDistances.value = measureDistances(next, others)
+  }
+  const onUp = (): void => {
+    activeDistances.value = []
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
+function handleCanvasMouseDown(e: MouseEvent): void {
+  const paper = e.currentTarget
+  if (!(paper instanceof HTMLElement) || e.button !== 0) return
+  const additive = e.shiftKey || e.ctrlKey || e.metaKey
+  const baseSelection = additive ? [...selectedElementIds.value] : []
+  selectedElementIds.value = baseSelection
+  const bounds = paper.getBoundingClientRect()
+  const scale = canvasScale.value || 1
+  const startX = (e.clientX - bounds.left) / scale
+  const startY = (e.clientY - bounds.top) / scale
+  const onMove = (event: MouseEvent): void => {
+    const x = (event.clientX - bounds.left) / scale
+    const y = (event.clientY - bounds.top) / scale
+    const rect = {
+      x: Math.min(startX, x),
+      y: Math.min(startY, y),
+      width: Math.abs(x - startX),
+      height: Math.abs(y - startY)
+    }
+    marqueeRect.value = rect
+    const inside = (activeEditingDoc.value?.elements ?? [])
+      .filter((el) => rectsIntersect(rect, elementRect(el)))
+      .map((el) => el.id)
+    selectedElementIds.value = [...new Set([...baseSelection, ...inside])]
+  }
+  const onUp = (): void => {
+    marqueeRect.value = null
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
+function handleStudioKeydown(e: KeyboardEvent): void {
+  const doc = activeEditingDoc.value
+  if (!isCanvaStudioOpen.value || !doc || studioConfirmation.value) return
+  const target = e.target
+  if (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+  ) {
+    return
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+    e.preventDefault()
+    selectedElementIds.value = doc.elements.map((el) => el.id)
+    return
+  }
+  if (selectedElementIds.value.length === 0) return
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault()
+    deleteSelectedElement()
+    return
+  }
+  const step = e.shiftKey ? 10 : 1
+  const delta: Readonly<Record<string, readonly [number, number]>> = {
+    ArrowLeft: [-step, 0],
+    ArrowRight: [step, 0],
+    ArrowUp: [0, -step],
+    ArrowDown: [0, step]
+  }
+  const move = delta[e.key]
+  if (!move) return
+  e.preventDefault()
+  const selected = doc.elements.filter((el) =>
+    selectedElementIds.value.includes(el.id)
+  )
+  const rect = boundingRect(selected.map(elementRect))
+  const page = canvasPage()
+  const dx = Math.max(
+    -rect.x,
+    Math.min(page.width - rect.x - rect.width, move[0])
+  )
+  const dy = Math.max(
+    -rect.y,
+    Math.min(page.height - rect.y - rect.height, move[1])
+  )
+  for (const el of selected) {
+    el.x += dx
+    el.y += dy
+  }
+}
+onMounted(() => window.addEventListener('keydown', handleStudioKeydown))
+onBeforeUnmount(() =>
+  window.removeEventListener('keydown', handleStudioKeydown)
+)
+
 // Background Image Upload for Studio
-function handleStudioBgUpload(event: Event) {
+const bgRightsBasis = ref('')
+const bgRightsConfirmed = ref(false)
+const isUploadingBackground = ref(false)
+const MAX_BACKGROUND_SIDE = 4096
+
+async function loadBackgroundPreview(doc: DocumentTemplateItem): Promise<void> {
+  const key = doc.backgroundAssetKey
+  if (!key) return
+  try {
+    const { dataUrl } = await api<{ readonly dataUrl: string }>(
+      '/document-assets/preview',
+      { query: { key } }
+    )
+    if (activeEditingDoc.value?.backgroundAssetKey === key) {
+      activeEditingDoc.value.customBgUrl = dataUrl
+    }
+  } catch {
+    // The saved key still drives the PDF; only the designer preview is missing.
+  }
+}
+
+// The PDF renderer embeds PNG only, so any browser-readable image is converted here.
+async function backgroundFileToPng(file: File): Promise<File> {
+  const bitmap = await createImageBitmap(file)
+  const scale = Math.min(
+    1,
+    MAX_BACKGROUND_SIDE / Math.max(bitmap.width, bitmap.height)
+  )
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(bitmap.width * scale)
+  canvas.height = Math.round(bitmap.height * scale)
+  canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, 'image/png')
+  )
+  if (!blob) throw new Error('แปลงไฟล์ภาพไม่สำเร็จ กรุณาใช้ไฟล์ PNG หรือ JPG')
+  return new File([blob], `${file.name.replace(/\.[^.]+$/u, '')}.png`, {
+    type: 'image/png'
+  })
+}
+
+async function handleStudioBgUpload(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
+  input.value = ''
+  const rightsBasis = bgRightsBasis.value.trim()
   if (!file || !activeEditingDoc.value) return
-
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    if (activeEditingDoc.value) {
-      activeEditingDoc.value.customBgUrl = e.target?.result as string
-      activeEditingDoc.value.backgroundType = 'custom'
-    }
+  if (!rightsBasis || !bgRightsConfirmed.value) {
+    toast.add({
+      title: 'ยังอัปโหลดภาพพื้นหลังไม่ได้',
+      description: 'ระบุที่มาสิทธิ์และยืนยันว่ามีสิทธิ์ใช้ภาพก่อนเลือกไฟล์',
+      color: 'warning'
+    })
+    return
   }
-  reader.readAsDataURL(file)
+  isUploadingBackground.value = true
+  try {
+    const png = await backgroundFileToPng(file)
+    if (png.size > 8 * 1024 * 1024) {
+      throw new Error('ภาพใหญ่เกิน 8 MB หลังแปลงเป็น PNG กรุณาลดขนาดภาพ')
+    }
+    const form = new FormData()
+    form.append('file', png)
+    form.append('assetType', 'background')
+    form.append('rightsBasis', rightsBasis)
+    form.append('rightsConfirmed', 'true')
+    const asset = await api<DocumentAssetApiItem>('/document-assets', {
+      method: 'POST',
+      body: form
+    })
+    if (activeEditingDoc.value) {
+      activeEditingDoc.value.backgroundAssetKey = asset.key
+      activeEditingDoc.value.backgroundType = 'custom'
+      activeEditingDoc.value.customBgUrl = URL.createObjectURL(png)
+    }
+    bgRightsBasis.value = ''
+    bgRightsConfirmed.value = false
+    toast.add({
+      title: 'อัปโหลดภาพพื้นหลังแล้ว',
+      description: 'กดบันทึก Draft เพื่อเก็บภาพนี้ไว้ในแม่แบบ',
+      color: 'success'
+    })
+  } catch (error: unknown) {
+    showTemplateApiError(error)
+  } finally {
+    isUploadingBackground.value = false
+  }
 }
 </script>
 
@@ -3067,8 +3615,7 @@ function handleStudioBgUpload(event: Event) {
               <td class="text-center">
                 <UBadge
                   :color="
-                    doc.templateStatus === 'active' &&
-                    doc.versionStatus === 'published'
+                    isTemplateLive(doc)
                       ? 'success'
                       : doc.versionStatus === 'draft'
                         ? 'warning'
@@ -3078,8 +3625,7 @@ function handleStudioBgUpload(event: Event) {
                   variant="subtle"
                 >
                   {{
-                    doc.templateStatus === 'active' &&
-                    doc.versionStatus === 'published'
+                    isTemplateLive(doc)
                       ? 'เปิดใช้งานอยู่'
                       : doc.versionStatus === 'draft'
                         ? 'ฉบับร่าง'
@@ -3111,16 +3657,7 @@ function handleStudioBgUpload(event: Event) {
                     size="xs"
                     title="ลบ / เก็บถาวรเทมเพลต"
                     variant="ghost"
-                    :disabled="
-                      doc.templateStatus === 'active' &&
-                      doc.versionStatus === 'published' &&
-                      documents.filter(
-                        (item) =>
-                          item.docType === doc.docType &&
-                          item.templateStatus === 'active' &&
-                          item.versionStatus === 'published'
-                      ).length === 1
-                    "
+                    :disabled="isTemplateLive(doc)"
                     class="hidden sm:inline-flex cursor-pointer hover:bg-red-500/10 text-red-600 dark:text-red-400 disabled:opacity-30 disabled:pointer-events-none"
                     @click="openDeactivateDocumentModal(doc)"
                   />
@@ -3506,7 +4043,7 @@ function handleStudioBgUpload(event: Event) {
               activeEditingDoc.templateId &&
               activeEditingDoc.versionId &&
               activeEditingDoc.versionStatus === 'draft' &&
-              activeEditingDoc.templateStatus === 'active'
+              activeEditingDoc.templateStatus !== 'archived'
             "
             color="success"
             icon="i-lucide-shield-check"
@@ -3552,7 +4089,8 @@ function handleStudioBgUpload(event: Event) {
               isSavingTemplate ||
               isPublishingTemplate
             "
-            aria-label="ปิด Designer"
+            label="กลับหน้าเอกสาร"
+            aria-label="ปิด Designer และกลับหน้าเอกสาร"
             @click="requestCloseStudio"
           />
         </div>
@@ -3892,6 +4430,22 @@ function handleStudioBgUpload(event: Event) {
         </div>
 
         <!-- Element Actions -->
+        <div class="flex items-center gap-2">
+          <UButton
+            color="neutral"
+            icon="i-lucide-crosshair"
+            label="เส้นกึ่งกลาง"
+            size="xs"
+            :aria-pressed="showCenterGuides"
+            :variant="showCenterGuides ? 'soft' : 'outline'"
+            @click="showCenterGuides = !showCenterGuides"
+          />
+          <span
+            v-if="selectedElementIds.length > 1"
+            class="text-xs text-slate-300"
+            >เลือก {{ selectedElementIds.length }} รายการ</span
+          >
+        </div>
         <div v-if="selectedElement" class="flex items-center gap-2">
           <UButton
             color="neutral"
@@ -3910,6 +4464,27 @@ function handleStudioBgUpload(event: Event) {
             @click="deleteSelectedElement"
           />
         </div>
+      </div>
+
+      <div
+        v-if="overlappingPairs.length > 0"
+        class="no-print flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-700/50 bg-amber-950/60 px-4 py-1.5 text-xs text-amber-100"
+        role="status"
+      >
+        <UIcon name="i-lucide-triangle-alert" class="size-4 shrink-0" />
+        <span>องค์ประกอบทับกัน {{ overlappingPairs.length }} จุด:</span>
+        <button
+          v-for="pair in overlappingPairs.slice(0, 3)"
+          :key="pair.join('|')"
+          type="button"
+          class="cursor-pointer underline underline-offset-2"
+          @click="selectedElementIds = [...pair]"
+        >
+          {{ overlapLabel(pair) }}
+        </button>
+        <span v-if="overlappingPairs.length > 3"
+          >และอีก {{ overlappingPairs.length - 3 }} จุด</span
+        >
       </div>
 
       <!-- Studio Workspace Main Area -->
@@ -4347,22 +4922,49 @@ function handleStudioBgUpload(event: Event) {
                   <span>🔷 ลายเรขาคณิตหรูหรา</span>
                 </button>
 
-                <label
-                  class="flex w-full items-center gap-2 rounded-lg border p-2.5 cursor-pointer transition-all"
-                  :class="
-                    activeEditingDoc.backgroundType === 'custom'
-                      ? 'border-primary bg-primary/20 text-white font-bold'
-                      : 'border-slate-800 bg-slate-800/50 text-slate-300'
-                  "
-                >
-                  <span>🖼️ อัปโหลดภาพพื้นหลังเอง</span>
+                <div class="space-y-1.5 rounded-lg border border-slate-800 p-2">
                   <input
-                    type="file"
-                    accept="image/*"
-                    class="hidden"
-                    @change="handleStudioBgUpload"
+                    v-model="bgRightsBasis"
+                    type="text"
+                    maxlength="1000"
+                    aria-label="ที่มาของสิทธิ์ใช้ภาพพื้นหลัง"
+                    placeholder="ที่มาสิทธิ์ของภาพ เช่น เลขที่หนังสืออนุมัติ"
+                    class="w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-[10px] text-white"
+                    :disabled="isUploadingBackground"
                   />
-                </label>
+                  <label
+                    class="flex items-start gap-1.5 text-[10px] text-slate-300"
+                  >
+                    <input
+                      v-model="bgRightsConfirmed"
+                      type="checkbox"
+                      class="mt-0.5 accent-amber-500"
+                      :disabled="isUploadingBackground"
+                    />
+                    ยืนยันว่ามีสิทธิ์ใช้ภาพนี้ในเอกสารทางการ
+                  </label>
+                  <label
+                    class="flex w-full items-center gap-2 rounded-lg border p-2.5 cursor-pointer transition-all"
+                    :class="
+                      activeEditingDoc.backgroundType === 'custom'
+                        ? 'border-primary bg-primary/20 text-white font-bold'
+                        : 'border-slate-800 bg-slate-800/50 text-slate-300'
+                    "
+                  >
+                    <span>{{
+                      isUploadingBackground
+                        ? 'กำลังอัปโหลด...'
+                        : '🖼️ อัปโหลดภาพพื้นหลังเอง'
+                    }}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      class="hidden"
+                      :disabled="isUploadingBackground"
+                      @change="handleStudioBgUpload"
+                    />
+                  </label>
+                </div>
 
                 <button
                   type="button"
@@ -4427,6 +5029,7 @@ function handleStudioBgUpload(event: Event) {
                 height: `${studioCanvasHeight}px`,
                 transform: `scale(${canvasScale})`
               }"
+              @mousedown="handleCanvasMouseDown"
             >
               <!-- DYNAMIC BACKGROUND UNDERNEATH ALL ELEMENTS -->
               <div
@@ -4550,18 +5153,20 @@ function handleStudioBgUpload(event: Event) {
               <div
                 v-for="el in activeEditingDoc.elements"
                 :key="el.id"
+                :data-element-id="el.id"
                 class="absolute select-none cursor-move transition-shadow"
                 :class="{
                   'ring-2 ring-primary ring-offset-1 shadow-lg z-30':
-                    selectedElementId === el.id,
+                    selectedElementIds.includes(el.id),
                   'hover:ring-1 hover:ring-primary/50 z-20':
-                    selectedElementId !== el.id
+                    !selectedElementIds.includes(el.id)
                 }"
                 :style="{
                   left: `${el.x}px`,
                   top: `${el.y}px`,
                   width: el.width ? `${el.width}px` : 'auto',
                   height: el.height ? `${el.height}px` : 'auto',
+                  lineHeight: 1.25,
                   fontSize: `${el.fontSize}px`,
                   fontFamily: el.fontFamily || 'Sarabun, sans-serif',
                   fontWeight: el.fontWeight,
@@ -4570,13 +5175,19 @@ function handleStudioBgUpload(event: Event) {
                   color: el.color,
                   textAlign: el.textAlign,
                   letterSpacing: el.letterSpacing || 'normal',
-                  backgroundColor: el.bgColor || 'transparent',
+                  backgroundColor:
+                    el.shapeType === 'star'
+                      ? 'transparent'
+                      : el.bgColor || 'transparent',
                   borderWidth: el.borderWidth ? `${el.borderWidth}px` : '0px',
                   borderColor: el.borderColor || 'transparent',
                   borderStyle: el.borderWidth ? 'solid' : 'none',
-                  borderRadius: el.borderRadius
-                    ? `${el.borderRadius}px`
-                    : '0px',
+                  borderRadius:
+                    el.shapeType === 'circle'
+                      ? '50%'
+                      : el.borderRadius
+                        ? `${el.borderRadius}px`
+                        : '0px',
                   padding: el.padding ? `${el.padding}px` : '0px'
                 }"
                 @mousedown="handleElementMouseDown($event, el)"
@@ -4586,13 +5197,26 @@ function handleStudioBgUpload(event: Event) {
                   v-if="el.type === 'shape'"
                   class="size-full flex items-center justify-center"
                 >
-                  <span v-if="el.content">{{ el.content }}</span>
+                  <svg
+                    v-if="el.shapeType === 'star'"
+                    class="absolute inset-0 size-full"
+                    viewBox="0 0 100 100"
+                    aria-hidden="true"
+                  >
+                    <polygon
+                      points="50,0 61.8,33.8 97.6,34.5 69,56.2 79.4,90.5 50,70 20.6,90.5 31,56.2 2.4,34.5 38.2,33.8"
+                      :fill="el.bgColor || el.color"
+                    />
+                  </svg>
+                  <span v-if="el.content && el.content !== '★'">{{
+                    renderElementContent(el.content)
+                  }}</span>
                 </div>
 
                 <!-- Emblem Component -->
                 <div
                   v-else-if="el.type === 'emblem'"
-                  class="mx-auto flex min-h-20 w-32 flex-col items-center justify-center gap-1 rounded border border-dashed border-amber-600 bg-amber-50 p-2 text-amber-800"
+                  class="flex size-full flex-col items-center justify-center gap-1 overflow-hidden rounded border border-dashed border-amber-600 bg-amber-50 p-2 text-amber-800"
                 >
                   <UIcon name="i-lucide-image" class="size-6" />
                   <span class="max-w-full truncate text-center text-[9px]">
@@ -4601,79 +5225,77 @@ function handleStudioBgUpload(event: Event) {
                 </div>
 
                 <!-- Custom Dynamic Table Component -->
-                <div
+                <!-- Same grid as the PDF: equal columns filling the element's box. -->
+                <table
                   v-else-if="el.type === 'custom_table' && el.tableData"
-                  class="w-full"
+                  class="size-full table-fixed border-collapse text-center"
+                  :style="{
+                    height: `${tableRowHeight(el, el.tableData.rows.length + 1) * (el.tableData.rows.length + 1)}px`
+                  }"
                 >
-                  <table
-                    class="w-full border-collapse text-left text-xs bg-white/95 backdrop-blur-[1px] border border-slate-300"
-                  >
-                    <thead>
-                      <tr
-                        class="border-b border-slate-300 bg-slate-100 font-bold text-slate-800"
+                  <thead>
+                    <tr class="bg-slate-100 font-bold">
+                      <th
+                        v-for="(header, hIdx) in el.tableData.headers"
+                        :key="hIdx"
+                        class="border border-slate-300 px-[3px] align-middle"
                       >
-                        <th
-                          v-for="(header, hIdx) in el.tableData.headers"
-                          :key="hIdx"
-                          class="p-2 border-r border-slate-200 last:border-r-0"
-                        >
-                          {{ renderElementContent(header) }}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-200">
-                      <tr
-                        v-for="(row, rIdx) in el.tableData.rows"
-                        :key="rIdx"
-                        class="hover:bg-slate-50/80"
+                        {{ renderElementContent(header) }}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, rIdx) in el.tableData.rows" :key="rIdx">
+                      <td
+                        v-for="(cell, cIdx) in row"
+                        :key="cIdx"
+                        class="border border-slate-300 px-[3px] align-middle"
                       >
-                        <td
-                          v-for="(cell, cIdx) in row"
-                          :key="cIdx"
-                          class="p-2 border-r border-slate-200 last:border-r-0"
-                        >
-                          {{ renderElementContent(cell) }}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                        {{ renderElementContent(cell) }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
 
-                <!-- Category score preview: never infer an overall grade. -->
-                <div v-else-if="el.type === 'table'" class="w-full">
-                  <p class="mb-1 text-[10px] text-slate-500" role="status">
-                    ยังไม่ได้โหลดผลประเมินจริงในหน้าตัวอย่างนี้
-                  </p>
-                  <table
-                    class="w-full border-collapse text-left text-xs bg-white/90 backdrop-blur-[1px]"
-                  >
-                    <thead>
-                      <tr
-                        class="border-y border-slate-300 bg-slate-100 font-bold text-slate-800"
-                      >
-                        <th class="py-2 pl-3">หมวดทักษะ</th>
-                        <th class="py-2 text-center">คะแนนเฉลี่ย</th>
-                        <th class="py-2 pr-3 text-right">คะแนนรวมทั้งหมด</th>
-                      </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-200">
-                      <tr>
-                        <td class="py-2.5 pl-3">
-                          <p class="font-bold text-slate-900">Hard Skill</p>
-                        </td>
-                        <td class="text-center font-mono">—</td>
-                        <td class="pr-3 text-right font-mono">—</td>
-                      </tr>
-                      <tr>
-                        <td class="py-2.5 pl-3">
-                          <p class="font-bold text-slate-900">Soft Skill</p>
-                        </td>
-                        <td class="text-center font-mono">—</td>
-                        <td class="pr-3 text-right font-mono">—</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                <!-- Category score table: never infer an overall grade. -->
+                <table
+                  v-else-if="el.type === 'table'"
+                  class="size-full table-fixed border-collapse text-center"
+                  :style="{ height: `${tableRowHeight(el, 3) * 3}px` }"
+                >
+                  <thead>
+                    <tr class="bg-slate-100 font-bold">
+                      <th class="border border-slate-300 px-[3px] align-middle">
+                        หมวดทักษะ
+                      </th>
+                      <th class="border border-slate-300 px-[3px] align-middle">
+                        คะแนนที่ได้ (Earned Score)
+                      </th>
+                      <th class="border border-slate-300 px-[3px] align-middle">
+                        คะแนนเต็ม
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="row in [
+                        ['Hard Skill', 'hard_skill'],
+                        ['Soft Skill', 'soft_skill']
+                      ]"
+                      :key="row[0]"
+                    >
+                      <td class="border border-slate-300 px-[3px] align-middle">
+                        {{ row[0] }}
+                      </td>
+                      <td class="border border-slate-300 px-[3px] align-middle">
+                        {{ scorePreviewCell(`${row[1]}_score`) }}
+                      </td>
+                      <td class="border border-slate-300 px-[3px] align-middle">
+                        {{ scorePreviewCell(`${row[1]}_max_score`) }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
 
                 <!-- Signature Component -->
                 <div
@@ -4721,7 +5343,7 @@ function handleStudioBgUpload(event: Event) {
                 </div>
 
                 <!-- Standard Text & Variable Component -->
-                <div v-else>
+                <div v-else class="whitespace-pre-wrap">
                   {{ renderElementContent(el.content) }}
                 </div>
 
@@ -4732,6 +5354,95 @@ function handleStudioBgUpload(event: Event) {
                 >
                   {{ el.type }} ({{ el.x }}, {{ el.y }})
                 </div>
+                <template
+                  v-if="
+                    selectedElementId === el.id &&
+                    selectedElementIds.length === 1
+                  "
+                >
+                  <span
+                    v-for="handle in RESIZE_HANDLES"
+                    :key="handle.id"
+                    class="no-print absolute z-40 size-2 rounded-sm border border-primary bg-white"
+                    :class="handle.className"
+                    :data-resize-handle="handle.id"
+                    @mousedown="startElementResize($event, el, handle.id)"
+                  ></span>
+                </template>
+              </div>
+
+              <!-- Alignment overlays; none of this reaches the saved template or the PDF. -->
+              <div
+                class="no-print pointer-events-none absolute inset-0 z-40"
+                aria-hidden="true"
+              >
+                <template v-if="showCenterGuides">
+                  <div
+                    data-testid="center-guide-vertical"
+                    class="absolute inset-y-0 left-1/2 border-l border-dashed border-sky-400/50"
+                  ></div>
+                  <div
+                    data-testid="center-guide-horizontal"
+                    class="absolute inset-x-0 top-1/2 border-t border-dashed border-sky-400/50"
+                  ></div>
+                </template>
+                <div
+                  v-for="guide in activeGuides"
+                  :key="`${guide.axis}-${guide.position}`"
+                  data-testid="smart-guide"
+                  class="absolute bg-fuchsia-500"
+                  :style="
+                    guide.axis === 'x'
+                      ? {
+                          left: `${guide.position}px`,
+                          top: 0,
+                          bottom: 0,
+                          width: '1px'
+                        }
+                      : {
+                          top: `${guide.position}px`,
+                          left: 0,
+                          right: 0,
+                          height: '1px'
+                        }
+                  "
+                ></div>
+                <div
+                  v-for="gap in activeDistances"
+                  :key="`${gap.axis}-${gap.at}-${gap.from}`"
+                  data-testid="distance-indicator"
+                  class="absolute flex items-center justify-center bg-rose-500"
+                  :style="
+                    gap.axis === 'x'
+                      ? {
+                          left: `${gap.from}px`,
+                          top: `${gap.at}px`,
+                          width: `${gap.to - gap.from}px`,
+                          height: '1px'
+                        }
+                      : {
+                          left: `${gap.at}px`,
+                          top: `${gap.from}px`,
+                          width: '1px',
+                          height: `${gap.to - gap.from}px`
+                        }
+                  "
+                >
+                  <span
+                    class="rounded bg-rose-500 px-1 text-[9px] leading-tight whitespace-nowrap text-white"
+                    >{{ Math.round(gap.to - gap.from) }}</span
+                  >
+                </div>
+                <div
+                  v-if="marqueeRect"
+                  class="absolute border border-primary bg-primary/10"
+                  :style="{
+                    left: `${marqueeRect.x}px`,
+                    top: `${marqueeRect.y}px`,
+                    width: `${marqueeRect.width}px`,
+                    height: `${marqueeRect.height}px`
+                  }"
+                ></div>
               </div>
             </div>
           </div>

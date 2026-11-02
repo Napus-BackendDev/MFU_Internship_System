@@ -41,7 +41,7 @@ export interface DocumentIssueSnapshotV1 {
     }[]
     readonly imageAssets?: readonly {
       readonly key: string
-      readonly assetType: 'emblem' | 'signature'
+      readonly assetType: 'emblem' | 'signature' | 'background'
       readonly sha256: string
     }[]
   }

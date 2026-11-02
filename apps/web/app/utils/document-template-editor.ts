@@ -40,8 +40,8 @@ function safeEditorMetadata(
   ) {
     metadata.backgroundType = input.backgroundType
   }
-  if (typeof input.customBgUrl === 'string') {
-    metadata.customBgUrl = input.customBgUrl
+  if (typeof input.backgroundAssetKey === 'string') {
+    metadata.backgroundAssetKey = input.backgroundAssetKey
   }
   if (
     typeof input.bgOpacity === 'number' &&

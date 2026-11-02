@@ -10,6 +10,7 @@ import nodemailer, { type Transporter } from 'nodemailer'
 import type { Logger } from 'pino'
 
 import { renderSafeEmailHtml } from './email-template.js'
+import { recipientDomainCanReceiveMail } from './recipient-domain.js'
 import { studentReferenceFilter } from './student-reference.js'
 import type { SmtpSetting, WorkerModels } from './models.js'
 
@@ -321,6 +322,12 @@ export class EmailProcessor {
         this.models.Evaluator.findById(assignment.evaluatorId)
       ])
       if (!student || !evaluator) throw new Error('DELIVERY_RECIPIENT_INVALID')
+      if (
+        this.environment.MAIL_DELIVERY_MODE === 'smtp' &&
+        !(await recipientDomainCanReceiveMail(delivery.recipientEmail))
+      ) {
+        throw new Error('RECIPIENT_DOMAIN_NOT_FOUND')
+      }
 
       let pin = ''
       if (shouldRotateInvitationPin(campaign.type)) {
@@ -354,12 +361,14 @@ export class EmailProcessor {
               { $set: { accessPinHash }, $unset: { accessPin: 1 } },
               { session }
             )
+            // The assignment keeps the PIN so authorised staff can read it from
+            // the listing (PERMISSIONS.md); the invitation holds only its hash.
             const assignmentWrite = await this.models.Assignment.updateOne(
               {
                 _id: assignment.id,
                 status: { $in: ['pending', 'inProgress'] }
               },
-              { $set: { accessPinHash }, $unset: { accessPin: 1 } },
+              { $set: { accessPin: pin, accessPinHash } },
               { session }
             )
             if (
@@ -716,6 +725,7 @@ function readMessageId(result: unknown): string {
 
 function safeFailureCode(error: unknown): string {
   if (!(error instanceof Error)) return 'SEND_FAILED'
+  if ('code' in error && error.code === 'EENVELOPE') return 'RECIPIENT_REJECTED'
   if (/^[A-Z0-9_]{3,100}$/.test(error.message)) return error.message
   return 'SMTP_SEND_FAILED'
 }

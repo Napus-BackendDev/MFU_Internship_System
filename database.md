@@ -647,6 +647,14 @@ Singleton configuration for the optional database override. When `enabled` is `f
 
 ## 9. Document templates and files
 
+### 8.6 `aiSettings`
+
+One document (`key: ai`) with `enabled`, `modelId`, `prompt`, optimistic `version`, `updatedBy` and the Gemini API key encrypted with `SMTP_SETTINGS_ENCRYPTION_KEY` (`apiKeyCiphertext`, `apiKeyIv`, `apiKeyAuthTag`, all `select: false`). The key is write-only over HTTP.
+
+### 8.7 `feedbackSummaries`
+
+One document per final evaluation (unique `evaluationId`, indexed `assignmentId`) with `summary`, `modelId` and `generatedBy`. Generated text lives here because final evaluations are immutable; it is not used in scoring or issued documents.
+
 ### 9.1 `documentTemplates`
 
 ```js
@@ -928,3 +936,5 @@ Development document seeding uploads the bundled Sarabun bytes to local object s
 - [ ] Production URI มาจาก secret managerและไม่อยู่ใน Git
 - [ ] audit log ค้นตาม actor/resource/request ID ได้
 - [ ] retention indexes/process ได้รับอนุมัติ
+
+> Document template status is `active`, `inactive` or `archived`. Activating a template marks other active templates of its type `inactive`, so they can be switched back on; only explicit delete archives. Templates archived by earlier activations stay archived. `canonicalJson.editorMetadata.backgroundAssetKey` references a registered `background` asset; image bytes are never stored inline.

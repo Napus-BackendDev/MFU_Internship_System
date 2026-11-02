@@ -362,6 +362,63 @@ const statusColor = (value: Assignment['status']) =>
     }) as const
   )[value]
 
+interface FeedbackSummary {
+  readonly feedback: string
+  readonly summary: string | null
+  readonly model: string | null
+  readonly generatedAt: string | null
+}
+
+const feedbackTarget = ref<Assignment | null>(null)
+const feedbackSummary = ref<FeedbackSummary | null>(null)
+const feedbackLoading = ref(false)
+const feedbackGenerating = ref(false)
+const feedbackError = ref<string>()
+
+async function openFeedbackSummary(item: Assignment): Promise<void> {
+  feedbackTarget.value = item
+  feedbackSummary.value = null
+  feedbackError.value = undefined
+  feedbackLoading.value = true
+  try {
+    feedbackSummary.value = await api<FeedbackSummary>(
+      `/evaluation-assignments/${item.id}/feedback-summary`
+    )
+  } catch (error: unknown) {
+    feedbackError.value =
+      error instanceof Error ? error.message : 'โหลดข้อมูล Feedback ไม่สำเร็จ'
+  } finally {
+    feedbackLoading.value = false
+  }
+}
+
+async function generateFeedbackSummary(): Promise<void> {
+  const item = feedbackTarget.value
+  if (!item) return
+  feedbackGenerating.value = true
+  feedbackError.value = undefined
+  try {
+    feedbackSummary.value = await api<FeedbackSummary>(
+      `/evaluation-assignments/${item.id}/feedback-summary`,
+      { method: 'POST' }
+    )
+  } catch (error: unknown) {
+    feedbackError.value =
+      error instanceof Error ? error.message : 'สรุป Feedback ไม่สำเร็จ'
+  } finally {
+    feedbackGenerating.value = false
+  }
+}
+
+const deliveryFailureMessages: Readonly<Record<string, string>> = {
+  RECIPIENT_DOMAIN_NOT_FOUND:
+    'ไม่พบโดเมนของอีเมลผู้รับ กรุณาตรวจการสะกดแล้วแก้ไขอีเมล',
+  RECIPIENT_REJECTED: 'เซิร์ฟเวอร์อีเมลปฏิเสธผู้รับ อีเมลนี้อาจไม่มีอยู่จริง',
+  SMTP_SEND_FAILED: 'เซิร์ฟเวอร์อีเมลขัดข้อง กรุณาลองส่งใหม่',
+  DELIVERY_SOURCE_INVALID: 'คำเชิญหรือแบบฟอร์มเปลี่ยนไปแล้ว กรุณาออกคำเชิญใหม่',
+  DELIVERY_RECIPIENT_INVALID: 'ไม่พบข้อมูลนักศึกษาหรือผู้ประเมิน'
+}
+
 function getAssignmentStatusBadge(item: Assignment) {
   if (item.status === 'submitted') {
     return {
@@ -391,16 +448,26 @@ function getAssignmentStatusBadge(item: Assignment) {
     }
   }
   if (item.status === 'email_error' || item.delivery?.status === 'failed') {
-    const reason = item.delivery?.lastErrorCode || 'ส่งอีเมลไม่สำเร็จ'
+    const code = item.delivery?.lastErrorCode
     return {
       color: 'error' as const,
       label: 'ส่งอีเมลผิดพลาด (Email Error)',
       icon: 'i-lucide-mail-warning',
-      detail: `สาเหตุ: ${reason}`,
+      detail: `สาเหตุ: ${(code && deliveryFailureMessages[code]) || code || 'ส่งอีเมลไม่สำเร็จ'}`,
       canRetry: true
     }
   }
-  if (item.delivery?.status === 'sent' || item.status === 'pending') {
+  if (item.delivery?.status === 'uncertain') {
+    return {
+      color: 'warning' as const,
+      label: 'ไม่ทราบผลการส่ง (Uncertain)',
+      icon: 'i-lucide-mail-question',
+      detail:
+        'ติดต่อเซิร์ฟเวอร์อีเมลไม่จบ อาจส่งถึงหรือไม่ก็ได้ กรุณาตรวจสอบก่อนส่งซ้ำ',
+      canRetry: true
+    }
+  }
+  if (item.delivery?.status === 'sent') {
     const email =
       item.delivery?.recipientEmail || getEvaluator(item.evaluatorId)?.email
     return {
@@ -1076,6 +1143,17 @@ async function refreshAfterEmailAction(): Promise<boolean> {
               >
                 <div class="flex items-center justify-end">
                   <UButton
+                    v-if="item.status === 'submitted'"
+                    aria-label="สรุป Feedback ด้วย AI"
+                    color="neutral"
+                    icon="i-lucide-sparkles"
+                    size="xs"
+                    title="สรุป Feedback ด้วย AI"
+                    variant="subtle"
+                    class="!rounded-full size-8 p-0 flex items-center justify-center mr-1.5 cursor-pointer"
+                    @click="openFeedbackSummary(item)"
+                  />
+                  <UButton
                     aria-label="ส่งอีเมลการประเมิน"
                     color="primary"
                     icon="i-lucide-mail"
@@ -1109,6 +1187,68 @@ async function refreshAfterEmailAction(): Promise<boolean> {
         items-name="รายการ"
       />
     </UCard>
+
+    <AppModal
+      v-if="feedbackTarget"
+      :open="true"
+      title="สรุป Feedback ด้วย AI"
+      @update:open="
+        ($event) => {
+          if (!$event) feedbackTarget = null
+        }
+      "
+    >
+      <div class="space-y-4 p-1">
+        <UAlert
+          v-if="feedbackError"
+          color="error"
+          icon="i-lucide-circle-alert"
+          :title="feedbackError"
+        />
+        <USkeleton v-if="feedbackLoading" class="h-24 w-full" />
+        <template v-else>
+          <div>
+            <p class="mb-1 text-xs font-semibold text-muted">ผลสรุป</p>
+            <p
+              v-if="feedbackSummary?.summary"
+              class="whitespace-pre-line text-sm"
+            >
+              {{ feedbackSummary.summary }}
+            </p>
+            <p v-else class="text-sm text-muted">ยังไม่มีผลสรุป</p>
+            <p
+              v-if="feedbackSummary?.model"
+              class="mt-1 text-[11px] text-muted"
+            >
+              สร้างโดย {{ feedbackSummary.model }} ควรตรวจก่อนนำไปใช้
+            </p>
+          </div>
+          <div>
+            <p class="mb-1 text-xs font-semibold text-muted">
+              ข้อความจากผู้ประเมิน
+            </p>
+            <p
+              v-if="feedbackSummary?.feedback"
+              class="max-h-48 overflow-y-auto whitespace-pre-line text-xs text-muted"
+            >
+              {{ feedbackSummary.feedback }}
+            </p>
+            <p v-else class="text-xs text-muted">
+              ผู้ประเมินไม่ได้เขียนข้อเสนอแนะ
+            </p>
+          </div>
+        </template>
+        <div class="flex justify-end">
+          <UButton
+            icon="i-lucide-sparkles"
+            :disabled="feedbackLoading || !feedbackSummary?.feedback"
+            :label="feedbackSummary?.summary ? 'สรุปใหม่' : 'สรุปด้วย AI'"
+            :loading="feedbackGenerating"
+            @click="generateFeedbackSummary"
+          />
+        </div>
+      </div>
+    </AppModal>
 
     <!-- ================================================================= -->
     <!-- MODAL: SEND TARGETED EVALUATION EMAIL                              -->

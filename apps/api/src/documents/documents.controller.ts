@@ -43,7 +43,7 @@ const pageSchema = z.object(pageFields).transform(pagination)
 const templateListSchema = z
   .object({
     ...pageFields,
-    status: z.enum(['active', 'archived']).optional(),
+    status: z.enum(['active', 'inactive', 'archived']).optional(),
     documentType: z.enum(['transcript', 'certificate']).optional()
   })
   .transform((query) => ({
@@ -147,6 +147,18 @@ export class DocumentsController {
     )
   }
 
+  @RequirePermissions('documentTemplates.manage')
+  @Get('document-assets/preview')
+  public previewAsset(
+    @Req() request: AuthenticatedRequest,
+    @Query('key') key: unknown
+  ): Promise<unknown> {
+    return this.service.previewImageAsset(
+      request.actor!,
+      z.string().min(1).max(512).parse(key)
+    )
+  }
+
   @RequirePermissions('documentTemplates.read')
   @Get('document-templates')
   public listTemplates(
@@ -207,7 +219,7 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('templateId') templateId: string
   ): Promise<void> {
-    await this.service.deactivateTemplate(
+    await this.service.archiveTemplate(
       request.actor!,
       objectIdSchema.parse(templateId)
     )

@@ -11,6 +11,8 @@ type CanonicalDocument = CanonicalDocumentV1 | CanonicalDocumentV2
 type CanonicalElement = CanonicalCanvasElementV2
 
 const blockedPlaceholders = new Set(['total_hours'])
+// Evaluators may legitimately leave no comment; the document prints a blank.
+const optionalPlaceholders = new Set(['suggestion', 'evaluator_suggestion'])
 
 export function buildDocumentValues(
   snapshot: DocumentIssueSnapshotV1
@@ -36,6 +38,8 @@ export function buildDocumentValues(
   }
   const hardSkill = score('hardSkill')
   const softSkill = score('softSkill')
+  const hardEarned = aggregateCategory(snapshot, 'hardSkill')
+  const softEarned = aggregateCategory(snapshot, 'softSkill')
 
   let suggestion = ''
   for (const evaluation of snapshot.evaluations) {
@@ -100,6 +104,10 @@ export function buildDocumentValues(
     hard_skill_answered_count: hardSkill.answeredCount,
     soft_skill_average: softSkill.average,
     soft_skill_answered_count: softSkill.answeredCount,
+    hard_skill_score: hardEarned.earned,
+    hard_skill_max_score: hardEarned.max,
+    soft_skill_score: softEarned.earned,
+    soft_skill_max_score: softEarned.max,
     suggestion,
     evaluator_suggestion: suggestion
   }
@@ -131,6 +139,7 @@ export async function renderDocumentTemplate(
   }
 
   const document = canonical as CanonicalDocumentV2
+  await drawDocumentBackground(pdf, page, document, font, imageBytes)
   for (const element of document.elements) {
     await renderCanvasElement(
       pdf,
@@ -155,7 +164,7 @@ function renderPlaceholders(
     }
     const value = values[key]
     if (value === undefined) throw new Error('UNKNOWN_DOCUMENT_PLACEHOLDER')
-    if (value.trim().length === 0) {
+    if (value.trim().length === 0 && !optionalPlaceholders.has(key)) {
       throw new Error('DOCUMENT_PLACEHOLDER_SOURCE_UNAVAILABLE')
     }
     return value
@@ -232,12 +241,14 @@ async function renderCanvasElement(
   }
   if (element.type === 'shape') {
     drawShape(page, element, document.height, fillColor, borderColor)
-    if (text) {
+    // The star path is the shape; older drafts also carried a glyph most fonts lack.
+    if (text && !(element.shapeType === 'star' && text === '★')) {
       drawTextBox(page, element, document.height, text, font, {
         width,
         height,
         padding,
-        color: color(element.color)
+        color: color(element.color),
+        verticalCenter: true
       })
     }
     return
@@ -262,9 +273,9 @@ async function renderCanvasElement(
       document.height,
       element,
       [
-        ['หมวดทักษะ', 'คะแนนเฉลี่ย', 'คะแนนรวมทั้งหมด'],
-        ['Hard Skill', hard.average, hard.totalScore],
-        ['Soft Skill', soft.average, soft.totalScore]
+        ['หมวดทักษะ', 'คะแนนที่ได้ (Earned Score)', 'คะแนนเต็ม'],
+        ['Hard Skill', hard.earned, hard.max],
+        ['Soft Skill', soft.earned, soft.max]
       ],
       font,
       color(element.color)
@@ -329,12 +340,18 @@ function drawTextBox(
     readonly height: number
     readonly padding: number
     readonly color: ReturnType<typeof rgb>
+    readonly verticalCenter?: boolean
   }
 ): void {
   const maxWidth = Math.max(1, box.width - box.padding * 2)
   const lineHeight = element.fontSize * 1.25
   const lines = wrapText(text, font, element.fontSize, maxWidth)
-  if (lines.length * lineHeight > box.height) {
+  const textHeight = lines.length * lineHeight
+  const contentTop = box.verticalCenter
+    ? Math.max(0, (box.height - textHeight) / 2)
+    : box.padding
+  // A long comment may outgrow its box; only text that would leave the page is lost.
+  if (element.y + contentTop + textHeight > pageHeight) {
     throw new Error('DOCUMENT_TEXT_OVERFLOW')
   }
   lines.forEach((line, index) => {
@@ -347,7 +364,12 @@ function drawTextBox(
         : element.textAlign === 'right'
           ? Math.max(0, maxWidth - measuredWidth)
           : 0)
-    const y = pageHeight - element.y - element.fontSize - index * lineHeight
+    const y =
+      pageHeight -
+      element.y -
+      contentTop -
+      element.fontSize -
+      index * lineHeight
     const options = {
       x: textX,
       y,
@@ -371,6 +393,9 @@ function drawTextBox(
   })
 }
 
+const thaiWordSegmenter = new Intl.Segmenter('th', { granularity: 'word' })
+const graphemeSegmenter = new Intl.Segmenter('th', { granularity: 'grapheme' })
+
 function wrapText(
   text: string,
   font: PDFFont,
@@ -378,33 +403,35 @@ function wrapText(
   maxWidth: number
 ): string[] {
   const lines: string[] = []
-  const paragraphs = text.split(/\r?\n/u)
-  for (const paragraph of paragraphs) {
+  const fits = (value: string): boolean =>
+    font.widthOfTextAtSize(value, fontSize) <= maxWidth
+  for (const paragraph of text.split(/\r?\n/u)) {
     let line = ''
-    for (const segment of graphemeSegments(paragraph)) {
-      const next = line + segment
-      if (line && font.widthOfTextAtSize(next, fontSize) > maxWidth) {
-        lines.push(line.trimEnd())
-        line = segment.trimStart()
-      } else {
-        line = next
+    // Thai has no spaces between words, so break on dictionary word boundaries.
+    for (const { segment: word } of thaiWordSegmenter.segment(paragraph)) {
+      if (fits(line + word)) {
+        line += word
+        continue
+      }
+      if (line.trim()) lines.push(line.trimEnd())
+      line = ''
+      const trimmed = word.trimStart()
+      if (fits(trimmed)) {
+        line = trimmed
+        continue
+      }
+      for (const { segment } of graphemeSegmenter.segment(trimmed)) {
+        if (line && !fits(line + segment)) {
+          lines.push(line)
+          line = segment
+        } else {
+          line += segment
+        }
       }
     }
-    lines.push(line)
+    lines.push(line.trimEnd())
   }
   return lines.length > 0 ? lines : ['']
-}
-
-function graphemeSegments(value: string): string[] {
-  const segments: string[] = []
-  for (const character of Array.from(value)) {
-    if (/\p{Mark}/u.test(character) && segments.length > 0) {
-      segments[segments.length - 1] += character
-    } else {
-      segments.push(character)
-    }
-  }
-  return segments
 }
 
 function drawTable(
@@ -466,17 +493,18 @@ function drawTable(
       const pseudoElement: CanonicalCanvasElementV2 = {
         ...element,
         x: cellX,
-        y: pageHeight - cellTop + 4,
+        y: pageHeight - cellTop,
         width: columnWidth,
-        height: rowHeight - 8,
+        height: rowHeight,
         fontWeight: rowIndex === 0 ? 'bold' : element.fontWeight,
         textAlign: 'center'
       }
       drawTextBox(page, pseudoElement, pageHeight, cell, font, {
         width: columnWidth,
-        height: rowHeight - 8,
+        height: rowHeight,
         padding: 3,
-        color: textColor
+        color: textColor,
+        verticalCenter: true
       })
     })
   })
@@ -506,7 +534,7 @@ function drawShape(
     page.drawLine({
       start: { x: element.x, y: bottom + height / 2 },
       end: { x: element.x + width, y: bottom + height / 2 },
-      thickness: Math.max(0.5, element.borderWidth ?? height),
+      thickness: Math.max(0.5, element.borderWidth || height),
       color: borderColor ?? fillColor ?? color(element.color)
     })
   } else if (element.shapeType === 'circle') {
@@ -521,10 +549,11 @@ function drawShape(
         : {})
     })
   } else if (element.shapeType === 'star') {
+    // pdf-lib flips SVG paths around (x, y), so y is the top edge of the box.
     const path = starPath(width, height)
     page.drawSvgPath(path, {
       x: element.x,
-      y: bottom,
+      y: bottom + height,
       ...((fillColor ?? color(element.color))
         ? { color: fillColor ?? color(element.color) }
         : {}),
@@ -537,7 +566,7 @@ function drawShape(
       roundedRectanglePath(width, height, element.borderRadius ?? 0),
       {
         x: element.x,
-        y: bottom,
+        y: bottom + height,
         ...(fillColor ? { color: fillColor } : {}),
         ...(borderColor && (element.borderWidth ?? 0) > 0
           ? { borderColor, borderWidth: element.borderWidth }
@@ -598,23 +627,186 @@ async function drawPng(
 function aggregateCategory(
   snapshot: DocumentIssueSnapshotV1,
   category: 'hardSkill' | 'softSkill'
-): { average: string; answeredCount: string; totalScore: string } {
-  const entries = snapshot.evaluations.flatMap((evaluation) => {
+): { earned: string; max: string } {
+  let earned = 0
+  let max = 0
+  let answeredCount = 0
+  for (const evaluation of snapshot.evaluations) {
     const score = evaluation.categoryScores?.[category]
-    return score ? [score] : []
-  })
-  const answeredCount = entries.reduce(
-    (total, entry) => total + entry.answeredCount,
-    0
-  )
-  const weightedSum = entries.reduce(
-    (total, entry) => total + (entry.average ?? 0) * entry.answeredCount,
-    0
-  )
-  return {
-    average: answeredCount > 0 ? (weightedSum / answeredCount).toFixed(1) : '—',
-    answeredCount: String(answeredCount),
-    totalScore: answeredCount > 0 ? weightedSum.toFixed(1) : '—'
+    if (score && score.answeredCount > 0 && score.average !== null) {
+      earned += score.average * score.answeredCount
+      max += (score.scaleMax ?? 0) * score.answeredCount
+      answeredCount += score.answeredCount
+      continue
+    }
+    // Evaluations stored before category scores existed still hold their answers.
+    const derived = scoreFromAnswers(evaluation, category)
+    earned += derived.earned
+    max += derived.max
+    answeredCount += derived.answeredCount
+  }
+  return answeredCount > 0
+    ? { earned: formatScore(earned), max: formatScore(max) }
+    : { earned: '—', max: '—' }
+}
+
+function scoreFromAnswers(
+  evaluation: DocumentIssueSnapshotV1['evaluations'][number],
+  category: 'hardSkill' | 'softSkill'
+): { earned: number; max: number; answeredCount: number } {
+  const sectionCategory = category === 'hardSkill' ? 'special' : 'general'
+  const result = { earned: 0, max: 0, answeredCount: 0 }
+  for (const section of evaluation.questionSnapshot) {
+    const { category: found, questions } = section as {
+      category?: unknown
+      questions?: unknown
+    }
+    if (found !== sectionCategory || !Array.isArray(questions)) continue
+    for (const question of questions as {
+      id?: string
+      type?: string
+      scaleMax?: number
+    }[]) {
+      const answer = evaluation.answers[question.id ?? '']
+      if (question.type !== 'rating') continue
+      if (typeof answer !== 'number' || !Number.isFinite(answer)) continue
+      result.earned += answer
+      result.max += question.scaleMax ?? 0
+      result.answeredCount += 1
+    }
+  }
+  return result
+}
+
+function formatScore(value: number): string {
+  return String(Math.round(value * 100) / 100)
+}
+
+const BACKGROUND_INK = rgb(0.71, 0.33, 0.04)
+
+async function drawDocumentBackground(
+  pdf: PDFDocument,
+  page: PDFPage,
+  document: CanonicalDocumentV2,
+  font: PDFFont,
+  imageBytes: ReadonlyMap<string, Uint8Array>
+): Promise<void> {
+  const metadata = document.editorMetadata ?? {}
+  const type = metadata.backgroundType
+  const opacity =
+    typeof metadata.bgOpacity === 'number'
+      ? Math.min(1, Math.max(0, metadata.bgOpacity / 100))
+      : 0.15
+  const { width, height } = document
+  const centerX = width / 2
+  const centerY = height / 2
+
+  if (type === 'custom' && typeof metadata.backgroundAssetKey === 'string') {
+    const bytes = imageBytes.get(metadata.backgroundAssetKey)
+    if (!bytes) throw new Error('DOCUMENT_IMAGE_ASSET_NOT_FOUND')
+    const image = await pdf.embedPng(bytes)
+    // Same crop as the designer's object-fit: cover; the page box clips the rest.
+    const scale = Math.max(width / image.width, height / image.height)
+    page.drawImage(image, {
+      x: centerX - (image.width * scale) / 2,
+      y: centerY - (image.height * scale) / 2,
+      width: image.width * scale,
+      height: image.height * scale,
+      opacity
+    })
+    return
+  }
+
+  const ring = (
+    radius: number,
+    borderWidth: number,
+    borderDashArray?: number[]
+  ): void => {
+    page.drawEllipse({
+      x: centerX,
+      y: centerY,
+      xScale: radius,
+      yScale: radius,
+      borderColor: BACKGROUND_INK,
+      borderWidth,
+      borderOpacity: opacity,
+      ...(borderDashArray ? { borderDashArray } : {})
+    })
+  }
+
+  if (type === 'watermark') {
+    const scale = 380 / 200
+    ring(92 * scale, 3 * scale, [4 * scale, 4 * scale])
+    ring(82 * scale, 2 * scale)
+    ring(74 * scale, scale)
+    page.drawSvgPath(
+      'M 100 35 L 125 75 L 110 75 L 125 115 L 108 115 L 120 155 L 100 140 L 80 155 L 92 115 L 75 115 L 90 75 L 75 75 Z',
+      {
+        x: centerX - 190,
+        y: centerY + 190,
+        scale,
+        color: BACKGROUND_INK,
+        opacity: opacity * 0.35
+      }
+    )
+    const label = 'MAE FAH LUANG UNIVERSITY'
+    const size = 8.5 * scale
+    page.drawText(label, {
+      x: centerX - font.widthOfTextAtSize(label, size) / 2,
+      y: centerY + 190 - 174 * scale,
+      size,
+      font,
+      color: BACKGROUND_INK,
+      opacity
+    })
+  } else if (type === 'certificate_pattern') {
+    for (let x = 12; x < width; x += 24) {
+      for (let y = 12; y < height; y += 24) {
+        page.drawEllipse({
+          x,
+          y,
+          xScale: 1.2,
+          yScale: 1.2,
+          color: BACKGROUND_INK,
+          opacity
+        })
+      }
+    }
+    const scale = 440 / 100
+    ring(46 * scale, 0.8 * scale)
+    ring(39 * scale, 0.5 * scale, [scale, scale])
+    ring(32 * scale, 0.8 * scale)
+    page.drawSvgPath(
+      'M 50 5 L 50 95 M 5 50 L 95 50 M 18 18 L 82 82 M 18 82 L 82 18',
+      {
+        x: centerX - 220,
+        y: centerY + 220,
+        scale,
+        borderColor: BACKGROUND_INK,
+        borderWidth: 0.5,
+        borderOpacity: opacity
+      }
+    )
+  } else if (type === 'geometric') {
+    // PDF has no blur: stacked translucent discs approximate the designer's soft blobs.
+    const blobs = [
+      { x: width - 96, y: height - 96, ink: rgb(0.85, 0.47, 0.02) },
+      { x: 96, y: 96, ink: rgb(0.01, 0.41, 0.63) }
+    ]
+    const steps = 14
+    for (const blob of blobs) {
+      for (let step = 0; step < steps; step += 1) {
+        const radius = 288 * (1 - step / steps)
+        page.drawEllipse({
+          x: blob.x,
+          y: blob.y,
+          xScale: radius,
+          yScale: radius,
+          color: blob.ink,
+          opacity: (opacity * 0.6) / steps
+        })
+      }
+    }
   }
 }
 
