@@ -177,7 +177,7 @@ export default defineNuxtConfig({
         target: 'http://127.0.0.1:8081/api/v2'
       }
     },
-    preset: 'node-server'
+    preset: process.env.VERCEL ? 'vercel' : 'node-server'
   },
   routeRules: {
     '/evaluate': {
