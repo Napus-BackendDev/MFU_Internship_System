@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "pnpm typecheck && nuxt build",
+    "build": "pnpm --filter @internship/shared-types build && pnpm --filter @internship/api-client build && nuxt build",
     "dev": "nuxt dev --host 0.0.0.0 --port 8080",
     "lint": "eslint .",
     "postinstall": "nuxt prepare",
