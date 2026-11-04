@@ -180,6 +180,9 @@ export default defineNuxtConfig({
     preset: process.env.VERCEL ? 'vercel' : 'node-server'
   },
   routeRules: {
+    '/api/v2/**': {
+      proxy: 'https://mfu-internship-api.onrender.com/api/v2/**'
+    },
     '/evaluate': {
       headers: {
         'Referrer-Policy': 'no-referrer'

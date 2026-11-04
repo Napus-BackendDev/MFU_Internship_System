@@ -106,25 +106,27 @@ export class AuthController {
   }
 
   private setSessionCookies(response: Response, tokens: SessionTokens): void {
+    const isSecure = this.config.get('COOKIE_SECURE', { infer: true })
     this.setAccessCookie(response, tokens.accessToken)
     response.cookie('its_refresh', tokens.refreshToken, {
       httpOnly: true,
       maxAge:
         this.config.get('REFRESH_TOKEN_TTL_SECONDS', { infer: true }) * 1000,
       path: '/api/v2/auth',
-      sameSite: 'lax',
-      secure: this.config.get('COOKIE_SECURE', { infer: true })
+      sameSite: isSecure ? 'none' : 'lax',
+      secure: isSecure
     })
   }
 
   private setAccessCookie(response: Response, token: string): void {
+    const isSecure = this.config.get('COOKIE_SECURE', { infer: true })
     response.cookie('its_access', token, {
       httpOnly: true,
       maxAge:
         this.config.get('ACCESS_TOKEN_TTL_SECONDS', { infer: true }) * 1000,
       path: '/',
-      sameSite: 'lax',
-      secure: this.config.get('COOKIE_SECURE', { infer: true })
+      sameSite: isSecure ? 'none' : 'lax',
+      secure: isSecure
     })
   }
 }

@@ -33,9 +33,11 @@ export class DevAuthController {
     @Body() raw: unknown,
     @Res({ passthrough: true }) response: Response
   ): Promise<{ actor: AuthenticatedActor }> {
+    const nodeEnv = this.config.get('NODE_ENV', { infer: true })
+    const authMode = this.config.get('AUTH_MODE', { infer: true })
     if (
-      this.config.get('NODE_ENV', { infer: true }) !== 'development' ||
-      this.config.get('AUTH_MODE', { infer: true }) !== 'development'
+      (nodeEnv !== 'development' && nodeEnv !== 'test') ||
+      authMode !== 'development'
     ) {
       throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
     }
@@ -68,21 +70,22 @@ export class DevAuthController {
         : {})
     }
     const tokens = await this.sessionService.issue(actor)
+    const secure = this.config.get('COOKIE_SECURE', { infer: true })
     response.cookie('its_access', tokens.accessToken, {
       httpOnly: true,
       maxAge:
         this.config.get('ACCESS_TOKEN_TTL_SECONDS', { infer: true }) * 1000,
       path: '/',
-      sameSite: 'lax',
-      secure: false
+      sameSite: secure ? 'none' : 'lax',
+      secure
     })
     response.cookie('its_refresh', tokens.refreshToken, {
       httpOnly: true,
       maxAge:
         this.config.get('REFRESH_TOKEN_TTL_SECONDS', { infer: true }) * 1000,
       path: '/api/v2/auth',
-      sameSite: 'lax',
-      secure: false
+      sameSite: secure ? 'none' : 'lax',
+      secure
     })
     return { actor }
   }

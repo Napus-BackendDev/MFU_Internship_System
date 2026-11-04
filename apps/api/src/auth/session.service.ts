@@ -77,7 +77,8 @@ export class SessionService {
       actor = await this.usersService.resolveActiveActorById(tokenActor.id)
     } else if (
       tokenActor.id.startsWith('dev:') &&
-      this.config.get('NODE_ENV', { infer: true }) === 'development' &&
+      (this.config.get('NODE_ENV', { infer: true }) === 'development' ||
+        this.config.get('NODE_ENV', { infer: true }) === 'test') &&
       this.config.get('AUTH_MODE', { infer: true }) === 'development'
     ) {
       actor = tokenActor
@@ -115,7 +116,8 @@ export class SessionService {
       actor = await this.usersService.resolveActiveActorById(verified.actor.id)
     } else if (
       verified.actor.id.startsWith('dev:') &&
-      (this.config.get('NODE_ENV', { infer: true }) !== 'development' ||
+      ((this.config.get('NODE_ENV', { infer: true }) !== 'development' &&
+        this.config.get('NODE_ENV', { infer: true }) !== 'test') ||
         this.config.get('AUTH_MODE', { infer: true }) !== 'development')
     ) {
       throw new UnauthorizedException({ code: 'AUTHENTICATION_REQUIRED' })
@@ -128,7 +130,8 @@ export class SessionService {
   ): Promise<void> {
     if (
       actor.id.startsWith('dev:') &&
-      this.config.get('NODE_ENV', { infer: true }) === 'development' &&
+      (this.config.get('NODE_ENV', { infer: true }) === 'development' ||
+        this.config.get('NODE_ENV', { infer: true }) === 'test') &&
       this.config.get('AUTH_MODE', { infer: true }) === 'development'
     ) {
       return

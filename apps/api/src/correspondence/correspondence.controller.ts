@@ -258,20 +258,21 @@ export class CorrespondenceController {
   ): Promise<unknown> {
     const { token } = z.object({ token: z.string().min(20) }).parse(raw)
     const result = await this.invitations.exchange(token)
+    const isSecure = this.config.get('COOKIE_SECURE', { infer: true })
     response.cookie('its_access', result.accessToken, {
       httpOnly: true,
       maxAge: 15 * 60 * 1000,
       path: '/',
-      sameSite: 'lax',
-      secure: this.config.get('COOKIE_SECURE', { infer: true })
+      sameSite: isSecure ? 'none' : 'lax',
+      secure: isSecure
     })
     response.cookie('its_refresh', result.refreshToken, {
       httpOnly: true,
       maxAge:
         this.config.get('REFRESH_TOKEN_TTL_SECONDS', { infer: true }) * 1000,
       path: '/api/v2/auth',
-      sameSite: 'lax',
-      secure: this.config.get('COOKIE_SECURE', { infer: true })
+      sameSite: isSecure ? 'none' : 'lax',
+      secure: isSecure
     })
     return { actor: result.actor }
   }
@@ -285,20 +286,21 @@ export class CorrespondenceController {
   ): Promise<unknown> {
     const { pin } = z.object({ pin: z.string().min(1) }).parse(raw)
     const result = await this.invitations.verifyPin(pin)
+    const isSecure = this.config.get('COOKIE_SECURE', { infer: true })
     response.cookie('its_access', result.accessToken, {
       httpOnly: true,
       maxAge: 15 * 60 * 1000,
       path: '/',
-      sameSite: 'lax',
-      secure: this.config.get('COOKIE_SECURE', { infer: true })
+      sameSite: isSecure ? 'none' : 'lax',
+      secure: isSecure
     })
     response.cookie('its_refresh', result.refreshToken, {
       httpOnly: true,
       maxAge:
         this.config.get('REFRESH_TOKEN_TTL_SECONDS', { infer: true }) * 1000,
       path: '/api/v2/auth',
-      sameSite: 'lax',
-      secure: this.config.get('COOKIE_SECURE', { infer: true })
+      sameSite: isSecure ? 'none' : 'lax',
+      secure: isSecure
     })
     return { actor: result.actor, assignmentId: result.assignmentId }
   }
