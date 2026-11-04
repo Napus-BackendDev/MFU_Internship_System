@@ -15,7 +15,6 @@ RUN pnpm --filter @internship/worker... build
 RUN pnpm --filter @internship/worker deploy --prod --legacy /prod/worker
 
 FROM node:24.14.0-bookworm-slim AS runner
-ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/worker ./
 USER node
