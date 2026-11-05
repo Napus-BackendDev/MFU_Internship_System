@@ -576,3 +576,26 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   - Live API ผ่าน Vercel Proxy: `GET https://mfu-internship-system.vercel.app/api/v2/academic/schools` -> `200 OK` (14 สำนักวิชา)
   - Live API ผ่าน Vercel Proxy: `GET https://mfu-internship-system.vercel.app/api/v2/academic/programs` -> `200 OK`
 - เรื่องค้าง: ไม่มี
+
+
+### 2026-11-05 — ปรับ Container หน้า Support และตั้งค่าฟอร์มส่งคำถามไปยัง Napus.dev@gmail.com (Local Only)
+
+- ผู้ใช้:
+  1. ขอให้ปรับ container ของหน้า `/app/support` ให้เหมือนหน้าอื่นๆ จากภาพที่ส่งมา
+  2. กำชับชัดเจน: "หลังทำการแก้ไขอย่างพึ่ง push ขึ้น git หรือ deploy กรุณารอคำสั่งก่อนดำเนินการ deploy และ push ทุกครั้ง"
+  3. กำหนดให้ช่องทางส่งคำถามและแจ้งปัญหา เมื่อกดส่งแล้วส่งไปที่ `Napus.dev@gmail.com`
+- ข้อตกลงที่ยืนยัน:
+  - ปรับ container root ของ `apps/web/app/pages/app/support.vue` ให้ใช้ `space-y-6` เต็มพื้นที่สอดคล้องกับ layout กลาง (`app.vue`) และหน้าหลักอื่นๆ เช่น `students.vue`, `users.vue`, `audit.vue`
+  - เชื่อมโยงฟอร์ม "ส่งคำถาม / แจ้งปัญหา" ให้ส่งไปยัง `Napus.dev@gmail.com` พร้อมสร้างข้อความมาตรฐาน (ระบุชื่อผู้ส่ง, อีเมล, บทบาท, หมวดหมู่, หัวข้อ และรายละเอียด) เปิดผ่าน `mailto:` อัตโนมัติ และแสดง Modal ตัวเลือกให้กดเปิดผ่าน Gmail Web (`https://mail.google.com/mail/...`), โปรแกรมเมลในเครื่อง หรือคัดลอกข้อความได้ทันที
+  - กฎเคร่งครัด: ทำการแก้ไขและตรวจสอบเฉพาะในเครื่อง Local เท่านั้น ไม่ทำ `git push` และไม่รัน `vercel deploy` หรือ Render deploy จนกว่าจะได้รับคำสั่งยืนยันจากผู้ใช้
+- ผลที่ทำจริง:
+  - แก้ไข `apps/web/app/pages/app/support.vue`:
+    1. เปลี่ยน class wrapper จาก `mx-auto max-w-5xl space-y-8` เป็น `space-y-6`
+    2. แก้ไขการส่งข้อมูลใน `handleSubmitFeedback`: ปลายทาง `Napus.dev@gmail.com`
+    3. ปลดล็อกปุ่มส่งข้อความ (`:disabled="true"` -> เปิดใช้งานปกติ) และแทนที่ alert แจ้งเตือนเดิมเป็นข้อมูลการส่งตรงถึงทีมพัฒนา
+    4. เพิ่ม `<UModal v-model:open="isSuccessModalOpen">` แสดงรายละเอียดสรุป พร้อมปุ่ม "เปิดส่งด้วย Gmail (เว็บ)", "เปิดโปรแกรมเมลในเครื่อง" และ "คัดลอกข้อความ"
+- การตรวจ:
+  - `pnpm exec eslint app/pages/app/support.vue`: 0 errors (exit 0)
+  - `pnpm build` ใน `apps/web`: Build complete สำเร็จ 100% (exit 0)
+  - `git status`: โค้ดทั้งหมดอยู่ในเครื่อง Local ยังไม่มีการ stage/commit/push หรือ deploy ขึ้น remote ใดๆ
+- เรื่องค้าง: รอคำสั่งจากผู้ใช้เพื่อดำเนินการ commit / push / deploy ตามลำดับ

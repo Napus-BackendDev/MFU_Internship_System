@@ -25,6 +25,15 @@ const faqs = [
 ]
 
 const toast = useToast()
+const auth = useAuthStore()
+
+const categoryLabels: Record<string, string> = {
+  general: 'สอบถามข้อมูลทั่วไป',
+  evaluation: 'ปัญหาเกี่ยวกับการประเมิน / แบบฟอร์ม',
+  account: 'ปัญหาการเข้าสู่ระบบหรือสิทธิ์การใช้งาน',
+  bug: 'แจ้งปัญหาการทำงานของระบบ (Bug)'
+}
+
 const feedback = reactive({
   category: 'general',
   subject: '',
@@ -32,8 +41,17 @@ const feedback = reactive({
   submitting: false
 })
 
+const isSuccessModalOpen = ref(false)
+const sentDetails = ref({
+  category: '',
+  subject: '',
+  body: '',
+  mailtoUrl: '',
+  gmailUrl: ''
+})
+
 const handleSubmitFeedback = () => {
-  if (!feedback.subject || !feedback.message) {
+  if (!feedback.subject.trim() || !feedback.message.trim()) {
     toast.add({
       title: 'กรุณากรอกข้อมูลให้ครบถ้วน',
       description: 'กรุณากรอกหัวข้อและรายละเอียดที่ต้องการสอบถาม',
@@ -42,17 +60,75 @@ const handleSubmitFeedback = () => {
     return
   }
 
+  const targetEmail = 'Napus.dev@gmail.com'
+  const categoryLabel = categoryLabels[feedback.category] || 'ทั่วไป'
+  const senderName = auth.actor?.displayName || 'ผู้ใช้งานระบบ'
+  const senderEmail = auth.actor?.email || 'ไม่ระบุอีเมล'
+  const senderRoles = auth.actor?.roles?.join(', ') || 'ทั่วไป'
+  const nowStr = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })
+
+  const mailSubject = `[MFU Internship - ${categoryLabel}] ${feedback.subject.trim()}`
+  const mailBody = `เรียน ทีมงานพัฒนาและสนับสนุนระบบ (Napus.dev),
+
+หมวดหมู่: ${categoryLabel}
+ผู้ส่ง: ${senderName} (${senderEmail})
+บทบาท: ${senderRoles}
+วันที่แจ้ง: ${nowStr}
+
+--------------------------------------------------
+หัวข้อเรื่อง: ${feedback.subject.trim()}
+รายละเอียดข้อความ:
+${feedback.message.trim()}
+--------------------------------------------------
+ส่งจาก: ระบบ MFU Internship Transcript System (Support Portal)`
+
+  const encodedSubject = encodeURIComponent(mailSubject)
+  const encodedBody = encodeURIComponent(mailBody)
+  const mailtoUrl = `mailto:${targetEmail}?subject=${encodedSubject}&body=${encodedBody}`
+  const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${targetEmail}&su=${encodedSubject}&body=${encodedBody}`
+
+  sentDetails.value = {
+    category: categoryLabel,
+    subject: mailSubject,
+    body: mailBody,
+    mailtoUrl,
+    gmailUrl
+  }
+
+  if (import.meta.client) {
+    window.location.href = mailtoUrl
+  }
+
+  isSuccessModalOpen.value = true
+
   toast.add({
-    title: 'ยังไม่สามารถส่งคำขอจากหน้านี้ได้',
-    description:
-      'ข้อความยังไม่ได้ส่ง โปรดใช้ช่องทางติดต่อฝ่ายสนับสนุนที่ได้รับการยืนยัน',
-    color: 'warning'
+    title: 'เตรียมส่งข้อความไปยัง Napus.dev@gmail.com',
+    description: 'ระบบสร้างข้อความและเปิดโปรแกรมอีเมลเรียบร้อยแล้ว',
+    color: 'success'
   })
+}
+
+const copyMessage = async () => {
+  if (import.meta.client && navigator?.clipboard) {
+    await navigator.clipboard.writeText(sentDetails.value.body)
+    toast.add({
+      title: 'คัดลอกข้อความสำเร็จ',
+      description: 'ข้อความถูกคัดลอกไปยังคลิปบอร์ดแล้ว',
+      color: 'success'
+    })
+  }
+}
+
+const handleFinish = () => {
+  feedback.subject = ''
+  feedback.message = ''
+  feedback.category = 'general'
+  isSuccessModalOpen.value = false
 }
 </script>
 
 <template>
-  <div class="mx-auto max-w-5xl space-y-8">
+  <div class="space-y-6">
     <!-- Header -->
     <header
       class="flex flex-wrap items-end justify-between gap-4 border-b border-default pb-6"
@@ -187,9 +263,10 @@ const handleSubmitFeedback = () => {
         <UCard>
           <form class="space-y-4" @submit.prevent="handleSubmitFeedback">
             <UAlert
-              color="warning"
-              title="ช่องทางส่งคำขอยังไม่พร้อมใช้งาน"
-              description="ข้อความในฟอร์มนี้ยังไม่ถูกส่งถึงเจ้าหน้าที่ โปรดใช้ช่องทางติดต่อที่ได้รับการยืนยัน"
+              color="info"
+              icon="i-lucide-mail"
+              title="ส่งคำถาม / แจ้งปัญหาไปยัง Napus.dev@gmail.com"
+              description="เมื่อกดส่ง ระบบจะจัดเตรียมข้อความพร้อมเปิดโปรแกรมอีเมลหรือเปิดส่งผ่าน Gmail ทันที"
             />
             <div>
               <label class="block text-xs font-semibold text-highlighted mb-1">
@@ -240,12 +317,86 @@ const handleSubmitFeedback = () => {
               color="primary"
               icon="i-lucide-send"
               label="ส่งข้อความถึงฝ่ายสนับสนุน"
-              :disabled="true"
               type="submit"
             />
           </form>
         </UCard>
       </div>
     </div>
+
+    <!-- Success / Email Dispatch Modal -->
+    <UModal
+      v-model:open="isSuccessModalOpen"
+      title="ส่งข้อความถึงฝ่ายสนับสนุนระบบ"
+      :ui="{ content: 'sm:max-w-xl w-full' }"
+    >
+      <template #body>
+        <div class="space-y-4">
+          <div class="rounded-lg border border-default bg-muted/20 p-3 space-y-2 text-xs">
+            <div class="flex items-center justify-between">
+              <span class="font-semibold text-highlighted">ปลายทาง:</span>
+              <span class="font-mono text-primary font-semibold">Napus.dev@gmail.com</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="font-semibold text-highlighted">หมวดหมู่:</span>
+              <span class="text-muted">{{ sentDetails.category }}</span>
+            </div>
+            <div>
+              <span class="font-semibold text-highlighted">หัวข้อ:</span>
+              <p class="mt-0.5 text-highlighted font-medium truncate">{{ sentDetails.subject }}</p>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-highlighted mb-1">
+              ตัวอย่างข้อความที่จัดเตรียมไว้
+            </label>
+            <textarea
+              :value="sentDetails.body"
+              readonly
+              rows="6"
+              class="form-textarea w-full text-xs font-mono bg-default text-muted select-all"
+            />
+          </div>
+
+          <div class="flex flex-col sm:flex-row gap-2 pt-2">
+            <UButton
+              color="primary"
+              icon="i-lucide-external-link"
+              label="เปิดส่งด้วย Gmail (เว็บ)"
+              class="flex-1 justify-center"
+              :to="sentDetails.gmailUrl"
+              target="_blank"
+            />
+            <UButton
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-mail"
+              label="เปิดโปรแกรมเมลในเครื่อง"
+              class="flex-1 justify-center"
+              :to="sentDetails.mailtoUrl"
+            />
+            <UButton
+              color="neutral"
+              variant="ghost"
+              icon="i-lucide-copy"
+              label="คัดลอกข้อความ"
+              @click="copyMessage"
+            />
+          </div>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex justify-end">
+          <UButton
+            color="primary"
+            variant="solid"
+            label="เสร็จสิ้น"
+            @click="handleFinish"
+          />
+        </div>
+      </template>
+    </UModal>
   </div>
 </template>
