@@ -529,3 +529,50 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - ยังไม่ได้ตรวจ: กด Designer บนระบบจริงยังไม่ได้ทำ, ยังไม่ได้เรียก Gemini จริงเพราะไม่มีคีย์, การปฏิเสธผู้รับใน smtp จริงยังไม่ได้ลอง
 - ข้อสันนิษฐานของ AI: "กล่องขอบมน ตอนออกแบบตัวหนัง" ข้อความไม่ครบ ตีความว่าการแสดงผลต้องตรงกับ PDF ยังไม่ได้รับการยืนยัน; "ข้อมูลทับกัน" ตีความเป็นองค์ประกอบซ้อนกันในแม่แบบ
 - เรื่องค้าง: แม่แบบที่เคยถูก archived จากการเปิดใช้งานรอบก่อนยังไม่กลับมา; PIN เก่าว่างจนกว่าจะออกคำเชิญใหม่; อีเมล mailbox ไม่มีจริงบนโดเมนจริงต้องมีระบบรับ bounce; เจ้าของระบบต้องอนุมัติการส่งข้อความผู้ประเมินให้ Google ก่อนเปิด AI บนโปรดักชัน
+
+
+### 2026-11-04 — Deploy ระบบไปยัง Vercel (Frontend) และ Render (Backend) สำหรับการทดสอบ (Client Validation)
+
+- ผู้ใช้: ขอให้นำโปรเจกต์ deploy ผ่าน Vercel, ตั้งค่า Environment Variables สำหรับโหมดเทส เพื่อส่งให้ลูกค้า validation
+- ข้อตกลงที่ยืนยัน: Deploy Frontend (`apps/web` Nuxt 3) บน Vercel พร้อมปิด SSO Protection ให้ลูกค้าเข้าทดสอบได้ทันที, Deploy Backend API (`apps/api` NestJS) และ Redis บน Render พร้อมต่อ MongoDB Atlas คลัสเตอร์ `internship-app`, เปิดใช้งาน Dev Persona สำหรับ quick login สวมบทบาท Admin/Staff/Advisor/Student
+- ผลที่ทำจริง:
+  1. **Render Backend API & Redis:**
+     - สร้าง Render Web Service: `mfu-internship-api` (ID: `srv-dbleirc9v7es739q9h9g`, URL: `https://mfu-internship-api.onrender.com`)
+     - สร้าง Render Redis: `internship-redis` (ID: `red-dbleht49v7es739q7al0`)
+     - ตั้งค่า Environment 28 ตัวแปร (`NODE_ENV=test`, `AUTH_MODE=development`, `COOKIE_SECURE=true`, CORS, Redis, MongoDB Atlas)
+     - ปรับปรุงโค้ด `apps/api/src/auth/dev-auth.controller.ts`, `session.service.ts`, `auth.controller.ts`, `correspondence.controller.ts` ให้รองรับ Dev Persona Login ใน `NODE_ENV=test` เมื่อ `AUTH_MODE=development` และตั้ง `SameSite=None; Secure` สำหรับ HTTPS cross-origin cookies
+  2. **Vercel Frontend:**
+     - สร้างและเชื่อมโยงโปรเจกต์ Vercel: `mfu-internship-system` (Project ID: `prj_oTq2E3wiuVFICppQo730w5ybIUgE`)
+     - ปิด Vercel SSO Protection (`ssoProtection: null`)
+     - ตั้งค่า Nitro Vercel preset (`preset: process.env.VERCEL ? 'vercel' : 'node-server'`) และสร้าง Nitro proxy route rule `/api/v2/**` -> `https://mfu-internship-api.onrender.com/api/v2/**` เพื่อให้การยิง API เป็น 1st-party same-origin ไร้ปัญหา 3rd-party cookie blocking
+     - ตั้งค่า `NUXT_PUBLIC_API_BASE_URL=/api/v2`, `NUXT_API_INTERNAL_BASE_URL=https://mfu-internship-api.onrender.com/api/v2`, `NUXT_PUBLIC_APP_ENVIRONMENT=development`
+  3. **Git & Deployments:**
+     - Commit `f9c9ce4` (`fix(auth): enable test env dev login, samesite none cookies and api proxy`) และ push ขึ้น `origin/main`
+     - Render API deploy `dep-dblettlbedkc73a7sop0` สถานะ: `live`
+     - Vercel Frontend deploy `dpl_4Co3uSNS5yD4Jjp6XDogyEho97m4` สถานะ: `READY`
+- การตรวจ:
+  - `GET https://mfu-internship-api.onrender.com/api/v2/health` -> HTTP 200 `{"service":"api","status":"ok","version":"0.1.0"}`
+  - `GET https://mfu-internship-api.onrender.com/api/v2/health/ready` -> HTTP 200 `{"ready":true,"dependencies":{"mongodb":"ok","redis":"ok"}}`
+  - `GET https://mfu-internship-system.vercel.app/api/v2/health` (Proxy) -> HTTP 200
+  - `POST https://mfu-internship-system.vercel.app/api/v2/auth/dev/login` (Dev Login) -> HTTP 201 Created พร้อม `Set-Cookie`
+  - `GET https://mfu-internship-system.vercel.app/api/v2/auth/me` (Auth Session) -> HTTP 200 Authenticated Actor (`Development Administrator`)
+  - หน้า `/login` แสดง Dev Personas สำหรับเข้าทดสอบได้ทันที
+- เรื่องค้าง: ไม่มี
+
+
+### 2026-11-05 — ระบุฐานข้อมูล Production และ Inject ข้อมูลสำนักวิชาและสาขา (Academic Master Data)
+
+- ผู้ใช้: สอบถามว่าฐานข้อมูลของ production คืออันไหน และขอให้ inject ข้อมูลสำนักวิชาและสาขาวิชาจากในระบบเข้าสู่ production
+- ข้อตกลงที่ยืนยัน: ฐานข้อมูล Production คือ `internship-app` บน MongoDB Atlas คลัสเตอร์ `Cluster0` (ตรงกับ `.env.production` และ Render `MONGODB_URI`); ทำการ inject เฉพาะข้อมูลหลักของมหาวิทยาลัย (14 สำนักวิชา, 36 สาขาวิชา, 37 รายวิชาฝึกงานรวม COOP101) โดยไม่ seed ข้อมูลสมมติของนักศึกษา/ผู้ประเมิน เพื่อรักษาความสะอาดของฐานข้อมูล production
+- ผลที่ทำจริง:
+  1. สร้างสคริปต์ `apps/api/src/scripts/seed-academic-data.ts` ดึงโครงสร้าง 14 สำนักวิชา 36 สาขา และ 37 รายวิชาของ มฟล.
+  2. เพิ่ม script `"seed:academic": "tsx src/scripts/seed-academic-data.ts"` ใน `apps/api/package.json`
+  3. รันสคริปต์เชื่อมต่อ MongoDB Atlas Database `internship-app` และทำการ upsert:
+     - `schools`: 14 รายการ (LA, SCI, MGT, IT, AI, LAW, COS, HS, NS, MED, DENT, SOC, SIN, IM)
+     - `programs`: 36 รายการ ครบทุกสาขาพร้อมผูก `schoolId`
+     - `courses`: 37 รายการ (วิชาฝึกงานประจำสาขา 36 วิชา + สหกิจศึกษา `COOP101`)
+- การตรวจ:
+  - MongoDB MCP `count_documents`: `schools` = 14, `programs` = 36, `courses` = 37
+  - Live API ผ่าน Vercel Proxy: `GET https://mfu-internship-system.vercel.app/api/v2/academic/schools` -> `200 OK` (14 สำนักวิชา)
+  - Live API ผ่าน Vercel Proxy: `GET https://mfu-internship-system.vercel.app/api/v2/academic/programs` -> `200 OK`
+- เรื่องค้าง: ไม่มี
