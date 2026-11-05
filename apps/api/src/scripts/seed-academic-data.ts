@@ -582,7 +582,7 @@ async function main(): Promise<void> {
     try {
       const content = readFileSync(envProdPath, 'utf8')
       const match = content.match(/^MONGODB_URI=(.+)$/m)
-      if (match) {
+      if (match && match[1]) {
         mongoUri = match[1].trim()
       }
     } catch (err) {
