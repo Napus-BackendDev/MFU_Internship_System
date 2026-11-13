@@ -3,6 +3,8 @@ import { decryptSmtpSecret, type AppEnvironment } from '@internship/config'
 import { sanitizeEmailHtml } from '@internship/email-security'
 import {
   campaignStatusFromDeliveryCounts,
+  formatAcademicTerm,
+  formatInternshipPeriod,
   type AuthenticatedActor
 } from '@internship/shared-types'
 import { InjectQueue } from '@nestjs/bullmq'
@@ -2331,7 +2333,12 @@ export class CampaignService {
             day: 'numeric'
           })
         : '-',
-      pin: pin || '[รหัส PIN ถูกส่งก่อนหน้า]'
+      pin: pin || '[รหัส PIN ถูกส่งก่อนหน้า]',
+      academic_term: formatAcademicTerm(student.semester, student.academicYear),
+      internship_period: formatInternshipPeriod(
+        student.internshipStartsAt,
+        student.internshipEndsAt
+      )
     }
 
     const subject = templateVersion.subject.replace(

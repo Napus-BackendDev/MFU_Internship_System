@@ -397,6 +397,18 @@ export class EvaluationsController {
   }
 
   @RequirePermissions('evaluations.read')
+  @Get('evaluations/cohort-mean')
+  public cohortMean(
+    @Req() request: AuthenticatedRequest,
+    @Query('studentId') studentId: unknown
+  ): Promise<unknown> {
+    return this.service.cohortMean(
+      request.actor!,
+      z.string().min(1).max(64).optional().parse(studentId)
+    )
+  }
+
+  @RequirePermissions('evaluations.read')
   @Get('evaluations/:evaluationId')
   public getEvaluation(
     @Req() request: AuthenticatedRequest,

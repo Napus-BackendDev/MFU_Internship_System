@@ -22,7 +22,9 @@ const ALLOWED_PLACEHOLDERS = new Set([
   'evaluator_name',
   'invitation_url',
   'deadline',
-  'pin'
+  'pin',
+  'academic_term',
+  'internship_period'
 ])
 
 export const DEFAULT_SYSTEM_TEMPLATES = {
@@ -39,14 +41,16 @@ export const DEFAULT_SYSTEM_TEMPLATES = {
     <p style="color: #64748b; margin: 4px 0 0; font-size: 14px;">ระบบประเมินผลการฝึกงานและสหกิจศึกษา</p>
   </div>
   <div style="border-top: 2px solid #059669; padding-top: 20px;">
-    <p style="font-size: 15px; color: #1e293b;">เรียน <strong>{{evaluator_name}}</strong> (สถานประกอบการ: <strong>{{company_name}}</strong>),</p>
+    <p style="font-size: 15px; color: #1e293b;">เรียน <strong>{{evaluator_name}}</strong> (สถานประกอบการ: <strong>{{company_name}}</strong>)</p>
     <p style="font-size: 14px; color: #334155; line-height: 1.6;">
-      เนื่องด้วยนักศึกษา <strong>{{student_name}}</strong> (รหัสนักศึกษา: <strong>{{student_id}}</strong>) ได้เข้าปฏิบัติการฝึกงาน ณ สถานประกอบการของท่าน ทางมหาวิทยาลัยแม่ฟ้าหลวงใคร่ขอความอนุเคราะห์ท่านในการประเมินผลการปฏิบัติงานของนักศึกษา หรือมอบหมายผู้ประเมินเพื่อดำเนินการตามขั้นตอน
+      เนื่องด้วยนักศึกษา <strong>{{student_name}}</strong> (รหัสนักศึกษา: <strong>{{student_id}}</strong>) ได้เข้ารับการฝึกงาน ณ สถานประกอบการของท่าน ในช่วง{{academic_term}} ระหว่างวันที่ {{internship_period}} มหาวิทยาลัยแม่ฟ้าหลวงจึงใคร่ขอความอนุเคราะห์ท่านประเมินผลการปฏิบัติงานของนักศึกษา หรือมอบหมายผู้ประเมินที่เหมาะสมดำเนินการแทน
     </p>
     <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
       <p style="margin: 0 0 8px; font-size: 13px; color: #64748b;">ข้อมูลการเข้าทำแบบประเมิน:</p>
       <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>นักศึกษา:</strong> {{student_name}} ({{student_id}})</p>
-      <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>กำหนดส่งผลประเมิน:</strong> {{deadline}}</p>
+      <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>ภาค/ปีการศึกษา:</strong> {{academic_term}}</p>
+      <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>ช่วงวันที่ฝึกงาน:</strong> {{internship_period}}</p>
+      <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>วันสิ้นสุดการประเมิน:</strong> {{deadline}}</p>
       <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>รหัส PIN สำหรับเข้าใช้งาน:</strong> <span style="font-family: monospace; font-weight: bold; color: #059669;">{{pin}}</span></p>
     </div>
     <div style="text-align: center; margin: 28px 0;">
@@ -64,13 +68,15 @@ export const DEFAULT_SYSTEM_TEMPLATES = {
     ศูนย์บริการฝึกงานและสหกิจศึกษา มหาวิทยาลัยแม่ฟ้าหลวง
   </div>
 </div>`,
-    text: `เรียน {{evaluator_name}} ({{company_name}}),
+    text: `เรียน {{evaluator_name}} ({{company_name}})
 
-เนื่องด้วยนักศึกษา {{student_name}} (รหัสนักศึกษา: {{student_id}}) ได้เข้าปฏิบัติการฝึกงาน ณ สถานประกอบการของท่าน ทางมหาวิทยาลัยแม่ฟ้าหลวงใคร่ขอความอนุเคราะห์ท่านในการประเมินผลการปฏิบัติงานของนักศึกษา
+เนื่องด้วยนักศึกษา {{student_name}} (รหัสนักศึกษา: {{student_id}}) ได้เข้ารับการฝึกงาน ณ สถานประกอบการของท่าน ในช่วง{{academic_term}} ระหว่างวันที่ {{internship_period}} มหาวิทยาลัยแม่ฟ้าหลวงจึงใคร่ขอความอนุเคราะห์ท่านประเมินผลการปฏิบัติงานของนักศึกษา
 
 ลิงก์เข้าสู่ระบบทำแบบประเมิน: {{invitation_url}}
 รหัส PIN: {{pin}}
-กำหนดส่ง: {{deadline}}
+ภาค/ปีการศึกษา: {{academic_term}}
+ช่วงวันที่ฝึกงาน: {{internship_period}}
+วันสิ้นสุดการประเมิน: {{deadline}}
 
 ขอขอบพระคุณในความร่วมมือ
 มหาวิทยาลัยแม่ฟ้าหลวง`
@@ -88,7 +94,7 @@ export const DEFAULT_SYSTEM_TEMPLATES = {
     <p style="color: #d97706; margin: 4px 0 0; font-size: 14px; font-weight: 600;">แจ้งเตือน: แบบประเมินผลการฝึกงานรอการดำเนินการ</p>
   </div>
   <div style="border-top: 2px solid #d97706; padding-top: 20px;">
-    <p style="font-size: 15px; color: #1e293b;">เรียน <strong>{{evaluator_name}}</strong> (สถานประกอบการ: <strong>{{company_name}}</strong>),</p>
+    <p style="font-size: 15px; color: #1e293b;">เรียน <strong>{{evaluator_name}}</strong> (สถานประกอบการ: <strong>{{company_name}}</strong>)</p>
     <p style="font-size: 14px; color: #334155; line-height: 1.6;">
       ตามที่ทางมหาวิทยาลัยแม่ฟ้าหลวงได้ส่งแบบประเมินผลการฝึกงานของนักศึกษา <strong>{{student_name}}</strong> (รหัสนักศึกษา: <strong>{{student_id}}</strong>) ไปยังท่านแล้วนั้น ปัจจุบันระบบพบว่าแบบประเมินดังกล่าวยังไม่ได้ดำเนินการให้เสร็จสิ้นสมบูรณ์
     </p>
@@ -98,7 +104,9 @@ export const DEFAULT_SYSTEM_TEMPLATES = {
     <div style="background-color: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 16px; margin: 20px 0;">
       <p style="margin: 0 0 8px; font-size: 13px; color: #92400e; font-weight: 600;">ข้อมูลแบบประเมินที่ค้างอยู่:</p>
       <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>นักศึกษา:</strong> {{student_name}} ({{student_id}})</p>
-      <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>กำหนดส่งสุดท้าย:</strong> <span style="color: #b45309; font-weight: bold;">{{deadline}}</span></p>
+      <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>ภาค/ปีการศึกษา:</strong> {{academic_term}}</p>
+      <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>ช่วงวันที่ฝึกงาน:</strong> {{internship_period}}</p>
+      <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>วันสิ้นสุดการประเมิน:</strong> <span style="color: #b45309; font-weight: bold;">{{deadline}}</span></p>
       <p style="margin: 4px 0; font-size: 14px; color: #0f172a;"><strong>รหัส PIN สำหรับเข้าใช้งาน:</strong> <span style="font-family: monospace; font-weight: bold; color: #059669;">{{pin}}</span></p>
     </div>
     <div style="text-align: center; margin: 28px 0;">
@@ -116,7 +124,7 @@ export const DEFAULT_SYSTEM_TEMPLATES = {
     ศูนย์บริการฝึกงานและสหกิจศึกษา มหาวิทยาลัยแม่ฟ้าหลวง
   </div>
 </div>`,
-    text: `[แจ้งเตือน] เรียน {{evaluator_name}} ({{company_name}}),
+    text: `[แจ้งเตือน] เรียน {{evaluator_name}} ({{company_name}})
 
 ตามที่ทางมหาวิทยาลัยแม่ฟ้าหลวงได้ส่งแบบประเมินผลการฝึกงานของนักศึกษา {{student_name}} (รหัสนักศึกษา: {{student_id}}) ไปยังท่าน ปัจจุบันแบบประเมินยังไม่เสร็จสมบูรณ์ ทางมหาวิทยาลัยใคร่ขอความอนุเคราะห์ดำเนินการให้แล้วเสร็จภายใน {{deadline}}
 

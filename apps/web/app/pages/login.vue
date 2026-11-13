@@ -75,15 +75,70 @@ const devPersonas: DevPersona[] = [
     role: 'student',
     title: 'นักศึกษา (Student)',
     roleLabel: 'Student',
-    displayName: 'MISS NANG LAUNG PHWAY HOM',
-    email: '6531301154@lamduan.mfu.ac.th',
+    displayName: 'นักศึกษา',
+    email: 'เลือกนักศึกษาจากรายชื่อในระบบ',
     description:
-      'เข้าดูสถานะการฝึกงาน ตรวจสอบผลการประเมิน และดาวน์โหลดเอกสาร 2 ฉบับ',
+      'เลือกนักศึกษาจริงในระบบ เพื่อดูสถานะการฝึกงาน ผลการประเมิน และดาวน์โหลดเอกสาร',
     icon: 'i-lucide-graduation-cap',
-    badgeColor: 'success',
-    studentId: '6531301154'
+    badgeColor: 'success'
   }
 ]
+
+interface DevStudentOption {
+  readonly studentId: string
+  readonly name: string
+  readonly email: string
+}
+
+const api = useApi()
+const studentPickerOpen = ref(false)
+const studentSearch = ref('')
+const studentOptions = ref<DevStudentOption[]>([])
+const studentsLoading = ref(false)
+const studentsError = ref('')
+let studentSearchTimer: ReturnType<typeof setTimeout> | undefined
+let studentSearchVersion = 0
+
+async function loadStudentOptions(): Promise<void> {
+  const version = ++studentSearchVersion
+  studentsLoading.value = true
+  studentsError.value = ''
+  try {
+    const search = studentSearch.value.trim()
+    const result = await api<{ items: DevStudentOption[] }>(
+      '/auth/dev/students',
+      { query: search ? { search } : {} }
+    )
+    if (version === studentSearchVersion) studentOptions.value = result.items
+  } catch (err: unknown) {
+    if (version === studentSearchVersion) {
+      studentsError.value =
+        err instanceof Error ? err.message : 'โหลดรายชื่อนักศึกษาไม่สำเร็จ'
+    }
+  } finally {
+    if (version === studentSearchVersion) studentsLoading.value = false
+  }
+}
+
+watch(studentSearch, () => {
+  clearTimeout(studentSearchTimer)
+  studentSearchTimer = setTimeout(() => void loadStudentOptions(), 300)
+})
+
+function openStudentPicker(): void {
+  studentPickerOpen.value = true
+  void loadStudentOptions()
+}
+
+async function loginAsStudent(student: DevStudentOption): Promise<void> {
+  studentPickerOpen.value = false
+  await loginAs({
+    ...(devPersonas.find((p) => p.id === 'student') as DevPersona),
+    displayName: student.name,
+    email: student.email,
+    studentId: student.studentId
+  })
+}
 
 async function loginAs(persona: DevPersona): Promise<void> {
   pendingRole.value = persona.id
@@ -208,7 +263,7 @@ async function loginSSO(): Promise<void> {
                 'opacity-60 pointer-events-none':
                   pendingRole && pendingRole !== p.id
               }"
-              @click="loginAs(p)"
+              @click="p.id === 'student' ? openStudentPicker() : loginAs(p)"
             >
               <!-- ไอคอน + ข้อมูลบทบาท -->
               <div class="flex items-center gap-3 min-w-0 flex-1">
@@ -246,7 +301,7 @@ async function loginSSO(): Promise<void> {
                     {{ p.description }}
                   </p>
                   <div
-                    class="flex items-center gap-1 text-[10px] text-muted/80 font-mono mt-0.5"
+                    class="flex items-center gap-1 text-[11px] text-muted/80 font-mono mt-0.5"
                   >
                     <UIcon
                       name="i-lucide-mail"
@@ -363,5 +418,66 @@ async function loginSSO(): Promise<void> {
         </div>
       </section>
     </div>
+    <AppModal
+      v-if="studentPickerOpen"
+      :open="true"
+      title="เลือกนักศึกษาที่ต้องการเข้าใช้งาน"
+      @update:open="(open) => (studentPickerOpen = open)"
+    >
+      <div class="space-y-3 p-5">
+        <h2 class="text-base font-semibold">
+          เลือกนักศึกษาที่ต้องการเข้าใช้งาน
+        </h2>
+        <p class="text-xs text-muted">
+          โหมดทดสอบ: เข้าสู่ระบบในฐานะนักศึกษาที่มีอยู่จริงในระบบ
+        </p>
+        <UInput
+          v-model="studentSearch"
+          autofocus
+          class="w-full"
+          icon="i-lucide-search"
+          placeholder="ค้นหารหัส ชื่อ หรืออีเมลนักศึกษา"
+        />
+        <UAlert
+          v-if="studentsError"
+          color="error"
+          icon="i-lucide-circle-alert"
+          :title="studentsError"
+          :actions="[{ label: 'ลองใหม่', onClick: () => loadStudentOptions() }]"
+        />
+        <div class="max-h-80 space-y-1 overflow-y-auto">
+          <p v-if="studentsLoading" class="py-6 text-center text-sm text-muted">
+            กำลังโหลดรายชื่อ...
+          </p>
+          <p
+            v-else-if="!studentsError && studentOptions.length === 0"
+            class="py-6 text-center text-sm text-muted"
+          >
+            ไม่พบนักศึกษา ลองค้นหาด้วยคำอื่น หรือนำเข้ารายชื่อนักศึกษาก่อน
+          </p>
+          <template v-else>
+            <button
+              v-for="student in studentOptions"
+              :key="student.studentId"
+              type="button"
+              class="flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-default px-3 py-2 text-left hover:border-primary hover:bg-muted/30"
+              @click="loginAsStudent(student)"
+            >
+              <span class="min-w-0">
+                <span class="block truncate text-sm font-medium">{{
+                  student.name
+                }}</span>
+                <span class="block truncate text-xs text-muted">{{
+                  student.email
+                }}</span>
+              </span>
+              <span class="shrink-0 font-mono text-xs text-muted">{{
+                student.studentId
+              }}</span>
+            </button>
+          </template>
+        </div>
+      </div>
+    </AppModal>
   </UContainer>
 </template>

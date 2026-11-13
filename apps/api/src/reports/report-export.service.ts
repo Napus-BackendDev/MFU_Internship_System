@@ -998,7 +998,7 @@ export class ReportExportService {
       }
       const doc = docByStudentId.get(student.studentId)
       const pdfUrl = doc?._id
-        ? `${this.publicWebUrl}/api/v2/documents/generated-documents/${String(doc._id)}/download-url`
+        ? `${this.publicWebUrl}/app/document-open/${String(doc._id)}`
         : ''
       // EMAIL_SENT belongs to the Cer PDF mail-merge workflow (certificate mailed). This system only
       // sends evaluation invitations, so pre-filling it would make that workflow skip students.

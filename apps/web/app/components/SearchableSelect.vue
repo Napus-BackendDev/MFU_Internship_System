@@ -347,7 +347,7 @@ onBeforeUnmount(() => {
               class="mt-1.5 pt-1.5 border-t border-default/40 first:mt-0 first:pt-0 first:border-0"
             >
               <div
-                class="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-muted select-none"
+                class="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-muted select-none"
               >
                 {{ grp.groupName }}
               </div>
@@ -390,7 +390,7 @@ onBeforeUnmount(() => {
           class="flex items-center justify-between border-t border-default bg-muted/10 px-3 py-1.5 text-[11px] text-muted"
         >
           <span>{{ filteredOptions.length }} รายการ</span>
-          <span v-if="search" class="text-[10px] text-primary">กำลังกรอง</span>
+          <span v-if="search" class="text-[11px] text-primary">กำลังกรอง</span>
         </div>
       </div>
     </Transition>

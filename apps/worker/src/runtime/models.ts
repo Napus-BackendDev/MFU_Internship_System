@@ -84,13 +84,21 @@ const studentSchema = new Schema<{
   email?: string
   company?: string
   evaluationStatus?: string
+  semester?: string
+  academicYear?: number
+  internshipStartsAt?: Date
+  internshipEndsAt?: Date
 }>(
   {
     studentId: { type: String, required: true },
     name: { type: Schema.Types.Mixed },
     email: String,
     company: String,
-    evaluationStatus: String
+    evaluationStatus: String,
+    semester: String,
+    academicYear: Number,
+    internshipStartsAt: Date,
+    internshipEndsAt: Date
   },
   { collection: 'students', timestamps: true }
 )

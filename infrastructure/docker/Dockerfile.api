@@ -3,22 +3,28 @@ WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@11.0.7 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
+COPY apps/worker/package.json apps/worker/package.json
 COPY packages/config/package.json packages/config/package.json
 COPY packages/email-security/package.json packages/email-security/package.json
 COPY packages/shared-types/package.json packages/shared-types/package.json
 COPY packages/validation/package.json packages/validation/package.json
-RUN pnpm install --frozen-lockfile --filter @internship/api...
+RUN pnpm install --frozen-lockfile --filter @internship/api... --filter @internship/worker...
 COPY apps/api apps/api
+COPY apps/worker apps/worker
 COPY packages/config packages/config
 COPY packages/email-security packages/email-security
 COPY packages/shared-types packages/shared-types
 COPY packages/validation packages/validation
-RUN pnpm --filter @internship/api... build
+RUN pnpm --filter @internship/api... --filter @internship/worker... build
 RUN pnpm --filter @internship/api deploy --prod --legacy /prod/api
+RUN pnpm --filter @internship/worker deploy --prod --legacy /prod/worker
 
 FROM node:24.14.0-bookworm-slim AS runner
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/api ./
+# The Worker runs here only when EMBEDDED_WORKER=true (single-container hosts).
+COPY --from=builder --chown=node:node /prod/worker /worker
+COPY --chown=node:node infrastructure/docker/api-entrypoint.mjs /entrypoint.mjs
 USER node
 EXPOSE 8081
-CMD ["node", "dist/main.js"]
+CMD ["node", "/entrypoint.mjs"]

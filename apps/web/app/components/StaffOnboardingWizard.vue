@@ -1021,7 +1021,7 @@ function handleClose(): void {
                         </UBadge>
                         <p
                           v-if="row.errors.length > 0"
-                          class="text-[10px] text-rose-500 max-w-[140px] truncate mt-0.5"
+                          class="text-[11px] text-rose-500 max-w-[140px] truncate mt-0.5"
                           :title="row.errors.join(', ')"
                         >
                           {{ row.errors[0] }}
@@ -1048,7 +1048,7 @@ function handleClose(): void {
                         <p class="font-medium text-highlighted truncate">
                           {{ getSchoolName(row.schoolId) }}
                         </p>
-                        <p class="text-[10px] text-muted truncate">
+                        <p class="text-[11px] text-muted truncate">
                           {{ getProgramName(row.programId) }}
                         </p>
                       </td>
@@ -1115,7 +1115,7 @@ function handleClose(): void {
                 <p class="text-lg font-bold text-highlighted mt-0.5">
                   {{ schools.length }} แห่ง
                 </p>
-                <p class="text-[10px] text-emerald-600 font-medium">
+                <p class="text-[11px] text-emerald-600 font-medium">
                   ✓ ตรวจสอบแล้ว
                 </p>
               </div>
@@ -1127,7 +1127,7 @@ function handleClose(): void {
                 <p class="text-lg font-bold text-highlighted mt-0.5">
                   {{ programs.length }} สาขา
                 </p>
-                <p class="text-[10px] text-emerald-600 font-medium">
+                <p class="text-[11px] text-emerald-600 font-medium">
                   ✓ ตรวจสอบแล้ว
                 </p>
               </div>
@@ -1139,7 +1139,7 @@ function handleClose(): void {
                 <p class="text-lg font-bold text-highlighted mt-0.5">
                   {{ importedCount }} คน
                 </p>
-                <p class="text-[10px] text-emerald-600 font-medium">
+                <p class="text-[11px] text-emerald-600 font-medium">
                   ✓ นำเข้าสำเร็จ
                 </p>
               </div>

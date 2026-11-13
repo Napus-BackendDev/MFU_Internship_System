@@ -58,7 +58,9 @@ const ALLOWED_PUBLIC_ROUTES = new Set([
   'HealthController.getHealth',
   'HealthController.getLiveness',
   'HealthController.getReadiness',
-  ...(process.env.NODE_ENV === 'production' ? [] : ['DevAuthController.login'])
+  ...(process.env.NODE_ENV === 'production'
+    ? []
+    : ['DevAuthController.login', 'DevAuthController.listStudents'])
 ])
 const PUBLIC_COOKIE_AUTHENTICATED_ROUTES = new Set(['AuthController.refresh'])
 

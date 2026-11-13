@@ -2,7 +2,11 @@ import { TextEncoder } from 'node:util'
 import { createHmac, randomInt, randomUUID } from 'node:crypto'
 
 import { decryptSmtpSecret, type AppEnvironment } from '@internship/config'
-import { campaignStatusFromDeliveryCounts } from '@internship/shared-types'
+import {
+  campaignStatusFromDeliveryCounts,
+  formatAcademicTerm,
+  formatInternshipPeriod
+} from '@internship/shared-types'
 import type { Job, Queue } from 'bullmq'
 import { SignJWT } from 'jose'
 import type { Types } from 'mongoose'
@@ -404,8 +408,19 @@ export class EmailProcessor {
         company_name:
           (student as unknown as { company?: string }).company ||
           'สถานประกอบการ',
+        // A blank evaluator name still gets a courteous salutation.
         evaluator_name:
-          evaluator.name?.th ?? evaluator.name?.en ?? evaluator.email,
+          evaluator.name?.th?.trim() ||
+          evaluator.name?.en?.trim() ||
+          'ท่านที่นับถือ',
+        academic_term: formatAcademicTerm(
+          student.semester,
+          student.academicYear
+        ),
+        internship_period: formatInternshipPeriod(
+          student.internshipStartsAt,
+          student.internshipEndsAt
+        ),
         invitation_url: `${this.environment.PUBLIC_WEB_URL}/evaluate#${invitationParameters.toString()}`,
         deadline: assignment.deadlineAt
           ? new Date(assignment.deadlineAt).toLocaleDateString('th-TH', {

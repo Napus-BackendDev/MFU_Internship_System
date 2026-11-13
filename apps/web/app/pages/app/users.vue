@@ -953,7 +953,7 @@ onMounted(() => {
             <span>{{ tab.label }}</span>
             <span
               v-if="tab.key !== 'all'"
-              class="rounded-full px-1.5 py-0.2 text-[10px] font-mono"
+              class="rounded-full px-1.5 py-0.2 text-[11px] font-mono"
               :class="
                 selectedRole === tab.key
                   ? 'bg-inverted/20 text-inverted'
@@ -1095,7 +1095,7 @@ onMounted(() => {
                       }}</span>
                       <UBadge
                         v-if="user.studentId"
-                        class="font-mono text-[10px]"
+                        class="font-mono text-[11px]"
                         color="neutral"
                         size="xs"
                         variant="subtle"

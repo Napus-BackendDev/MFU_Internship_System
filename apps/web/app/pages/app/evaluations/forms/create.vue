@@ -364,19 +364,6 @@ function isSchoolConfigured(schoolId: string): boolean {
   return getSchoolQuestionsCount(schoolId) > 0
 }
 
-const incompleteSchools = computed(() => {
-  const list: SchoolProgramStatus[] = []
-  for (const school of schoolsData.value?.items || []) {
-    const status = getSchoolProgramStatus(school.id)
-    if (!status.isComplete) {
-      list.push(status)
-    }
-  }
-  return list
-})
-
-const hasIncompleteSchools = computed(() => incompleteSchools.value.length > 0)
-
 const currentHubSchoolStatus = computed(() => {
   if (!currentHubSchool.value) return null
   return getSchoolProgramStatus(currentHubSchool.value.id)
@@ -871,46 +858,8 @@ function initNewForm() {
     }
   ]
 
-  // Pre-populate all schools with standard presets
+  // Staff add only the schools they manage; no school is required.
   const schools = schoolsData.value?.items || []
-  for (const [idx, school] of schools.entries()) {
-    const preset = SCHOOL_PRESETS[school.schoolCode] || {
-      titleTh: `ทักษะเฉพาะทาง: สำนักวิชา${school.name.th}`,
-      titleEn: `Specialized Skills: ${school.name.en}`,
-      questions: [
-        {
-          labelTh: 'ความรู้ความสามารถทางวิชาการและทักษะเทคนิคในสายงาน',
-          labelEn: 'Technical and Academic Knowledge in Field',
-          type: 'rating' as const,
-          weight: 1
-        },
-        {
-          labelTh: 'การคิดวิเคราะห์ การแก้ปัญหา และการประยุกต์ใช้งานจริง',
-          labelEn:
-            'Analytical Thinking, Problem Solving & Practical Application',
-          type: 'rating' as const,
-          weight: 1
-        }
-      ]
-    }
-    initialSections.push({
-      id: `sec_spec_${school.id}_${baseNow + idx + 1}`,
-      title: { th: preset.titleTh, en: preset.titleEn },
-      category: 'special',
-      schoolId: school.id,
-      programId: '',
-      questions: preset.questions.map((q, qIdx) => ({
-        id: `q_${school.schoolCode.toLowerCase()}_${baseNow + idx + 1}_${qIdx + 1}`,
-        label: { th: q.labelTh, en: q.labelEn },
-        type: q.type,
-        required: true,
-        weight: q.weight,
-        scaleMin: 1,
-        scaleMax: 5
-      }))
-    })
-  }
-
   // Suggestion section
   initialSections.push({
     id: `sec_sug_${baseNow + 200}`,
@@ -1210,25 +1159,34 @@ function onSectionProgramChange(section: Section) {
 }
 
 function handleNextFromSpecial() {
-  if (hasIncompleteSchools.value) {
-    const first = incompleteSchools.value[0]
-    if (first) {
-      selectedSchoolHubId.value = first.schoolId
-    }
-    const missingDetails = incompleteSchools.value
-      .map(
-        (s) =>
-          `• ${s.schoolName} (ขาด: ${s.missingPrograms.map((p) => `[${p.programCode}] ${p.name.th}`).join(', ')})`
-      )
-      .join('\n')
-    toast.add({
-      title: '⚠️ ไม่สามารถไปต่อได้: ยังกำหนดหลักสูตรไม่ครบ',
-      description: `กรุณากำหนดให้ครบทุกหลักสูตร หรือเลือกเป็น "ทุกหลักสูตรในสำนักวิชา":\n${missingDetails}`,
-      color: 'error'
-    })
-    return
-  }
   editorActiveTab.value = 'suggestion'
+}
+
+// One shared section for the whole school, so every program uses the same criteria.
+function useSharedCriteriaForSchool(schoolId: string): void {
+  const sections = getSchoolSections(schoolId)
+  const [first, ...rest] = sections
+  if (!first) return
+  const school = schoolMap.value.get(schoolId)
+  first.programId = ''
+  first.title.th = `ทักษะเฉพาะทางสำหรับสำนักวิชา${school?.name.th || ''}`
+  first.title.en = `Specialized Skills for ${school?.name.en || 'School'}`
+  const removed = new Set(rest.map((section) => section.id))
+  editorForm.sections = editorForm.sections.filter(
+    (section) => !removed.has(section.id)
+  )
+  toast.add({
+    title: 'ใช้เกณฑ์เดียวกันทุกหลักสูตรแล้ว',
+    description: `ทุกหลักสูตรใน${school?.name.th || 'สำนักวิชานี้'}ใช้เกณฑ์ชุดเดียวกัน`,
+    color: 'success'
+  })
+}
+
+function removeSchoolFromForm(schoolId: string): void {
+  editorForm.sections = editorForm.sections.filter(
+    (section) =>
+      !(section.category === 'special' && section.schoolId === schoolId)
+  )
 }
 
 function openCopyCriteriaModal() {
@@ -1305,26 +1263,6 @@ async function handleSaveForm() {
     return
   }
 
-  if (hasIncompleteSchools.value) {
-    const first = incompleteSchools.value[0]
-    if (first) {
-      editorActiveTab.value = 'special'
-      selectedSchoolHubId.value = first.schoolId
-    }
-    const missingDetails = incompleteSchools.value
-      .map(
-        (s) =>
-          `• ${s.schoolName} (ขาด: ${s.missingPrograms.map((p) => `[${p.programCode}] ${p.name.th}`).join(', ')})`
-      )
-      .join('\n')
-    toast.add({
-      title: 'ไม่สามารถบันทึกได้: ยังกำหนดหลักสูตรไม่ครบ',
-      description: `กรุณากำหนดให้ครบทุกหลักสูตร หรือเลือกเป็น "ทุกหลักสูตรในสำนักวิชา":\n${missingDetails}`,
-      color: 'error'
-    })
-    return
-  }
-
   for (const [i, sec] of editorForm.sections.entries()) {
     if (!sec.title.th.trim()) {
       toast.add({
@@ -1350,7 +1288,15 @@ async function handleSaveForm() {
       })
       return
     }
-    for (const q of sec.questions) {
+    for (const [qIdx, q] of sec.questions.entries()) {
+      if (!q.label.th.trim()) {
+        toast.add({
+          title: 'ข้อคำถามยังไม่มีข้อความ',
+          description: `กรุณากรอกข้อคำถามภาษาไทยข้อที่ ${qIdx + 1} ในหมวด "${sec.title.th}" หรือลบข้อนั้นออก`,
+          color: 'error'
+        })
+        return
+      }
       if (q.type === 'rating' && q.weight !== undefined && q.weight > 2) {
         toast.add({
           title: 'ค่าน้ำหนักไม่ถูกต้อง',
@@ -1376,6 +1322,9 @@ async function handleSaveForm() {
         }
       })
       formId = createdSet.id
+      // A later failure must retry against this set, not create a duplicate code.
+      selectedForm.value = createdSet
+      editorForm.isNew = false
     } else {
       await api(`/competency-sets/${formId}`, {
         method: 'PATCH',
@@ -1387,13 +1336,20 @@ async function handleSaveForm() {
 
     const sectionsPayload = editorForm.sections.map((sec, sIdx) => ({
       id: sec.id || `sec_${sIdx + 1}`,
-      title: { th: sec.title.th.trim(), en: sec.title.en.trim() },
+      title: {
+        th: sec.title.th.trim(),
+        en: sec.title.en.trim() || sec.title.th.trim()
+      },
       category: sec.category,
       schoolId: sec.category === 'special' ? sec.schoolId : undefined,
       programId: sec.category === 'special' ? sec.programId : undefined,
       questions: sec.questions.map((q, qIdx) => ({
         id: q.id || `q_${sIdx + 1}_${qIdx + 1}`,
-        label: { th: q.label.th.trim(), en: q.label.en.trim() },
+        // English is optional for staff; the API stores the Thai text in its place.
+        label: {
+          th: q.label.th.trim(),
+          en: q.label.en.trim() || q.label.th.trim()
+        },
         type: q.type,
         required: q.required,
         weight: q.type === 'rating' ? (q.weight ?? 1) : undefined,
@@ -1644,7 +1600,7 @@ onMounted(async () => {
             <span>หมวดเฉพาะสำนักวิชา (School Hub)</span>
             <UBadge
               :color="configuredSchoolsCount > 0 ? 'secondary' : 'neutral'"
-              :label="`${configuredSchoolsCount}/${schoolsData?.items.length || 14} สำนักวิชา (${specialSections.length} หมวด)`"
+              :label="`เลือกไว้ ${configuredSchoolsCount} สำนักวิชา (${specialSections.length} หมวด)`"
               size="xs"
               variant="subtle"
             />
@@ -1964,7 +1920,7 @@ onMounted(async () => {
               size="xs"
               variant="soft"
               icon="i-lucide-sparkles"
-              label="⚡ โหลดแม่แบบมาตรฐานครบทุกสำนักวิชา (14 สำนัก)"
+              label="⚡ โหลดแม่แบบมาตรฐานทุกสำนักวิชา"
               @click="applyAllSchoolPresets"
             />
             <UBadge
@@ -1978,7 +1934,7 @@ onMounted(async () => {
                 (schoolsData?.items.length || 14) - configuredSchoolsCount > 0
               "
               color="neutral"
-              :label="`ยังว่าง ${(schoolsData?.items.length || 14) - configuredSchoolsCount} สำนักวิชา`"
+              :label="`ไม่ได้ใช้ ${(schoolsData?.items.length || 14) - configuredSchoolsCount} สำนักวิชา (ไม่บังคับ)`"
               size="xs"
               variant="subtle"
             />
@@ -2107,7 +2063,7 @@ onMounted(async () => {
                     size="xs"
                     variant="subtle"
                   />
-                  <span v-else class="text-[10px] text-muted">ว่าง</span>
+                  <span v-else class="text-[11px] text-muted">ว่าง</span>
                 </div>
               </button>
             </div>
@@ -2156,6 +2112,21 @@ onMounted(async () => {
 
               <!-- Quick Action Buttons -->
               <div class="flex flex-wrap items-center gap-2">
+                <UButton
+                  v-if="
+                    currentHubSchool && isSchoolConfigured(currentHubSchool.id)
+                  "
+                  color="neutral"
+                  icon="i-lucide-x"
+                  label="ไม่ใช้สำนักวิชานี้"
+                  size="xs"
+                  variant="ghost"
+                  title="นำเกณฑ์ของสำนักวิชานี้ออกจากแบบฟอร์ม"
+                  @click="
+                    currentHubSchool &&
+                    removeSchoolFromForm(currentHubSchool.id)
+                  "
+                />
                 <UButton
                   color="secondary"
                   icon="i-lucide-sparkles"
@@ -2209,6 +2180,7 @@ onMounted(async () => {
               v-if="
                 currentHubSchool &&
                 currentHubSchoolStatus &&
+                currentHubSchoolStatus.isConfigured &&
                 !currentHubSchoolStatus.isComplete
               "
               class="shrink-0 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-center justify-between gap-3 text-xs"
@@ -2243,6 +2215,14 @@ onMounted(async () => {
                   </p>
                 </div>
               </div>
+              <UButton
+                color="primary"
+                icon="i-lucide-globe"
+                size="xs"
+                variant="soft"
+                label="ใช้เกณฑ์เดียวกันทุกหลักสูตร"
+                @click="useSharedCriteriaForSchool(currentHubSchool.id)"
+              />
               <UButton
                 v-if="canAddProgramToSchool(currentHubSchool.id)"
                 color="warning"
@@ -2389,7 +2369,7 @@ onMounted(async () => {
                         <span>ชื่อหมวดเฉพาะทาง (ภาษาไทย)</span>
                         <span
                           v-if="section.programId"
-                          class="text-[10px] font-mono font-bold text-secondary"
+                          class="text-[11px] font-mono font-bold text-secondary"
                         >
                           [{{ programMap.get(section.programId)?.programCode }}]
                         </span>
@@ -2408,7 +2388,7 @@ onMounted(async () => {
                         <span>หลักสูตรที่ใช้เกณฑ์นี้</span>
                         <span
                           v-if="!section.programId"
-                          class="text-[10px] text-success font-medium"
+                          class="text-[11px] text-success font-medium"
                           >ทุกหลักสูตร</span
                         >
                       </label>
@@ -2998,14 +2978,9 @@ onMounted(async () => {
         />
         <UButton
           v-else-if="editorActiveTab === 'special'"
-          :color="hasIncompleteSchools ? 'neutral' : 'warning'"
+          color="warning"
           trailing-icon="i-lucide-arrow-right"
-          :label="
-            hasIncompleteSchools
-              ? `ยังไปต่อไม่ได้: หลักสูตรไม่ครบ (${incompleteSchools.length} สำนักวิชา)`
-              : 'ถัดไป: หมวดคำแนะนำ (Suggestion)'
-          "
-          :class="hasIncompleteSchools ? 'opacity-70' : ''"
+          label="ถัดไป: หมวดคำแนะนำ (Suggestion)"
           @click="handleNextFromSpecial"
         />
         <UButton

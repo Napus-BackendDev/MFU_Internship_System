@@ -1660,6 +1660,38 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationError'
+  /evaluations/cohort-mean:
+    get:
+      tags: [Evaluations]
+      operationId: getCohortMean
+      summary: Mean category scores of a Student's cohort (same program and academic year)
+      description: Students receive their own cohort; staff pass studentId within their scope. Cohorts below three Students return available false so the mean cannot reveal one classmate's result.
+      x-permissions: [evaluations.read]
+      parameters:
+        - name: studentId
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 64 }
+      responses:
+        '200':
+          description: Cohort mean or the reason it is withheld
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [available, cohortSize]
+                properties:
+                  available: { type: boolean }
+                  cohortSize: { type: integer, minimum: 0 }
+                  minimum: { type: integer }
+                  hardSkillMean: { type: [number, 'null'] }
+                  softSkillMean: { type: [number, 'null'] }
+                  scaleMax: { type: [number, 'null'] }
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /evaluations/{evaluationId}:
     parameters:
       - $ref: '#/components/parameters/EvaluationId'

@@ -530,7 +530,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
 - ข้อสันนิษฐานของ AI: "กล่องขอบมน ตอนออกแบบตัวหนัง" ข้อความไม่ครบ ตีความว่าการแสดงผลต้องตรงกับ PDF ยังไม่ได้รับการยืนยัน; "ข้อมูลทับกัน" ตีความเป็นองค์ประกอบซ้อนกันในแม่แบบ
 - เรื่องค้าง: แม่แบบที่เคยถูก archived จากการเปิดใช้งานรอบก่อนยังไม่กลับมา; PIN เก่าว่างจนกว่าจะออกคำเชิญใหม่; อีเมล mailbox ไม่มีจริงบนโดเมนจริงต้องมีระบบรับ bounce; เจ้าของระบบต้องอนุมัติการส่งข้อความผู้ประเมินให้ Google ก่อนเปิด AI บนโปรดักชัน
 
-
 ### 2026-11-04 — Deploy ระบบไปยัง Vercel (Frontend) และ Render (Backend) สำหรับการทดสอบ (Client Validation)
 
 - ผู้ใช้: ขอให้นำโปรเจกต์ deploy ผ่าน Vercel, ตั้งค่า Environment Variables สำหรับโหมดเทส เพื่อส่งให้ลูกค้า validation
@@ -559,7 +558,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   - หน้า `/login` แสดง Dev Personas สำหรับเข้าทดสอบได้ทันที
 - เรื่องค้าง: ไม่มี
 
-
 ### 2026-11-05 — ระบุฐานข้อมูล Production และ Inject ข้อมูลสำนักวิชาและสาขา (Academic Master Data)
 
 - ผู้ใช้: สอบถามว่าฐานข้อมูลของ production คืออันไหน และขอให้ inject ข้อมูลสำนักวิชาและสาขาวิชาจากในระบบเข้าสู่ production
@@ -576,7 +574,6 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   - Live API ผ่าน Vercel Proxy: `GET https://mfu-internship-system.vercel.app/api/v2/academic/schools` -> `200 OK` (14 สำนักวิชา)
   - Live API ผ่าน Vercel Proxy: `GET https://mfu-internship-system.vercel.app/api/v2/academic/programs` -> `200 OK`
 - เรื่องค้าง: ไม่มี
-
 
 ### 2026-11-05 — ตรวจสอบและรายงานสถานะ Deployment ทั้งหมด (Vercel & Render Live)
 
@@ -596,3 +593,55 @@ Runtime QA ล่าสุด Web35312/API23836 (processes.json) Mongo37027/Redi
   - Vercel Page Auth Gate: `GET https://mfu-internship-system.vercel.app/app/support` -> HTTP 302 Redirect ไปยัง `/login` ถูกต้อง
   - Vercel -> Render Proxy Auth E2E: ทำ Dev Login เป็น `systemAdmin` แล้วดึง `GET /api/v2/academic/schools` ได้ผลลัพธ์ 14 สำนักวิชาครบถ้วนสมบูรณ์
 - เรื่องค้าง: ไม่มี
+
+### 2026-11-11 — สร้างแผนภาพ End-to-End Business Process Model (BPM) ด้วย Excalidraw
+
+- ผู้ใช้: ขอให้สร้าง BPM แนวนอนยาวตั้งแต่ต้นสายถึงปลายสายด้วย `/excalidraw-skill` ผ่านกระบวนการสัมภาษณ์ `/grill-me` เพื่อนำเสนอลอจิกและการทำงานทั้งหมดของระบบแบบครบขั้นตอนและเข้าใจง่าย
+- ข้อตกลงที่ยืนยัน (`/grill-me` + Analysis Gate):
+  1. รูปแบบ: Swimlane แนวนอนยาว 1 แผ่น แบ่ง 5 เลน (`Admin/Staff/Coordinator` | `Student & Auditor` | `System API & MongoDB` | `External Evaluator` | `BullMQ Worker / SMTP & S3`)
+  2. ขอบเขต: ครบทั้ง 6 ระยะ (Phase 0 ตั้งค่า & Publish → Phase 1 นำเข้าข้อมูล/Placement → Phase 2 เปิดรอบ & มอบหมาย → Phase 3 ส่งคำเชิญ & คิวอีเมล → Phase 4 ประเมินผล/คำนวณคะแนน/ปิดจบอัตโนมัติ → Phase 5 ออก PDF & Signed URL → Phase 6 รายงาน/Export & Audit Log)
+  3. ระดับลอจิก: ครบทุกเงื่อนไข Guardrails, จุดตัดสินใจ และ Exception สำคัญด้วยภาษาไทยที่เข้าใจง่ายพร้อมนำเสนอ
+  4. การส่งมอบ: บันทึกไฟล์ `.excalidraw`, `.png`, `.svg` ลงใน `docs/architecture/` ของโปรเจกต์ `Intership v.2` และเปิด Live Canvas (`http://127.0.0.1:3000`) ค้างไว้ (ยังไม่ commit/push)
+- ผลที่ทำจริง:
+  - วิเคราะห์ซอร์สโค้ดจริงและเขียน claims ledger พร้อมอ้างอิงบรรทัดโค้ดทุก node และ decision exit
+  - สร้างแผนภาพ 49 shapes, 53 orthogonal arrows (199 elements) บนขนาด `13320 × 1394` (SVG) / `8192 × 857` (PNG)
+  - บันทึกไฟล์:
+    - `docs/architecture/bpm-end-to-end.excalidraw`
+    - `docs/architecture/bpm-end-to-end.png`
+    - `docs/architecture/bpm-end-to-end.svg`
+  - โหลดซีนขึ้น Live Canvas `http://127.0.0.1:3000` (PID `15076`, 199 elements) พร้อมใช้งานทันที
+- การตรวจ:
+  - `flow_tools.mjs lint` เทียบกับ `bpm-end-to-end.claims.json` และ repo root: `PASS: 0 error(s), 1 warning(s)` (เหลือเฉพาะ `too-dense` ที่เกิดจากการรวม 6 ระยะในแผ่นเดียวตามคำขอผู้ใช้)
+  - ตรวจภาพจริง (`slice1_v2.png`, `slice2_v2.png`, `slice3_v2.png` และ `bpm-end-to-end.png`): ไม่พบข้อความล้นกล่อง เส้นทับกัน หรือจุดเหลื่อม
+- เรื่องค้าง: รอคำสั่งจากผู้ใช้ก่อน commit / push ขึ้น GitHub
+
+### 2026-11-12 — รันระบบ Internship Transcript V2 และเปิดแสดงผล BPM บน Live Canvas
+
+- ผู้ใช้: ขอให้รันระบบพร้อมทั้งรัน BPM ให้ดูด้วย
+- ข้อตกลงที่ยืนยัน: สตาร์ตระบบทั้ง Web, API, Worker และโครงสร้างพื้นฐาน dev (MongoDB, WSL Docker Redis/MinIO/Mailpit) พร้อมนำเข้าไฟล์ BPM ขึ้น Excalidraw Live Canvas และเปิดตรวจสอบทั้งสองหน้าบนเบราว์เซอร์
+- ผลที่ทำจริง:
+  1. นำเข้า `docs/architecture/bpm-end-to-end.excalidraw` (199 elements) กลับเข้าสู่ Excalidraw Canvas `http://127.0.0.1:3000` (PID `18588`) หลังเครื่องรีสตาร์ต
+  2. เปิด daemon รักษา WSL2 Ubuntu (`task-8379`) เพื่อให้ Redis (`127.0.0.1:6380`), MinIO S3 (`127.0.0.1:9000`), และ Mailpit (`127.0.0.1:8025` / SMTP `1025`) ทำงานต่อเนื่องร่วมกับ MongoDB (`127.0.0.1:27017` ที่มี `schools: 14`, `students: 102`, `users: 4`)
+  3. รัน `pnpm predev` และสตาร์ต `pnpm dev` (`task-8391`):
+     - Frontend (Nuxt 4): `http://localhost:8080`
+     - Backend API (NestJS): `http://localhost:8081/api/v2`
+     - Worker (BullMQ): `worker ready`
+  4. ใช้ browser subagent เปิดหน้า `http://localhost:8080` และ `http://127.0.0.1:3000` ค้างไว้ในเบราว์เซอร์พร้อมตรวจสอบภาพรวม 10% Zoom to fit
+- การตรวจ:
+  - ยืนยัน TCP connectivity ครบทุกพอร์ต (`27017`, `6380`, `9000`, `8025`, `8080`, `8081`)
+  - ตรวจ log `task-8391`: API `Nest application successfully started`, Worker `worker ready`, Nuxt Nitro built สำเร็จ
+  - ยืนยันจาก `BROWSER_HOST_FACTS` (`visited_origins: http://localhost:8080, http://127.0.0.1:3000`, `blocked_origins: none`) และตรวจภาพจริง `final_step_35.png` บน Excalidraw Canvas (Connected, 10% Zoom to fit ครบทั้ง 5 เลน)
+- เรื่องค้าง: รันค้างไว้ให้ใช้งานต่อเนื่อง (ยังไม่ commit / push ตามคำสั่งเดิม)
+
+### 2026-11-13 — แก้ปัญหาเวอร์ชัน beta บน production และ feedback ลูกค้า
+
+- ผู้ใช้: production ใช้งานไม่ได้ (โหลดช้า, ส่งเมลไม่ไป, บันทึกแม่แบบไม่ได้, นักศึกษาล็อกอินเป็น mockup, สร้างแม่แบบอีเมล/คำถามไม่ได้, นักศึกษาดาวน์โหลดเอกสารไม่ได้) ต้องการให้นักศึกษาเลือกได้ว่าจะล็อกอินเป็นใคร (เวอร์ชันเบต้า) และส่ง feedback ลูกค้า 4 หมวด
+- สิ่งที่ตรวจพบบน production (อ่านอย่างเดียว ระบบอนุญาตไม่ให้เขียนข้อมูล prod):
+  - Render API cold start ~31 วินาที; ทุก request ผ่าน Vercel function iad1 ราว 0.6–1.3 วินาที
+  - SMTP บน prod เป็น `capture` ชี้ `localhost:1025` จึงไม่มีอีเมลออกจริง; Render มีแค่ API + Redis ไม่มี Worker
+  - ยังไม่มีฟอนต์ในคลัง, ไม่มีภาคการศึกษา, ไม่มี email template ที่บันทึกจริง
+  - ปุ่มนักศึกษาใช้รหัสตายตัว 6531301154 ที่ไม่มีในฐานข้อมูล หน้าเลยขึ้น "ไม่สามารถโหลดข้อมูลนักศึกษาได้"
+  - ไม่ได้ดูค่า S3/PUBLIC_WEB_URL บน Render เพราะไม่มีสิทธิ์เข้า Render
+- ผลที่ทำจริง: dev login เลือกนักศึกษาจริงได้ (`GET /auth/dev/students` + picker), Worker ฝังใน image API ด้วย `EMBEDDED_WORKER=true`, workflow keep-warm ทุก 10 นาที, แบบฟอร์มประเมินไม่บังคับครบทุกสำนักวิชา + ปุ่มใช้เกณฑ์เดียวกันทุกหลักสูตร + ตรวจคำถามว่างและไม่สร้างชุดซ้ำ, ตัวแปรอีเมล `academic_term`/`internship_period` และแก้ถ้อยคำ, ค่าเฉลี่ยรุ่น (ต้องมีอย่างน้อย 3 คน), ลิงก์ PDF ใน Excel ชี้ `/app/document-open/:id`, ขยายตัวอักษรพื้นฐาน 106.25% และขั้นต่ำ 11px
+- เรื่องค้าง (ผู้ใช้ต้องตั้งบน Render ตาม docs/operations/render-beta-setup.md): EMBEDDED_WORKER, SMTP จริง, PUBLIC_WEB_URL, S3 ที่ใช้งานได้ จากนั้น redeploy
+- ข้อสังเกต: dev login บน prod เปิดให้ทุกคนเข้าเป็น Admin ได้อยู่แล้ว ข้อมูลนักศึกษาจริงจึงเปิดต่อสาธารณะ (เป็นการตัดสินใจเดิมของผู้ใช้สำหรับ beta)

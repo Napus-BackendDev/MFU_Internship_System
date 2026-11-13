@@ -2287,6 +2287,8 @@ function renderPlaceholders(str: string): string {
     student_id: studentId,
     company_name: companyName,
     evaluator_name: evaluatorName,
+    academic_term: '[ภาค/ปีการศึกษาของนักศึกษา]',
+    internship_period: '[ช่วงวันที่ฝึกงานของนักศึกษา]',
     deadline: '[ระบบคำนวณจากวันปิดรอบ]',
     pin: '[ระบบสร้าง PIN เมื่อส่งคำเชิญ]',
     invitation_url: '[ระบบสร้างลิงก์เมื่อส่งคำเชิญ]'
@@ -3184,7 +3186,7 @@ function handleModalBackdropClick() {
                   <p class="font-semibold text-highlighted text-xs">
                     {{ getStudentName(student) }}
                   </p>
-                  <p class="text-[10px] text-muted/80 font-mono">
+                  <p class="text-[11px] text-muted/80 font-mono">
                     {{ student.email }}
                   </p>
                 </div>
@@ -3951,7 +3953,7 @@ function handleModalBackdropClick() {
                 <span class="text-xl font-bold text-highlighted mt-0.5 block">
                   {{ importProgress.summary.total }}
                 </span>
-                <span class="text-[10px] text-muted">รายการในไฟล์</span>
+                <span class="text-[11px] text-muted">รายการในไฟล์</span>
               </div>
 
               <div
@@ -3966,7 +3968,7 @@ function handleModalBackdropClick() {
                 >
                   {{ importProgress.summary.updates }}
                 </span>
-                <span class="text-[10px] text-muted">พบส่วนต่างข้อมูล</span>
+                <span class="text-[11px] text-muted">พบส่วนต่างข้อมูล</span>
               </div>
 
               <div
@@ -3981,7 +3983,7 @@ function handleModalBackdropClick() {
                 >
                   {{ importProgress.summary.creates }}
                 </span>
-                <span class="text-[10px] text-muted">ยังไม่มีในระบบ</span>
+                <span class="text-[11px] text-muted">ยังไม่มีในระบบ</span>
               </div>
 
               <div
@@ -3991,7 +3993,7 @@ function handleModalBackdropClick() {
                 <span class="text-xl font-bold text-muted mt-0.5 block">
                   {{ importProgress.summary.unchanged }}
                 </span>
-                <span class="text-[10px] text-muted">ไม่ต้องแก้ไข</span>
+                <span class="text-[11px] text-muted">ไม่ต้องแก้ไข</span>
               </div>
             </div>
 
@@ -5478,7 +5480,7 @@ function handleModalBackdropClick() {
                     <div class="flex items-center justify-between gap-2">
                       <div class="flex items-center gap-2 min-w-0">
                         <span
-                          class="grid size-5 place-items-center rounded-full bg-muted/30 text-[10px] font-bold text-muted shrink-0"
+                          class="grid size-5 place-items-center rounded-full bg-muted/30 text-[11px] font-bold text-muted shrink-0"
                         >
                           {{ sIdx + 1 }}
                         </span>

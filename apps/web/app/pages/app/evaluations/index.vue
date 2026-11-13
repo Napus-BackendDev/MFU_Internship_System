@@ -1006,7 +1006,7 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                   <p class="font-semibold text-highlighted text-xs">
                     {{ getStudentName(getStudent(item.studentId)) }}
                   </p>
-                  <p class="text-[10px] text-muted/80 font-mono">
+                  <p class="text-[11px] text-muted/80 font-mono">
                     {{ getStudent(item.studentId)!.email }}
                   </p>
                 </div>
@@ -1436,7 +1436,7 @@ async function refreshAfterEmailAction(): Promise<boolean> {
                     </span>
                     <span
                       v-if="selectedAssignmentForEmail?.status === 'inProgress'"
-                      class="rounded-full bg-amber-500/20 text-amber-600 text-[10px] px-2 py-0.5 font-semibold"
+                      class="rounded-full bg-amber-500/20 text-amber-600 text-[11px] px-2 py-0.5 font-semibold"
                     >
                       แนะนำ
                     </span>

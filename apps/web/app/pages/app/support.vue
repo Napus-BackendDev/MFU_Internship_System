@@ -65,7 +65,9 @@ const handleSubmitFeedback = () => {
   const senderName = auth.actor?.displayName || 'ผู้ใช้งานระบบ'
   const senderEmail = auth.actor?.email || 'ไม่ระบุอีเมล'
   const senderRoles = auth.actor?.roles?.join(', ') || 'ทั่วไป'
-  const nowStr = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })
+  const nowStr = new Date().toLocaleString('th-TH', {
+    timeZone: 'Asia/Bangkok'
+  })
 
   const mailSubject = `[MFU Internship - ${categoryLabel}] ${feedback.subject.trim()}`
   const mailBody = `เรียน ทีมงานพัฒนาและสนับสนุนระบบ (Napus.dev),
@@ -332,10 +334,14 @@ const handleFinish = () => {
     >
       <template #body>
         <div class="space-y-4">
-          <div class="rounded-lg border border-default bg-muted/20 p-3 space-y-2 text-xs">
+          <div
+            class="rounded-lg border border-default bg-muted/20 p-3 space-y-2 text-xs"
+          >
             <div class="flex items-center justify-between">
               <span class="font-semibold text-highlighted">ปลายทาง:</span>
-              <span class="font-mono text-primary font-semibold">Napus.dev@gmail.com</span>
+              <span class="font-mono text-primary font-semibold"
+                >Napus.dev@gmail.com</span
+              >
             </div>
             <div class="flex items-center justify-between">
               <span class="font-semibold text-highlighted">หมวดหมู่:</span>
@@ -343,7 +349,9 @@ const handleFinish = () => {
             </div>
             <div>
               <span class="font-semibold text-highlighted">หัวข้อ:</span>
-              <p class="mt-0.5 text-highlighted font-medium truncate">{{ sentDetails.subject }}</p>
+              <p class="mt-0.5 text-highlighted font-medium truncate">
+                {{ sentDetails.subject }}
+              </p>
             </div>
           </div>
 

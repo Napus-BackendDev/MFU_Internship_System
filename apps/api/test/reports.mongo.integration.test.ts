@@ -768,8 +768,9 @@ describe('Reports on an isolated MongoDB replica set', () => {
       .lean()
     const values = snapshot?.values as { studentId?: string; pdfUrl?: string }
     expect(values.studentId).toBe('6631505102')
-    expect(values.pdfUrl).toContain(
-      `/api/v2/documents/generated-documents/${String(documentId)}/download-url`
+    // The workbook links to the web page that signs a fresh URL on each open.
+    expect(values.pdfUrl).toMatch(
+      new RegExp(`/app/document-open/${String(documentId)}$`, 'u')
     )
   })
 

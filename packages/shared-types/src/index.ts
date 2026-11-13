@@ -11,6 +11,7 @@ export {
   type CanonicalDocumentV1,
   type CanonicalTextElementV1
 } from './document-template.js'
+export { formatAcademicTerm, formatInternshipPeriod } from './email-values.js'
 export type {
   DocumentIssueCategoryScore,
   DocumentIssueEvaluationSnapshot,

@@ -213,7 +213,7 @@ function scrollToDocumentsSection(): void {
                 <p class="text-[11px] font-semibold text-muted">
                   ไทม์ไลน์ติดตามสถานะ 4 ขั้นตอน:
                 </p>
-                <div class="grid grid-cols-4 gap-1.5 text-center text-[10px]">
+                <div class="grid grid-cols-4 gap-1.5 text-center text-[11px]">
                   <div
                     class="p-2 rounded bg-emerald-500/15 text-emerald-600 font-semibold border border-emerald-500/20"
                   >
@@ -284,7 +284,7 @@ function scrollToDocumentsSection(): void {
                     <p class="font-semibold text-xs text-highlighted">
                       สถานะแบบประเมิน: ได้รับผลการประเมินเรียบร้อยแล้ว
                     </p>
-                    <p class="text-[10px] text-muted">
+                    <p class="text-[11px] text-muted">
                       ประเมินโดยหัวหน้าทีมผู้ควบคุมการฝึกงาน
                     </p>
                   </div>
@@ -396,7 +396,7 @@ function scrollToDocumentsSection(): void {
                   class="pt-2 border-t border-default/60 flex items-center gap-1.5"
                 >
                   <span
-                    class="inline-flex items-center gap-1 text-[10px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
+                    class="inline-flex items-center gap-1 text-[11px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
                   >
                     <UIcon
                       class="size-3 text-blue-500"
@@ -405,7 +405,7 @@ function scrollToDocumentsSection(): void {
                     PDF (.pdf)
                   </span>
                   <span
-                    class="inline-flex items-center gap-1 text-[10px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
+                    class="inline-flex items-center gap-1 text-[11px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
                   >
                     <UIcon
                       class="size-3 text-rose-500"
@@ -446,7 +446,7 @@ function scrollToDocumentsSection(): void {
                   class="pt-2 border-t border-default/60 flex items-center gap-1.5"
                 >
                   <span
-                    class="inline-flex items-center gap-1 text-[10px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
+                    class="inline-flex items-center gap-1 text-[11px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
                   >
                     <UIcon
                       class="size-3 text-blue-500"
@@ -455,7 +455,7 @@ function scrollToDocumentsSection(): void {
                     PDF (.pdf)
                   </span>
                   <span
-                    class="inline-flex items-center gap-1 text-[10px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
+                    class="inline-flex items-center gap-1 text-[11px] font-semibold bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded text-highlighted"
                   >
                     <UIcon
                       class="size-3 text-rose-500"

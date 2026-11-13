@@ -116,7 +116,7 @@ const advisorContacts = computed(() => {
           </p>
           <p
             v-if="contact.email"
-            class="break-all text-[10px] text-muted font-mono"
+            class="break-all text-[11px] text-muted font-mono"
             :title="contact.email"
           >
             {{ contact.email }}
@@ -138,7 +138,7 @@ const advisorContacts = computed(() => {
           >
         </div>
         <p
-          class="break-all text-[10px] text-muted/80 pl-4 font-mono leading-tight"
+          class="break-all text-[11px] text-muted/80 pl-4 font-mono leading-tight"
         >
           {{ contact.email || '—' }}
         </p>

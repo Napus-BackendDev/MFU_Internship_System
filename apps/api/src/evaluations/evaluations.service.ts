@@ -2084,6 +2084,101 @@ export class EvaluationsService {
     return created.toJSON()
   }
 
+  // Mean of the submitted category scores of the Student's cohort: the same
+  // program and academic year. Small cohorts are withheld so the mean cannot
+  // reveal one classmate's result.
+  public async cohortMean(
+    actor: AuthenticatedActor,
+    requestedStudentId?: string
+  ): Promise<unknown> {
+    const reference = actor.roles.includes('student')
+      ? actor.scope.studentId
+      : requestedStudentId
+    if (!reference) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    const student = await this.students
+      .findOne(studentReferenceFilter(reference))
+      .select('studentId programId schoolId academicYear')
+      .lean()
+      .exec()
+    if (!student) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+    if (!actor.roles.includes('student')) {
+      try {
+        assertActorScope(actor, student)
+      } catch {
+        throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND' })
+      }
+    }
+    const cohort = await this.students
+      .find({
+        programId: student.programId,
+        ...(student.academicYear !== undefined
+          ? { academicYear: student.academicYear }
+          : {}),
+        status: 'active'
+      })
+      .select('_id studentId')
+      .lean()
+      .exec()
+    const assignments = await this.assignments
+      .find({
+        studentId: {
+          $in: cohort.flatMap((member) => [
+            String(member._id),
+            member.studentId
+          ])
+        },
+        status: 'submitted'
+      })
+      .select('_id studentId')
+      .lean()
+      .exec()
+    const finals = await this.evaluations
+      .find({
+        assignmentId: { $in: assignments.map((item) => String(item._id)) },
+        supersededAt: { $exists: false }
+      })
+      .select('assignmentId categoryScores')
+      .lean()
+      .exec()
+    const studentByAssignment = new Map(
+      assignments.map((item) => [String(item._id), item.studentId])
+    )
+    const scores = {
+      hardSkill: [] as number[],
+      softSkill: [] as number[],
+      scaleMax: undefined as number | undefined
+    }
+    const students = new Set<string>()
+    for (const evaluation of finals) {
+      for (const category of ['hardSkill', 'softSkill'] as const) {
+        const score = evaluation.categoryScores?.[category]
+        if (typeof score?.average === 'number') {
+          scores[category].push(score.average)
+          scores.scaleMax ??= score.scaleMax ?? undefined
+        }
+      }
+      const owner = studentByAssignment.get(evaluation.assignmentId)
+      if (owner) students.add(owner)
+    }
+    const mean = (values: readonly number[]): number | null =>
+      values.length
+        ? Math.round(
+            (values.reduce((sum, value) => sum + value, 0) / values.length) *
+              100
+          ) / 100
+        : null
+    const MIN_COHORT = 3
+    return students.size >= MIN_COHORT
+      ? {
+          available: true,
+          cohortSize: students.size,
+          hardSkillMean: mean(scores.hardSkill),
+          softSkillMean: mean(scores.softSkill),
+          scaleMax: scores.scaleMax ?? null
+        }
+      : { available: false, cohortSize: students.size, minimum: MIN_COHORT }
+  }
+
   public async getEvaluation(
     actor: AuthenticatedActor,
     assignmentId: string

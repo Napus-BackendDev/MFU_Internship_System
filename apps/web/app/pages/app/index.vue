@@ -530,6 +530,31 @@ watch([downloadModalOpen, documentSource], ([isOpen, source]) => {
   if (isOpen && source) void loadDocumentTemplateAvailability()
 })
 
+interface CohortMean {
+  readonly available: boolean
+  readonly cohortSize: number
+  readonly minimum?: number
+  readonly hardSkillMean?: number | null
+  readonly softSkillMean?: number | null
+  readonly scaleMax?: number | null
+}
+
+const cohortMean = ref<CohortMean | null>(null)
+async function loadCohortMean(): Promise<void> {
+  try {
+    cohortMean.value = await api<CohortMean>('/evaluations/cohort-mean')
+  } catch {
+    cohortMean.value = { available: false, cohortSize: 0 }
+  }
+}
+watch(
+  () => Boolean(submittedEvaluation.value) && isStudent.value,
+  (ready) => {
+    if (ready && import.meta.client) void loadCohortMean()
+  },
+  { immediate: true }
+)
+
 const studentEvaluationView = computed(() =>
   buildStudentEvaluationResult(
     submittedEvaluation.value
@@ -1596,7 +1621,7 @@ const _adminCards = computed(() => [
                     <p class="text-xs font-semibold text-highlighted">
                       {{ question.title }}
                     </p>
-                    <p class="text-[10px] text-muted">{{ question.titleEn }}</p>
+                    <p class="text-[11px] text-muted">{{ question.titleEn }}</p>
                   </div>
                 </div>
                 <span
@@ -1662,7 +1687,7 @@ const _adminCards = computed(() => [
                     <p class="text-xs font-semibold text-highlighted">
                       {{ question.title }}
                     </p>
-                    <p class="text-[10px] text-muted">{{ question.titleEn }}</p>
+                    <p class="text-[11px] text-muted">{{ question.titleEn }}</p>
                   </div>
                 </div>
                 <span
@@ -1712,7 +1737,7 @@ const _adminCards = computed(() => [
                     <p class="text-xs font-semibold text-highlighted">
                       {{ suggestion.title }}
                     </p>
-                    <p class="text-[10px] text-muted">
+                    <p class="text-[11px] text-muted">
                       {{ suggestion.titleEn }}
                     </p>
                   </div>
@@ -1729,11 +1754,59 @@ const _adminCards = computed(() => [
             </p>
           </section>
 
+          <section
+            v-if="cohortMean?.available"
+            class="rounded-xl border border-default p-4 space-y-3"
+            aria-labelledby="cohort-mean-heading"
+          >
+            <h3 id="cohort-mean-heading" class="text-sm font-semibold">
+              ค่าเฉลี่ยรุ่น (Mean) — สาขาและปีการศึกษาเดียวกัน
+              {{ cohortMean.cohortSize }} คน
+            </h3>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div
+                v-for="row in [
+                  {
+                    label: 'Soft Skill',
+                    mine: studentEvaluationView.softSkillScore?.average,
+                    mean: cohortMean.softSkillMean
+                  },
+                  {
+                    label: 'Hard Skill',
+                    mine: studentEvaluationView.hardSkillScore?.average,
+                    mean: cohortMean.hardSkillMean
+                  }
+                ]"
+                :key="row.label"
+                class="rounded-lg bg-muted/20 p-3"
+              >
+                <p class="text-xs text-muted">{{ row.label }}</p>
+                <p class="mt-1 text-sm">
+                  ของฉัน
+                  <strong>{{
+                    typeof row.mine === 'number' ? row.mine.toFixed(2) : '—'
+                  }}</strong>
+                  · ค่าเฉลี่ยรุ่น
+                  <strong>{{
+                    typeof row.mean === 'number' ? row.mean.toFixed(2) : '—'
+                  }}</strong>
+                  <span v-if="cohortMean.scaleMax" class="text-muted">
+                    / {{ cohortMean.scaleMax }}</span
+                  >
+                </p>
+              </div>
+            </div>
+          </section>
           <UAlert
+            v-else
             color="neutral"
             icon="i-lucide-info"
-            title="ยังไม่มีข้อมูลเปรียบเทียบค่าเฉลี่ยรุ่นที่ตรวจสอบได้"
-            description="ผลนี้แสดงคะแนนรายหมวดจากแบบประเมินเท่านั้น ไม่มีคะแนนรวมข้ามหมวดหรือค่าเฉลี่ยตัวอย่าง"
+            title="ยังไม่มีค่าเฉลี่ยรุ่น"
+            :description="
+              cohortMean
+                ? `ต้องมีผลประเมินในสาขาและปีการศึกษาเดียวกันอย่างน้อย ${cohortMean.minimum ?? 3} คน (ตอนนี้มี ${cohortMean.cohortSize} คน) เพื่อไม่ให้เปิดเผยคะแนนของเพื่อนรายบุคคล`
+                : 'กำลังคำนวณค่าเฉลี่ยรุ่น'
+            "
             variant="soft"
           />
         </div>
@@ -2228,7 +2301,7 @@ const _adminCards = computed(() => [
                 </div>
                 <div class="border-b border-slate-400 w-36 mx-auto" />
                 <p class="font-semibold text-slate-800">คณบดีสำนักวิชา</p>
-                <p class="text-[10px] text-slate-500">มหาวิทยาลัยแม่ฟ้าหลวง</p>
+                <p class="text-[11px] text-slate-500">มหาวิทยาลัยแม่ฟ้าหลวง</p>
               </div>
 
               <div class="space-y-1">
@@ -2241,13 +2314,13 @@ const _adminCards = computed(() => [
                 <p class="font-semibold text-slate-800">
                   ผู้ประเมินสถานประกอบการ
                 </p>
-                <p class="text-[10px] text-slate-500">
+                <p class="text-[11px] text-slate-500">
                   {{ activeDocContext.company }}
                 </p>
               </div>
             </div>
 
-            <p class="text-[10px] text-slate-400 pt-3">
+            <p class="text-[11px] text-slate-400 pt-3">
               เลขที่รับรอง: CERT-{{ activeDocContext.academicYear }}-{{
                 activeDocContext.studentId
               }}
@@ -2367,7 +2440,7 @@ const _adminCards = computed(() => [
                 ฝ่ายส่งเสริมและพัฒนาการฝึกงานวิชาชีพ มหาวิทยาลัยแม่ฟ้าหลวง
                 โทรศัพท์ 0-5391-6000
               </p>
-              <p class="font-mono text-[10px] text-slate-400 mt-0.5">
+              <p class="font-mono text-[11px] text-slate-400 mt-0.5">
                 Reference: {{ activeDocContext.referenceNumber }}
               </p>
             </div>

@@ -1734,7 +1734,7 @@ async function runExport(
                   <p class="font-semibold text-highlighted text-xs">
                     {{ row.name }}
                   </p>
-                  <p class="text-[10px] text-muted/80 font-mono">
+                  <p class="text-[11px] text-muted/80 font-mono">
                     {{ row.email }}
                   </p>
                 </div>
@@ -2203,7 +2203,7 @@ async function runExport(
                     <div
                       class="rounded-lg border border-blue-500/20 bg-blue-500/5 p-2"
                     >
-                      <p class="text-[10px] text-blue-700 dark:text-blue-300">
+                      <p class="text-[11px] text-blue-700 dark:text-blue-300">
                         Hard Skills
                       </p>
                       <p class="mt-0.5 font-bold text-sm text-highlighted">
@@ -2219,7 +2219,7 @@ async function runExport(
                       class="rounded-lg border border-purple-500/20 bg-purple-500/5 p-2"
                     >
                       <p
-                        class="text-[10px] text-purple-700 dark:text-purple-300"
+                        class="text-[11px] text-purple-700 dark:text-purple-300"
                       >
                         Soft Skills
                       </p>

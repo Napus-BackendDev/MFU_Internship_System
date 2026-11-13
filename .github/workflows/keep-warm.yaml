@@ -1,0 +1,21 @@
+name: Keep test deployment warm
+
+# The free Render API sleeps after 15 idle minutes and then needs about 30 s to
+# wake, which makes the first page load look broken. A light health request every
+# 10 minutes keeps it awake for testers; it changes no data.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Wake API and web proxy
+        run: |
+          curl --silent --show-error --fail --max-time 90 https://mfu-internship-api.onrender.com/api/v2/health
+          curl --silent --show-error --fail --max-time 60 https://mfu-internship-system.vercel.app/api/v2/health

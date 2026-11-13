@@ -229,8 +229,20 @@ const availablePlaceholders = [
     icon: 'i-lucide-user-check'
   },
   {
+    tag: '{{academic_term}}',
+    label: 'ภาค/ปีการศึกษา',
+    example: 'ภาคการศึกษาต้น ปีการศึกษา 2569',
+    icon: 'i-lucide-graduation-cap'
+  },
+  {
+    tag: '{{internship_period}}',
+    label: 'ช่วงวันที่ฝึกงาน',
+    example: '4 ส.ค. 2568 – 21 พ.ย. 2568',
+    icon: 'i-lucide-calendar-range'
+  },
+  {
     tag: '{{deadline}}',
-    label: 'กำหนดส่ง',
+    label: 'วันสิ้นสุดการประเมิน',
     example: '12 พฤศจิกายน 2569',
     icon: 'i-lucide-calendar'
   },
@@ -464,7 +476,10 @@ function generateHtmlFromFriendly(form: FriendlyForm): string {
     <div style="${boxStyle}">
       <p style="margin: 0 0 8px; font-size: 13px; color: ${pastel.text}; font-weight: bold;">ข้อมูลการประเมินและการเข้าใช้งาน:</p>
       <p style="margin: 4px 0; font-size: ${bodyFontSize}; color: #0f172a;"><strong>นักศึกษา:</strong> {{student_name}} ({{student_id}})</p>
-      <p style="margin: 4px 0; font-size: ${bodyFontSize}; color: #0f172a;"><strong>กำหนดส่งแบบประเมิน:</strong> <span style="color: ${brandColor}; font-weight: bold;">{{deadline}}</span></p>
+      <p style="margin: 4px 0; font-size: ${bodyFontSize}; color: #0f172a;"><strong>สถานประกอบการ:</strong> {{company_name}}</p>
+      <p style="margin: 4px 0; font-size: ${bodyFontSize}; color: #0f172a;"><strong>ภาค/ปีการศึกษา:</strong> {{academic_term}}</p>
+      <p style="margin: 4px 0; font-size: ${bodyFontSize}; color: #0f172a;"><strong>ช่วงวันที่ฝึกงาน:</strong> {{internship_period}}</p>
+      <p style="margin: 4px 0; font-size: ${bodyFontSize}; color: #0f172a;"><strong>วันสิ้นสุดการประเมิน:</strong> <span style="color: ${brandColor}; font-weight: bold;">{{deadline}}</span></p>
       <p style="margin: 4px 0; font-size: ${bodyFontSize}; color: #0f172a;"><strong>รหัส PIN สำหรับเข้าใช้งาน:</strong> <span style="font-family: monospace; font-weight: bold; color: ${brandColor}; font-size: 15px;">{{pin}}</span></p>
     </div>`
   }
@@ -513,7 +528,9 @@ function generateTextFromFriendly(form: FriendlyForm): string {
   if (form.showInfoBox) {
     lines.push('ลิงก์สำหรับเข้าดำเนินการ: {{invitation_url}}')
     lines.push('รหัส PIN: {{pin}}')
-    lines.push('กำหนดส่ง: {{deadline}}')
+    lines.push('ภาค/ปีการศึกษา: {{academic_term}}')
+    lines.push('ช่วงวันที่ฝึกงาน: {{internship_period}}')
+    lines.push('วันสิ้นสุดการประเมิน: {{deadline}}')
     lines.push('')
   } else {
     lines.push('ลิงก์: {{invitation_url}}')
@@ -1217,7 +1234,7 @@ watch(editorMode, (newMode) => {
                         <p class="truncate leading-tight text-highlighted">
                           {{ item.name }}
                         </p>
-                        <p class="text-[10px] text-muted truncate">
+                        <p class="text-[11px] text-muted truncate">
                           {{ item.desc }}
                         </p>
                       </div>
@@ -1281,7 +1298,7 @@ watch(editorMode, (newMode) => {
                       @click="currentFriendly.design.headerStyle = 'banner'"
                     >
                       <div
-                        class="w-full h-5 rounded-t bg-emerald-600 flex items-center justify-center text-[9px] text-white"
+                        class="w-full h-5 rounded-t bg-emerald-600 flex items-center justify-center text-[11px] text-white"
                       >
                         มฟล.
                       </div>
